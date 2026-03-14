@@ -843,6 +843,8 @@ Current workspace status:
 - Phase 1 tool runtime hardening is done in code: production wiring is fail-closed and manifest-backed
 - Phase 2 local tool catalog is done in code: production wiring includes manifest-backed local tools with input and output validation
 - Phase 2.5 workflow adoption is done in code: the built-in `local-identity-profile` workflow uses real deterministic `ToolCall` steps and consumes `tool_result` in downstream logic
+- Phase 3 model-backed tool integration is done in code: production wiring composes deterministic local tools with the opt-in `content.generate_welcome_email` adapter, validates model output, and ships a deterministic fallback workflow path when the provider is unavailable
+- Phase 4 durable event plane is done in code: accepted events, dead letters, dedup/watermark state, command outbox records, and production task/workflow snapshots are file-backed in the shipped runtime
 
 ### 16.1 Phase Rules
 
@@ -946,6 +948,7 @@ Workspace state at phase end:
 - LLM-backed tools are opt-in and isolated behind the tool registry adapter
 - deterministic tools remain local and do not depend on model availability
 - workflow definitions choose tool names explicitly and document fallback branches
+- the shipped `local-identity-welcome-email` workflow proves the model-backed path and the deterministic fallback path end-to-end
 
 ### 16.6 Phase 4: Durable Event Plane
 
@@ -965,6 +968,7 @@ Workspace state at phase end:
 - no correctness-critical event exists only in memory
 - device events, internal tool results, and recovery events all go through the same acceptance rules
 - replay after crash is possible without hidden side effects
+- production runtime uses filesystem-backed snapshots for tasks, workflow state, event inbox/dead-letter, and command outbox while richer replay/runtime semantics remain Phase 5 work
 
 ### 16.7 Phase 5: Durable Workflow Runtime
 

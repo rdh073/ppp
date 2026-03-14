@@ -35,6 +35,7 @@ type NodeOutput struct {
 	DeleteArtifacts []string          // keys to remove from state.Artifacts
 	Done            bool              // TerminalNode sets this
 	SetErrorCount   *int              // if non-nil, sets state.ErrorCount explicitly
+	EmittedEvents   []domain.Event
 	// WaitingFor is set when Status == NodeStatusPending.
 	// The Runner saves this list to WorkflowState and skips transition evaluation.
 	// ProcessEvent will skip this workflow until a matching event kind arrives.
@@ -64,15 +65,15 @@ func NewRunner(handlers map[domain.NodeKind]NodeHandler, defs DefStore, defaultN
 
 // Run executes the current node, merges artifacts, resolves the next node via
 // the workflow def, and returns the updated state.
-func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.WorkflowState, done bool, err error) {
+func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.WorkflowState, done bool, emitted []domain.Event, err error) {
 	h, ok := r.handlers[input.State.CurrentNode]
 	if !ok {
-		return nil, false, fmt.Errorf("no handler for node kind %q", input.State.CurrentNode)
+		return nil, false, nil, fmt.Errorf("no handler for node kind %q", input.State.CurrentNode)
 	}
 
 	out, err := h.Run(ctx, input)
 	if err != nil {
-		return nil, false, fmt.Errorf("node %s: %w", input.State.CurrentNode, err)
+		return nil, false, nil, fmt.Errorf("node %s: %w", input.State.CurrentNode, err)
 	}
 
 	state := cloneState(input.State)
@@ -89,14 +90,14 @@ func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.Wor
 	// Terminal short-circuit.
 	if out.Done {
 		state.CurrentNode = domain.NodeKindTerminal
-		return state, true, nil
+		return state, true, out.EmittedEvents, nil
 	}
 
 	// Suspend: node is waiting for a specific device event.
 	if out.Status == NodeStatusPending {
 		state.WaitingFor = out.WaitingFor
 		// CurrentNode stays; we'll re-run it when the event arrives.
-		return state, false, nil
+		return state, false, out.EmittedEvents, nil
 	}
 
 	// Clear any prior wait list now that we ran successfully.
@@ -113,18 +114,18 @@ func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.Wor
 	def := r.resolveDef(ctx, input.Task)
 	nodeDef, ok := def.Nodes[input.State.CurrentNode]
 	if !ok {
-		return nil, false, fmt.Errorf("workflow def %q has no node %q", def.Name, input.State.CurrentNode)
+		return nil, false, nil, fmt.Errorf("workflow def %q has no node %q", def.Name, input.State.CurrentNode)
 	}
 
 	// Evaluate transitions in order; first match wins.
 	// event.kind is available so YAML conditions can branch on the triggering event.
 	next, found := r.evalTransitions(nodeDef.Transitions, out.Status, state.Artifacts, state.ErrorCount, input.Event.Kind)
 	if !found {
-		return nil, false, fmt.Errorf("no matching transition from %q (status=%s)", input.State.CurrentNode, out.Status)
+		return nil, false, nil, fmt.Errorf("no matching transition from %q (status=%s)", input.State.CurrentNode, out.Status)
 	}
 
 	state.CurrentNode = next
-	return state, false, nil
+	return state, false, out.EmittedEvents, nil
 }
 
 // resolveDef looks up the def for the task's WorkflowName, then the defaultName,

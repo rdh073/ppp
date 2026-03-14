@@ -21,6 +21,10 @@ type EventIngestionUseCase struct {
 	autoEnabler AccessibilityAutoEnabler
 }
 
+type deadLetterRecorder interface {
+	RecordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error
+}
+
 func NewEventIngestion(orch EventProcessor, autoEnabler ...AccessibilityAutoEnabler) *EventIngestionUseCase {
 	enabler := AccessibilityAutoEnabler(noopAccessibilityAutoEnabler{})
 	if len(autoEnabler) > 0 && autoEnabler[0] != nil {
@@ -42,6 +46,7 @@ func (u *EventIngestionUseCase) IngestNotification(
 ) error {
 	kind := domain.EventKind(method)
 	if !kind.IsDeviceOriginated() {
+		u.recordDeadLetter(ctx, domain.NewDeadLetterRecord(nil, rawParams, fmt.Sprintf("unexpected method %q", method), "ingestion"))
 		return fmt.Errorf("IngestNotification: unexpected method %q", method)
 	}
 
@@ -51,7 +56,17 @@ func (u *EventIngestionUseCase) IngestNotification(
 		ADBSerial        string `json:"adbSerial"`
 		ServiceComponent string `json:"serviceComponent"`
 	}
-	_ = json.Unmarshal(rawParams, &meta) // best-effort; zero seqNo is valid
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &meta); err != nil {
+			event := domain.Event{
+				Kind:     kind,
+				DeviceID: deviceID,
+				Payload:  rawParams,
+			}
+			u.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&event, rawParams, fmt.Sprintf("decode params: %v", err), "ingestion"))
+			return fmt.Errorf("decode notification params: %w", err)
+		}
+	}
 
 	now := time.Now()
 	event := domain.Event{
@@ -104,6 +119,14 @@ func (u *EventIngestionUseCase) maybeEnableAccessibility(
 		adbSerial,
 		serviceComponent,
 	)
+}
+
+func (u *EventIngestionUseCase) recordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) {
+	recorder, ok := u.orch.(deadLetterRecorder)
+	if !ok {
+		return
+	}
+	_ = recorder.RecordDeadLetter(ctx, record)
 }
 
 func buildDeviceEventID(

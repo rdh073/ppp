@@ -201,6 +201,9 @@ func TestToolCallNode_Success_Decide(t *testing.T) {
 	if out.Artifacts["tool_result"] == "" {
 		t.Error("tool_result should be set")
 	}
+	if len(out.EmittedEvents) != 1 || out.EmittedEvents[0].Kind != domain.EventKindToolResult {
+		t.Fatalf("expected one tool.result event, got %+v", out.EmittedEvents)
+	}
 }
 
 func TestToolCallNode_UnsupportedTool_Resync(t *testing.T) {
@@ -238,6 +241,36 @@ func TestToolCallNode_Error_Resync(t *testing.T) {
 	// resync_reason should be set in Artifacts
 	if out.Artifacts["resync_reason"] == "" {
 		t.Error("expected resync_reason to be set on tool error")
+	}
+}
+
+func TestToolCallNode_OptionalToolError_ReturnsToolErrorForFallback(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "optional_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	})
+	n := nodes.NewToolCallNode(registry)
+	state := newState("t-optional", "dev-optional")
+	state.Artifacts["pending_tool"] = "optional_tool"
+	state.Artifacts["pending_tool_optional"] = "true"
+
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-optional")})
+	if out.Status != workflow.NodeStatusSuccess {
+		t.Fatalf("expected NodeStatusSuccess for optional tool failure, got %s", out.Status)
+	}
+	if out.Artifacts["tool_error"] == "" {
+		t.Fatal("expected tool_error artifact for optional failure")
+	}
+	if out.Artifacts["last_tool_name"] != "optional_tool" {
+		t.Fatalf("expected last_tool_name optional_tool, got %q", out.Artifacts["last_tool_name"])
+	}
+	if len(out.EmittedEvents) != 1 || out.EmittedEvents[0].Kind != domain.EventKindToolResult {
+		t.Fatalf("expected one tool.result event for optional fallback, got %+v", out.EmittedEvents)
 	}
 }
 

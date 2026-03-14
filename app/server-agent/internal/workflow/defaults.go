@@ -3,8 +3,9 @@ package workflow
 import "github.com/autosdk/ppp/server-agent/internal/domain"
 
 const (
-	DefaultWorkflowName              = "default"
-	LocalIdentityProfileWorkflowName = "local-identity-profile"
+	DefaultWorkflowName                   = "default"
+	LocalIdentityProfileWorkflowName      = "local-identity-profile"
+	LocalIdentityWelcomeEmailWorkflowName = "local-identity-welcome-email"
 )
 
 // DefaultWorkflowDef replicates the hardcoded node routing that was previously
@@ -25,6 +26,11 @@ var DefaultWorkflowDef = newStandardWorkflowDef(DefaultWorkflowName)
 // LocalIdentityProfileWorkflowDef is the first shipped workflow path that uses
 // real deterministic ToolCall steps to assemble a local profile.
 var LocalIdentityProfileWorkflowDef = newStandardWorkflowDef(LocalIdentityProfileWorkflowName)
+
+// LocalIdentityWelcomeEmailWorkflowDef extends the local identity profile flow
+// with one optional model-backed email generation step and a deterministic
+// fallback template.
+var LocalIdentityWelcomeEmailWorkflowDef = newStandardWorkflowDef(LocalIdentityWelcomeEmailWorkflowName)
 
 func newStandardWorkflowDef(name string) *domain.WorkflowDef {
 	return &domain.WorkflowDef{

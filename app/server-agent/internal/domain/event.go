@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -10,6 +11,14 @@ type EventKind string
 // ErrEventDropped indicates a device-originated event was intentionally ignored
 // (e.g. stale watermark or duplicate idempotency key).
 var ErrEventDropped = errors.New("event dropped")
+
+type EventAcceptance string
+
+const (
+	EventAcceptanceAccepted  EventAcceptance = "accepted"
+	EventAcceptanceStale     EventAcceptance = "stale"
+	EventAcceptanceDuplicate EventAcceptance = "duplicate"
+)
 
 const (
 	EventKindAgentOnline     EventKind = "agent.online"
@@ -44,6 +53,64 @@ type Event struct {
 	SeqNo      uint64
 	OccurredAt time.Time
 	Payload    any // concrete type depends on Kind; see payload types below
+}
+
+type AcceptedEventRecord struct {
+	Event      Event     `json:"event"`
+	AcceptedAt time.Time `json:"acceptedAt"`
+	Source     string    `json:"source"`
+}
+
+type DeadLetterRecord struct {
+	ID         string          `json:"id"`
+	EventID    string          `json:"eventId,omitempty"`
+	Kind       EventKind       `json:"kind,omitempty"`
+	DeviceID   DeviceID        `json:"deviceId,omitempty"`
+	SeqNo      uint64          `json:"seqNo,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+	Reason     string          `json:"reason"`
+	Source     string          `json:"source"`
+	RecordedAt time.Time       `json:"recordedAt"`
+}
+
+func NewDeadLetterRecord(event *Event, rawPayload json.RawMessage, reason, source string) DeadLetterRecord {
+	record := DeadLetterRecord{
+		ID:         "dead-" + newID(),
+		Reason:     reason,
+		Source:     source,
+		RecordedAt: time.Now(),
+	}
+	if event != nil {
+		record.EventID = event.ID
+		record.Kind = event.Kind
+		record.DeviceID = event.DeviceID
+		record.SeqNo = event.SeqNo
+		if len(rawPayload) == 0 {
+			rawPayload = MarshalEventPayload(*event)
+		}
+	}
+	if len(rawPayload) > 0 {
+		record.Payload = append(json.RawMessage(nil), rawPayload...)
+	}
+	return record
+}
+
+func MarshalEventPayload(event Event) json.RawMessage {
+	if event.Payload == nil {
+		return nil
+	}
+	switch payload := event.Payload.(type) {
+	case json.RawMessage:
+		return append(json.RawMessage(nil), payload...)
+	case []byte:
+		return append(json.RawMessage(nil), payload...)
+	}
+
+	raw, err := json.Marshal(event.Payload)
+	if err != nil {
+		return nil
+	}
+	return json.RawMessage(raw)
 }
 
 // --- payload types ---

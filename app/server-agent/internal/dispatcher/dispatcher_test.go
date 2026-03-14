@@ -9,6 +9,7 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
+	"github.com/autosdk/ppp/server-agent/internal/store"
 )
 
 // fakeSender implements registry.Sender, recording calls.
@@ -18,9 +19,9 @@ func (f *fakeSender) SendRequest(id, method string, _ any) error {
 	f.sent = append(f.sent, id+":"+method)
 	return nil
 }
-func (f *fakeSender) SendSuccess(_ string, _ any) error          { return nil }
-func (f *fakeSender) SendError(_ string, _ int, _ string) error  { return nil }
-func (f *fakeSender) Close() error                               { return nil }
+func (f *fakeSender) SendSuccess(_ string, _ any) error         { return nil }
+func (f *fakeSender) SendError(_ string, _ int, _ string) error { return nil }
+func (f *fakeSender) Close() error                              { return nil }
 
 // fakeRegistry always returns the given sender for any device lookup.
 type fakeRegistry struct {
@@ -28,7 +29,7 @@ type fakeRegistry struct {
 }
 
 func (r *fakeRegistry) Add(_ *domain.Session, _ registry.Sender) error { return nil }
-func (r *fakeRegistry) Remove(_ domain.SessionID)                       {}
+func (r *fakeRegistry) Remove(_ domain.SessionID)                      {}
 func (r *fakeRegistry) GetBySession(_ domain.SessionID) (*domain.Session, registry.Sender, bool) {
 	return nil, nil, false
 }
@@ -103,5 +104,41 @@ func TestDispatch_DuplicateDeliveryIsNoop(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out")
+	}
+}
+
+func TestDispatch_PersistsCommandOutboxLifecycle(t *testing.T) {
+	sender := &fakeSender{}
+	outbox := store.NewMemoryCommandOutboxStore()
+	d := dispatcher.NewMemoryDispatcher(&fakeRegistry{sender: sender}, outbox)
+
+	cmd := domain.Command{
+		ID:       "cmd-outbox",
+		Kind:     domain.CommandKindObserve,
+		DeviceID: "dev-1",
+		Params:   json.RawMessage(`{}`),
+		IssuedAt: time.Now(),
+	}
+
+	ch, err := d.Dispatch(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("Dispatch returned error: %v", err)
+	}
+
+	d.DeliverResponse(domain.CommandResult{
+		CommandID:  cmd.ID,
+		DeviceID:   cmd.DeviceID,
+		Success:    true,
+		Raw:        json.RawMessage(`{"ok":true}`),
+		ReceivedAt: time.Now(),
+	})
+	<-ch
+
+	record, err := outbox.Get(context.Background(), cmd.ID)
+	if err != nil {
+		t.Fatalf("outbox Get: %v", err)
+	}
+	if record.Status != domain.CommandOutboxStatusResponded {
+		t.Fatalf("expected responded status, got %s", record.Status)
 	}
 }

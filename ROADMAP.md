@@ -62,7 +62,10 @@ Implemented:
 
 - registered-only acceptance for `android.*`
 - deterministic device event identity
+- durable accepted-event inbox with persisted watermark and dedup cursors
 - stale and duplicate events short-circuit with `ErrEventDropped`
+- durable dead-letter records for malformed notifications and workflow-processing failures
+- internal `tool.result` events are durably accepted through the same event plane as device-originated events
 - side effects execute only after accepted event
 - ADB accessibility recovery validates `android_id` against `deviceId`
 - ADB target supports `adbSerial`, env mapping, and single-device fallback
@@ -73,6 +76,23 @@ Key files:
 - `app/server-agent/internal/usecase/event_ingestion.go`
 - `app/server-agent/internal/orchestrator/orchestrator.go`
 - `app/server-agent/internal/usecase/accessibility_auto_enabler.go`
+- `app/server-agent/internal/store/file.go`
+
+### Server-Agent Durable Runtime Storage
+
+Implemented:
+
+- production task store is file-backed
+- production workflow-state checkpoints are file-backed
+- production command dispatch lifecycle is recorded in a durable command outbox
+- production durable data defaults under `app/server-agent/var` unless `-data-dir` is overridden
+
+Key files:
+
+- `app/server-agent/internal/store/file.go`
+- `app/server-agent/internal/store/port.go`
+- `app/server-agent/internal/dispatcher/dispatcher.go`
+- `app/server-agent/cmd/server/main.go`
 
 ### Server-Agent Tool Runtime
 
@@ -80,9 +100,12 @@ Implemented:
 
 - fail-closed manifest-backed tool registry
 - local deterministic tool catalog
+- composite registry wiring for local plus model-backed tools
 - manifest timeout handling
+- manifest retry budget handling for retryable tool failures
 - input and output validation hooks
 - node-level failure routing for unsupported tools, invalid params, invalid result, and timeout
+- optional-tool fallback handoff via `tool_error` for workflows that deliberately tolerate model failure
 
 Production tools currently wired:
 
@@ -90,11 +113,14 @@ Production tools currently wired:
 2. `identity.generate_email`
 3. `credential.generate_password`
 4. `identity.generate_birth_date`
+5. `content.generate_welcome_email`
 
 Key files:
 
 - `app/server-agent/internal/workflow/nodes/toolcall.go`
 - `app/server-agent/internal/tools/catalog.go`
+- `app/server-agent/internal/tools/registry.go`
+- `app/server-agent/internal/tools/llm.go`
 - `app/server-agent/cmd/server/main.go`
 
 ### Server-Agent Workflow Adoption
@@ -102,14 +128,17 @@ Key files:
 Implemented:
 
 - built-in workflow path `local-identity-profile`
+- built-in workflow path `local-identity-welcome-email`
 - `DecideNode` seeds deterministic `ToolCall` steps for that workflow
 - `DecideNode` consumes `tool_result` back into durable workflow artifacts
+- `DecideNode` consumes optional `tool_error` and applies deterministic fallback email content
 - orchestrator auto-advances internal nodes so `Decide -> ToolCall -> Decide -> Terminal` can complete in one event tick
 
 Key files:
 
 - `app/server-agent/internal/workflow/defaults.go`
 - `app/server-agent/internal/workflow/nodes/decide.go`
+- `app/server-agent/internal/workflow/nodes/local_identity_workflows.go`
 - `app/server-agent/internal/orchestrator/orchestrator.go`
 - `app/server-agent/internal/orchestrator/orchestrator_test.go`
 
@@ -191,46 +220,61 @@ Validation:
 
 ### Phase 3: LangGraph or LLM Tool Adapter
 
-Status: next
+Status: done
 
-Goal:
+Outcome:
 
-- add model-backed tools only where deterministic logic is insufficient
+- production tool wiring now composes deterministic local tools with one model-backed tool
+- model-backed tool output is schema-validated before artifact persistence
+- retry budget and trace logging exist for model-backed calls
+- shipped workflow fallback exists when the model-backed tool is disabled, times out, or fails
 
-Candidates:
+Implemented in:
 
-1. natural-language email body generation
-2. profile or persona enrichment
-3. fuzzy policy or risk classification
+- [llm.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/llm.go)
+- [registry.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/registry.go)
+- [toolcall.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/workflow/nodes/toolcall.go)
+- [local_identity_workflows.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/workflow/nodes/local_identity_workflows.go)
+- [orchestrator_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/orchestrator/orchestrator_test.go)
+- [llm_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/llm_test.go)
 
-Non-candidates:
+Runtime config:
 
-1. password generation
-2. birth-date generation
-3. simple email address composition
+- `AUTO_TOOL_LLM_API_URL`
+- `AUTO_TOOL_LLM_API_KEY`
+- `AUTO_TOOL_LLM_MODEL`
 
-Required end state:
+Validation:
 
-- model-backed tools remain behind `ToolRegistry`
-- deterministic tools stay local
-- every model-backed tool has timeout, validation, fallback branch, and trace logging
+- `go test ./...` in `app/server-agent`
 
 ### Phase 4: Durable Event Plane
 
-Status: planned
+Status: done
 
-Goal:
+Outcome:
 
-- persist accepted events, dead-letter records, and command outbox state
+- accepted device and internal events are durable
+- dead letters are durable
+- dedup and watermark state moved out of orchestrator memory into the event plane store
+- command dispatch lifecycle is durably recorded in a command outbox
+- production startup now uses file-backed task, workflow-state, event-plane, and command-outbox stores
 
-Required end state:
+Implemented in:
 
-- no correctness-critical event exists only in memory
-- device events, recovery events, and internal tool results follow the same acceptance path
+- [file.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/file.go)
+- [dispatcher.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/dispatcher/dispatcher.go)
+- [orchestrator.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/orchestrator/orchestrator.go)
+- [event_ingestion.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/usecase/event_ingestion.go)
+- [main.go](/home/xtrzy/Workspace/ppp/app/server-agent/cmd/server/main.go)
+
+Validation:
+
+- `go test ./...` in `app/server-agent`
 
 ### Phase 5: Durable Workflow Runtime
 
-Status: planned
+Status: next
 
 Goal:
 
@@ -238,7 +282,8 @@ Goal:
 
 Required end state:
 
-- workflow checkpoints are durable
+- workflow replay and recovery semantics are explicit, not incidental
+- optimistic concurrency exists around checkpoint advancement
 - artifact contracts are documented and tested
 
 ### Phase 6: Redis Streams Scale-Out
@@ -308,9 +353,9 @@ A phase is done only if all are true:
 
 ## Immediate Next Action
 
-Implement Phase 3:
+Implement Phase 5:
 
-1. add one model-backed tool behind `ToolRegistry`
-2. keep deterministic tools local and unchanged
-3. validate model output before artifact persistence
-4. add explicit fallback behavior in workflow logic when the model-backed tool fails
+1. define replay/bootstrap strategy from durable task, workflow-state, and accepted-event storage
+2. add optimistic concurrency around workflow checkpoint writes
+3. document artifact contracts and recovery expectations per node boundary
+4. make restart recovery explicit in tests instead of relying only on file-backed snapshots

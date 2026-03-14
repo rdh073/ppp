@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
@@ -17,6 +18,9 @@ var (
 	// ErrToolDisabled indicates the tool exists conceptually but has no active
 	// production implementation yet.
 	ErrToolDisabled = errors.New("tool disabled")
+	// ErrToolRetryable marks transient tool failures that may be retried within
+	// the tool's retry budget.
+	ErrToolRetryable = errors.New("tool retryable")
 	// ErrToolInvalidParams indicates the caller supplied params that violate the
 	// manifest contract for the selected tool.
 	ErrToolInvalidParams = errors.New("tool invalid params")
@@ -33,6 +37,7 @@ type ToolManifest struct {
 	Description   string
 	Deterministic bool
 	Timeout       time.Duration
+	RetryBudget   int
 	InputSchema   json.RawMessage
 	OutputSchema  json.RawMessage
 }
@@ -75,6 +80,31 @@ type StaticToolRegistry struct {
 	defs map[string]ToolDefinition
 }
 
+type retryableToolError struct {
+	err error
+}
+
+func (e retryableToolError) Error() string {
+	return e.err.Error()
+}
+
+func (e retryableToolError) Unwrap() error {
+	return e.err
+}
+
+func (e retryableToolError) Is(target error) bool {
+	return target == ErrToolRetryable || errors.Is(e.err, target)
+}
+
+// MarkToolRetryable wraps an error so the registry can consume retry budget for
+// transient failures while preserving the original cause for logs and tests.
+func MarkToolRetryable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return retryableToolError{err: err}
+}
+
 func NewStaticToolRegistry(defs ...ToolDefinition) StaticToolRegistry {
 	byName := make(map[string]ToolDefinition, len(defs))
 	for _, def := range defs {
@@ -110,19 +140,32 @@ func (r StaticToolRegistry) Invoke(ctx context.Context, toolName string, params 
 			return nil, fmt.Errorf("%w: %s: %v", ErrToolInvalidParams, toolName, err)
 		}
 	}
-	result, err := def.Handler(ctx, params)
-	if err != nil {
-		return nil, err
+
+	retryBudget := def.Manifest.RetryBudget
+	if retryBudget < 0 {
+		retryBudget = 0
 	}
-	if len(result) == 0 || !json.Valid(result) {
-		return nil, fmt.Errorf("%w: %s: result must be valid JSON", ErrToolInvalidResult, toolName)
-	}
-	if def.ValidateResult != nil {
-		if err := def.ValidateResult(result); err != nil {
-			return nil, fmt.Errorf("%w: %s: %v", ErrToolInvalidResult, toolName, err)
+
+	for attempt := 0; attempt <= retryBudget; attempt++ {
+		result, err := def.Handler(ctx, params)
+		if err != nil {
+			if attempt < retryBudget && errors.Is(err, ErrToolRetryable) && ctx.Err() == nil {
+				continue
+			}
+			return nil, err
 		}
+		if len(result) == 0 || !json.Valid(result) {
+			return nil, fmt.Errorf("%w: %s: result must be valid JSON", ErrToolInvalidResult, toolName)
+		}
+		if def.ValidateResult != nil {
+			if err := def.ValidateResult(result); err != nil {
+				return nil, fmt.Errorf("%w: %s: %v", ErrToolInvalidResult, toolName, err)
+			}
+		}
+		return result, nil
 	}
-	return result, nil
+
+	return nil, fmt.Errorf("%w: %s: retry budget exhausted", ErrToolRetryable, toolName)
 }
 
 // ToolCallNode reads the pending_tool and pending_tool_params artifacts, invokes
@@ -142,6 +185,7 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 		// Nothing queued - report success; def will route to Decide.
 		return workflow.NodeOutput{Status: workflow.NodeStatusSuccess}, nil
 	}
+	optional := input.State.Artifacts["pending_tool_optional"] == "true"
 
 	rawParams := json.RawMessage(input.State.Artifacts["pending_tool_params"])
 	if len(rawParams) == 0 {
@@ -150,7 +194,7 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 
 	manifest, ok := n.tools.Manifest(toolName)
 	if !ok {
-		return toolFailure(toolName, fmt.Errorf("%w: %s", ErrToolUnsupported, toolName)), nil
+		return toolFailure(input, toolName, fmt.Errorf("%w: %s", ErrToolUnsupported, toolName), optional), nil
 	}
 
 	invokeCtx := ctx
@@ -162,7 +206,7 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 
 	result, err := n.tools.Invoke(invokeCtx, toolName, rawParams)
 	if err != nil {
-		return toolFailure(toolName, err), nil
+		return toolFailure(input, toolName, err, optional), nil
 	}
 
 	zero := intPtr(0)
@@ -172,19 +216,51 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 			"tool_result":    string(result),
 			"last_tool_name": toolName,
 		},
-		DeleteArtifacts: []string{"pending_tool", "pending_tool_params"},
+		EmittedEvents:   []domain.Event{newToolResultEvent(input, toolName, result, "")},
+		DeleteArtifacts: []string{"pending_tool", "pending_tool_params", "pending_tool_optional", "tool_error"},
 		SetErrorCount:   zero,
 	}, nil
 }
 
-func toolFailure(toolName string, err error) workflow.NodeOutput {
+func toolFailure(input workflow.NodeInput, toolName string, err error, optional bool) workflow.NodeOutput {
+	if optional {
+		return workflow.NodeOutput{
+			Status: workflow.NodeStatusSuccess,
+			Artifacts: map[string]string{
+				"tool_error":     err.Error(),
+				"last_tool_name": toolName,
+			},
+			EmittedEvents:   []domain.Event{newToolResultEvent(input, toolName, nil, err.Error())},
+			DeleteArtifacts: []string{"pending_tool", "pending_tool_params", "pending_tool_optional", "tool_result"},
+		}
+	}
 	return workflow.NodeOutput{
 		Status: workflow.NodeStatusFailure,
 		Artifacts: map[string]string{
 			"resync_reason": fmt.Sprintf("toolcall %s failed: %v", toolName, err),
 		},
-		DeleteArtifacts: []string{"pending_tool", "pending_tool_params"},
+		DeleteArtifacts: []string{"pending_tool", "pending_tool_params", "pending_tool_optional", "tool_result", "last_tool_name", "tool_error"},
 	}
 }
 
 func intPtr(n int) *int { v := n; return &v }
+
+func newToolResultEvent(input workflow.NodeInput, toolName string, result json.RawMessage, errString string) domain.Event {
+	taskID := domain.TaskID("")
+	if input.Task != nil {
+		taskID = input.Task.ID
+	}
+	now := time.Now()
+	return domain.Event{
+		ID:         fmt.Sprintf("tool-result:%s:%s:%d", input.State.TaskID, toolName, now.UnixNano()),
+		Kind:       domain.EventKindToolResult,
+		DeviceID:   input.State.DeviceID,
+		OccurredAt: now,
+		Payload: domain.ToolResultPayload{
+			TaskID:    taskID,
+			ToolName:  toolName,
+			Result:    append([]byte(nil), result...),
+			ErrString: errString,
+		},
+	}
+}

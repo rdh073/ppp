@@ -39,3 +39,20 @@ type CommandError struct {
 	Code    int
 	Message string
 }
+
+type CommandOutboxStatus string
+
+const (
+	CommandOutboxStatusIssued         CommandOutboxStatus = "issued"
+	CommandOutboxStatusDispatched     CommandOutboxStatus = "dispatched"
+	CommandOutboxStatusDispatchFailed CommandOutboxStatus = "dispatch_failed"
+	CommandOutboxStatusResponded      CommandOutboxStatus = "responded"
+)
+
+type CommandOutboxRecord struct {
+	Command    Command             `json:"command"`
+	Status     CommandOutboxStatus `json:"status"`
+	LastError  string              `json:"lastError,omitempty"`
+	LastResult *CommandResult      `json:"lastResult,omitempty"`
+	UpdatedAt  time.Time           `json:"updatedAt"`
+}

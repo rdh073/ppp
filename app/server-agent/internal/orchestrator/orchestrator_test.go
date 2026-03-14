@@ -28,10 +28,19 @@ func (h *fakeNodeHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow
 	return workflow.NodeOutput{Status: h.status, Done: h.done}, nil
 }
 
+type errorNodeHandler struct {
+	err error
+}
+
+func (h *errorNodeHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
+	return workflow.NodeOutput{}, h.err
+}
+
 func seededDefStore() *workflow.MemoryDefStore {
 	mem := workflow.NewMemoryDefStore()
 	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
 	_ = mem.Put(context.Background(), workflow.LocalIdentityProfileWorkflowDef.Name, workflow.LocalIdentityProfileWorkflowDef)
+	_ = mem.Put(context.Background(), workflow.LocalIdentityWelcomeEmailWorkflowDef.Name, workflow.LocalIdentityWelcomeEmailWorkflowDef)
 	return mem
 }
 
@@ -81,6 +90,24 @@ func (f fakeDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan 
 func (fakeDispatcher) DeliverResponse(domain.CommandResult) {}
 
 func newRealRunner() *workflow.Runner {
+	return newRealRunnerWithTools(toolcatalog.NewLocalToolRegistry())
+}
+
+type fakeModelClient struct {
+	result json.RawMessage
+	err    error
+	calls  int
+}
+
+func (f *fakeModelClient) GenerateJSON(_ context.Context, _ toolcatalog.JSONModelRequest) (json.RawMessage, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
+}
+
+func newRealRunnerWithTools(toolRegistry nodes.ToolRegistry) *workflow.Runner {
 	disp := fakeDispatcher{
 		result: domain.CommandResult{
 			Success: true,
@@ -93,7 +120,7 @@ func newRealRunner() *workflow.Runner {
 		domain.NodeKindAct:      nodes.NewActNode(disp),
 		domain.NodeKindVerify:   nodes.NewVerifyNode(),
 		domain.NodeKindResync:   nodes.NewResyncNode(disp),
-		domain.NodeKindToolCall: nodes.NewToolCallNode(toolcatalog.NewLocalToolRegistry()),
+		domain.NodeKindToolCall: nodes.NewToolCallNode(toolRegistry),
 		domain.NodeKindWait:     nodes.NewWaitNode(),
 		domain.NodeKindTerminal: nodes.NewTerminalNode(),
 	}, seededDefStore(), workflow.DefaultWorkflowName)
@@ -102,6 +129,16 @@ func newRealRunner() *workflow.Runner {
 func newOrch(runner *workflow.Runner, tasks store.TaskStore, states store.WorkflowStateStore) *orchestrator.Orchestrator {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	return orchestrator.New(tasks, states, runner, log)
+}
+
+func newOrchWithEventStore(
+	runner *workflow.Runner,
+	tasks store.TaskStore,
+	states store.WorkflowStateStore,
+	events store.EventPlaneStore,
+) *orchestrator.Orchestrator {
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return orchestrator.New(tasks, states, runner, log, events)
 }
 
 // --- tests ---
@@ -297,5 +334,207 @@ func TestProcessEvent_LocalIdentityWorkflow_CompletesWithToolResults(t *testing.
 	}
 	if ws.Artifacts["tool_result"] != "" || ws.Artifacts["pending_tool"] != "" {
 		t.Fatal("expected transient tool artifacts to be cleared")
+	}
+}
+
+func TestProcessEvent_LocalIdentityWelcomeEmailWorkflow_UsesModelTool(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+
+	task := &domain.Task{
+		ID:             "task-welcome-email",
+		Goal:           "generate local identity profile and welcome email",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-welcome-email",
+		WorkflowName:   workflow.LocalIdentityWelcomeEmailWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	modelClient := &fakeModelClient{
+		result: json.RawMessage(`{"subject":"Selamat datang di AutoSDK","body":"Halo Ayu Lestari, akun AutoSDK Anda siap digunakan. Silakan gunakan email ini untuk melanjutkan proses verifikasi dan simpan kredensial Anda dengan aman.","language":"id","tone":"professional_warm"}`),
+	}
+	registry := toolcatalog.NewCompositeToolRegistry(
+		toolcatalog.NewLocalToolRegistry(),
+		toolcatalog.NewModelToolRegistry(nil, modelClient),
+	)
+	orch := newOrch(newRealRunnerWithTools(registry), tasks, states)
+
+	event := domain.Event{
+		ID:         "ev-welcome-email",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	ws, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("state not found: %v", err)
+	}
+	if ws.CurrentNode != domain.NodeKindTerminal {
+		t.Fatalf("expected terminal node, got %s", ws.CurrentNode)
+	}
+	if ws.Artifacts["welcome_email_generation_mode"] != "llm" {
+		t.Fatalf("expected llm generation mode, got %q", ws.Artifacts["welcome_email_generation_mode"])
+	}
+	if ws.Artifacts["welcome_email_subject"] == "" || ws.Artifacts["welcome_email_body"] == "" {
+		t.Fatal("expected welcome email artifacts to be set")
+	}
+	if modelClient.calls != 1 {
+		t.Fatalf("expected model tool to be called once, got %d", modelClient.calls)
+	}
+}
+
+func TestProcessEvent_LocalIdentityWelcomeEmailWorkflow_FallsBackWhenModelToolFails(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+
+	task := &domain.Task{
+		ID:             "task-welcome-email-fallback",
+		Goal:           "generate local identity profile and welcome email",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-welcome-email-fallback",
+		WorkflowName:   workflow.LocalIdentityWelcomeEmailWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	modelClient := &fakeModelClient{
+		err: errors.New("provider unavailable"),
+	}
+	registry := toolcatalog.NewCompositeToolRegistry(
+		toolcatalog.NewLocalToolRegistry(),
+		toolcatalog.NewModelToolRegistry(nil, modelClient),
+	)
+	orch := newOrch(newRealRunnerWithTools(registry), tasks, states)
+
+	event := domain.Event{
+		ID:         "ev-welcome-email-fallback",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	updatedTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("get task error: %v", err)
+	}
+	if updatedTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task, got %s", updatedTask.Status)
+	}
+
+	ws, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("state not found: %v", err)
+	}
+	if ws.Artifacts["welcome_email_generation_mode"] != "fallback_template" {
+		t.Fatalf("expected fallback template mode, got %q", ws.Artifacts["welcome_email_generation_mode"])
+	}
+	if ws.Artifacts["welcome_email_error"] == "" {
+		t.Fatal("expected welcome_email_error to be captured")
+	}
+	if ws.Artifacts["welcome_email_subject"] == "" || ws.Artifacts["welcome_email_body"] == "" {
+		t.Fatal("expected fallback email artifacts to be set")
+	}
+	if modelClient.calls != 1 {
+		t.Fatalf("expected model tool to be called once, got %d", modelClient.calls)
+	}
+}
+
+func TestProcessEvent_LocalIdentityWorkflow_RecordsToolResultEvents(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+
+	task := &domain.Task{
+		ID:             "task-local-identity-events",
+		Goal:           "generate local identity profile",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-local-identity-events",
+		WorkflowName:   workflow.LocalIdentityProfileWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newRealRunner(), tasks, states, events)
+	event := domain.Event{
+		ID:         "ev-local-identity-events",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	accepted, err := events.ListAccepted(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccepted: %v", err)
+	}
+	toolResults := 0
+	for _, record := range accepted {
+		if record.Event.Kind == domain.EventKindToolResult {
+			toolResults++
+		}
+	}
+	if toolResults != 4 {
+		t.Fatalf("expected 4 tool.result events, got %d", toolResults)
+	}
+}
+
+func TestProcessEvent_NodeFailure_RecordsDeadLetter(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+
+	task := &domain.Task{
+		ID:             "task-dead-letter",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-dead-letter",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	runner := workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
+		domain.NodeKindObserve: &errorNodeHandler{err: errors.New("observe exploded")},
+	}, seededDefStore(), workflow.DefaultWorkflowName)
+	orch := newOrchWithEventStore(runner, tasks, states, events)
+
+	err := orch.ProcessEvent(context.Background(), domain.Event{
+		ID:         "ev-dead-letter",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected process error")
+	}
+
+	deadLetters, err := events.ListDeadLetters(context.Background())
+	if err != nil {
+		t.Fatalf("ListDeadLetters: %v", err)
+	}
+	if len(deadLetters) != 1 {
+		t.Fatalf("expected 1 dead letter, got %d", len(deadLetters))
+	}
+	if deadLetters[0].EventID != "ev-dead-letter" {
+		t.Fatalf("unexpected dead letter event id: %q", deadLetters[0].EventID)
 	}
 }

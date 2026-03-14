@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
@@ -25,6 +26,7 @@ func main() {
 	addr := flag.String("addr", ":3000", "HTTP listen address")
 	workflowDir := flag.String("workflow-dir", "", "directory to watch for YAML workflow defs (optional)")
 	workflowPoll := flag.Duration("workflow-poll", 5*time.Second, "polling interval for workflow-dir")
+	dataDir := flag.String("data-dir", filepath.Join(".", "var"), "directory for persisted runtime data")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -33,15 +35,34 @@ func main() {
 
 	// --- infrastructure ---
 	reg := registry.New()
-	taskStore := store.NewMemoryTaskStore()
-	stateStore := store.NewMemoryWorkflowStateStore()
-	disp := dispatcher.NewMemoryDispatcher(reg)
+	taskStore, err := store.NewFileTaskStore(*dataDir)
+	if err != nil {
+		log.Error("failed to open task store", "dir", *dataDir, "err", err)
+		os.Exit(1)
+	}
+	stateStore, err := store.NewFileWorkflowStateStore(*dataDir)
+	if err != nil {
+		log.Error("failed to open workflow state store", "dir", *dataDir, "err", err)
+		os.Exit(1)
+	}
+	eventStore, err := store.NewFileEventPlaneStore(*dataDir)
+	if err != nil {
+		log.Error("failed to open event plane store", "dir", *dataDir, "err", err)
+		os.Exit(1)
+	}
+	commandOutbox, err := store.NewFileCommandOutboxStore(*dataDir)
+	if err != nil {
+		log.Error("failed to open command outbox store", "dir", *dataDir, "err", err)
+		os.Exit(1)
+	}
+	disp := dispatcher.NewMemoryDispatcher(reg, commandOutbox)
 
 	// --- workflow def store ---
 	var defStore workflow.DefStore
 	mem := workflow.NewMemoryDefStore()
 	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
 	_ = mem.Put(context.Background(), workflow.LocalIdentityProfileWorkflowDef.Name, workflow.LocalIdentityProfileWorkflowDef)
+	_ = mem.Put(context.Background(), workflow.LocalIdentityWelcomeEmailWorkflowDef.Name, workflow.LocalIdentityWelcomeEmailWorkflowDef)
 
 	if *workflowDir != "" {
 		fs, err := workflow.NewFSDefStore(*workflowDir, log)
@@ -56,7 +77,11 @@ func main() {
 	}
 
 	// --- workflow runner ---
-	toolRegistry := toolcatalog.NewLocalToolRegistry()
+	toolRegistry := toolcatalog.NewDefaultToolRegistry(log, toolcatalog.ModelToolConfig{
+		APIURL: os.Getenv("AUTO_TOOL_LLM_API_URL"),
+		APIKey: os.Getenv("AUTO_TOOL_LLM_API_KEY"),
+		Model:  os.Getenv("AUTO_TOOL_LLM_MODEL"),
+	})
 	runner := workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
 		domain.NodeKindObserve:  nodes.NewObserveNode(disp),
 		domain.NodeKindDecide:   nodes.NewDecideNode(),
@@ -69,7 +94,7 @@ func main() {
 	}, defStore, workflow.DefaultWorkflowName)
 
 	// --- orchestrator ---
-	orch := orchestrator.New(taskStore, stateStore, runner, log)
+	orch := orchestrator.New(taskStore, stateStore, runner, log, eventStore)
 
 	// --- use cases ---
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)

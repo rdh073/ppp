@@ -11,13 +11,19 @@ import (
 )
 
 type recordingEventProcessor struct {
-	events []domain.Event
-	err    error
+	events      []domain.Event
+	deadLetters []domain.DeadLetterRecord
+	err         error
 }
 
 func (r *recordingEventProcessor) ProcessEvent(_ context.Context, event domain.Event) error {
 	r.events = append(r.events, event)
 	return r.err
+}
+
+func (r *recordingEventProcessor) RecordDeadLetter(_ context.Context, record domain.DeadLetterRecord) error {
+	r.deadLetters = append(r.deadLetters, record)
+	return nil
 }
 
 type recordingAccessibilityEnabler struct {
@@ -177,5 +183,27 @@ func TestIngestNotification_SeqNoZero_DoesNotTriggerSideEffect(t *testing.T) {
 	}
 	if len(enabler.calls) != 0 {
 		t.Fatalf("expected no enabler call for seqNo=0, got %d", len(enabler.calls))
+	}
+}
+
+func TestIngestNotification_InvalidJSON_RecordsDeadLetter(t *testing.T) {
+	orch := &recordingEventProcessor{}
+	enabler := &recordingAccessibilityEnabler{}
+	uc := usecase.NewEventIngestion(orch, enabler)
+
+	err := uc.IngestNotification(
+		context.Background(),
+		domain.DeviceID("dev-6"),
+		string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":`),
+	)
+	if err == nil {
+		t.Fatal("expected invalid json error")
+	}
+	if len(orch.events) != 0 {
+		t.Fatalf("expected no processed events, got %d", len(orch.events))
+	}
+	if len(orch.deadLetters) != 1 {
+		t.Fatalf("expected one dead letter, got %d", len(orch.deadLetters))
 	}
 }

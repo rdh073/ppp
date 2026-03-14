@@ -76,6 +76,18 @@ Optional env vars:
 - `AUTO_ADB_SERVER_PORT` (default: `5037`)
 - `AUTO_AGENT_ACCESSIBILITY_COMPONENT` (default: `com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService`)
 - `AUTO_ADB_SERIAL_BY_DEVICE` (optional fallback mapping; format: `deviceId1=serial1,deviceId2=serial2`)
+- `AUTO_TOOL_LLM_API_URL` (optional OpenAI-compatible chat-completions endpoint for model-backed tools)
+- `AUTO_TOOL_LLM_API_KEY` (optional bearer token for the model-backed tool endpoint)
+- `AUTO_TOOL_LLM_MODEL` (required together with `AUTO_TOOL_LLM_API_URL` to enable model-backed tools)
+
+Runtime persistence:
+- `go run ./cmd/server -data-dir ./var`
+- Default runtime data directory is `./var` relative to `app/server-agent/`
+- The server persists:
+  - tasks
+  - workflow checkpoints
+  - accepted events + dead letters
+  - command outbox records
 
 Expected event payload (params) for multi-device safety:
 
@@ -93,6 +105,8 @@ Notes:
 - If multiple devices are connected and `adbSerial` is missing, auto-enable is rejected with an explicit error.
 - `android.*` events are accepted only after successful `agent.hello` / `agent.resume` (registered connection).
 - Safety guard: before mutating accessibility settings, server verifies `settings get secure android_id` on the selected adb target matches the registered `deviceId`.
+- Model-backed tools are optional; if `AUTO_TOOL_LLM_API_URL` or `AUTO_TOOL_LLM_MODEL` is unset, the `content.generate_welcome_email` tool stays visible to workflows but returns disabled so workflow-level deterministic fallback can take over.
+- `tool.result` is durably accepted through the same event plane store as device-originated events.
 
 ## Extending
 
