@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
-	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/eventruntime"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
@@ -23,7 +22,6 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 func main() {
@@ -66,10 +64,6 @@ func main() {
 	// --- workflow def store ---
 	var defStore workflow.DefStore
 	mem := workflow.NewMemoryDefStore()
-	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
-	_ = mem.Put(context.Background(), workflow.LocalIdentityProfileWorkflowDef.Name, workflow.LocalIdentityProfileWorkflowDef)
-	_ = mem.Put(context.Background(), workflow.LocalIdentityWelcomeEmailWorkflowDef.Name, workflow.LocalIdentityWelcomeEmailWorkflowDef)
-	_ = mem.Put(context.Background(), workflow.AndroidSettingsPrivateDNSWorkflowDef.Name, workflow.AndroidSettingsPrivateDNSWorkflowDef)
 
 	if *workflowDir != "" {
 		fs, err := workflow.NewFSDefStore(*workflowDir, log)
@@ -83,7 +77,7 @@ func main() {
 		defStore = mem
 	}
 
-	// --- workflow runner ---
+	// --- tool catalog ---
 	toolCatalog, err := toolcatalog.LoadCatalog(context.Background(), *toolDir, log, toolcatalog.ModelToolConfig{
 		APIURL: os.Getenv("AUTO_TOOL_LLM_API_URL"),
 		APIKey: os.Getenv("AUTO_TOOL_LLM_API_KEY"),
@@ -93,19 +87,11 @@ func main() {
 		log.Error("failed to load tool catalog", "dir", *toolDir, "err", err)
 		os.Exit(1)
 	}
-	runner := workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
-		domain.NodeKindObserve:  nodes.NewObserveNode(disp),
-		domain.NodeKindDecide:   nodes.NewDecideNode(),
-		domain.NodeKindAct:      nodes.NewActNode(disp),
-		domain.NodeKindVerify:   nodes.NewVerifyNode(),
-		domain.NodeKindResync:   nodes.NewResyncNode(disp),
-		domain.NodeKindToolCall: nodes.NewToolCallNodeWithBindings(toolCatalog.Registry, toolCatalog.Bindings, metricsRegistry),
-		domain.NodeKindWait:     nodes.NewWaitNode(),
-		domain.NodeKindTerminal: nodes.NewTerminalNode(),
-	}, defStore, workflow.DefaultWorkflowName, metricsRegistry)
+	// --- workflow engine ---
+	engine := workflow.NewEngine(defStore, disp, toolCatalog.Registry)
 
 	// --- orchestrator ---
-	orch := orchestrator.New(taskStore, stateStore, runner, log, eventStore)
+	orch := orchestrator.New(taskStore, stateStore, engine, log, eventStore)
 	orch.SetOperationalMetrics(metricsRegistry)
 
 	// --- use cases ---
@@ -178,7 +164,6 @@ func main() {
 			log.Error("failed to configure redis streams runtime", "err", err)
 			os.Exit(1)
 		}
-		orch.SetEmittedEventPublisher(bus)
 		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log, metricsRegistry)
 	default:
 		log.Error("unsupported AUTO_EVENT_RUNTIME", "mode", runtimeMode)

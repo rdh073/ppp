@@ -24,42 +24,31 @@ import (
 	ws "github.com/autosdk/ppp/server-agent/internal/transport/ws"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
-// terminalAfterObserve builds a workflow runner that uses the real ObserveNode
-// (so device.observe is actually dispatched over WebSocket) but short-circuits
-// Decide → Terminal so the orchestrator loop terminates after one observe cycle.
-func terminalAfterObserve(disp dispatcher.Dispatcher) *workflow.Runner {
-	mem := workflow.NewMemoryDefStore()
-	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
-
-	terminal := &fakeTerminalHandler{}
-	return workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
-		domain.NodeKindObserve:  nodes.NewObserveNode(disp),
-		domain.NodeKindDecide:   terminal,
-		domain.NodeKindAct:      terminal,
-		domain.NodeKindVerify:   terminal,
-		domain.NodeKindResync:   terminal,
-		domain.NodeKindToolCall: terminal,
-		domain.NodeKindTerminal: nodes.NewTerminalNode(),
-	}, mem, "default")
-}
-
-// fakeTerminalHandler immediately signals Done=true so the Runner marks the workflow terminal.
-type fakeTerminalHandler struct{}
-
-func (fakeTerminalHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
-	return workflow.NodeOutput{Done: true, Artifacts: map[string]string{"goal_reached": "true"}}, nil
-}
-
-func cloneState(s *domain.WorkflowState) *domain.WorkflowState {
-	cp := *s
-	cp.Artifacts = make(map[string]string, len(s.Artifacts))
-	for k, v := range s.Artifacts {
-		cp.Artifacts[k] = v
+// observeTerminalEngine builds a workflow engine with a "default" workflow that:
+//   - fires on any event
+//   - dispatches device.observe (so the WebSocket round-trip actually happens)
+//   - routes to terminal on success or failure
+//
+// This lets the E2E test verify that CreateTask fires an observe command over
+// WebSocket and the task completes after the agent responds.
+func observeTerminalEngine(disp dispatcher.Dispatcher) *workflow.Engine {
+	def := &domain.WorkflowDef{
+		Name:  "default",
+		Entry: "start",
+		Steps: map[string]domain.StepDef{
+			"start": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
 	}
-	return &cp
+	mem := workflow.NewMemoryDefStore()
+	_ = mem.Put(context.Background(), def.Name, def)
+	return workflow.NewEngine(mem, disp)
 }
 
 // buildTestServer wires all components and returns an httptest.Server.
@@ -72,8 +61,8 @@ func buildTestServer(t *testing.T) *httptest.Server {
 	taskStore := store.NewMemoryTaskStore()
 	stateStore := store.NewMemoryWorkflowStateStore()
 	disp := dispatcher.NewMemoryDispatcher(reg, nil)
-	runner := terminalAfterObserve(disp)
-	orch := orchestrator.New(taskStore, stateStore, runner, log)
+	engine := observeTerminalEngine(disp)
+	orch := orchestrator.New(taskStore, stateStore, engine, log)
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
 	eventUC := usecase.NewEventIngestion(orch)
@@ -102,8 +91,8 @@ func buildTestServerWithProcessor(t *testing.T, proc usecase.EventProcessor) *ht
 	taskStore := store.NewMemoryTaskStore()
 	stateStore := store.NewMemoryWorkflowStateStore()
 	disp := dispatcher.NewMemoryDispatcher(reg, nil)
-	runner := terminalAfterObserve(disp)
-	orch := orchestrator.New(taskStore, stateStore, runner, log)
+	engine := observeTerminalEngine(disp)
+	orch := orchestrator.New(taskStore, stateStore, engine, log)
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
 	eventUC := usecase.NewEventIngestion(proc)

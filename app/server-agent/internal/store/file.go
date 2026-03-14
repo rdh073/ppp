@@ -164,7 +164,7 @@ func (s *FileWorkflowStateStore) ListActiveByDevice(_ context.Context, deviceID 
 	defer s.mu.RUnlock()
 	var out []*domain.WorkflowState
 	for key, state := range s.states {
-		if key.deviceID == deviceID && state.CurrentNode != domain.NodeKindTerminal {
+		if key.deviceID == deviceID && !state.IsTerminal() {
 			out = append(out, cloneWorkflowState(state))
 		}
 	}

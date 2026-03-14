@@ -72,7 +72,7 @@ func TestFileWorkflowStateStore_PersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("NewFileWorkflowStateStore: %v", err)
 	}
 	ws := domain.NewWorkflowState("task-file-2", "dev-file-2")
-	ws.Artifacts["hello"] = "world"
+	ws.Inputs["hello"] = "world"
 	if err := s.Save(ctx, ws); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -88,8 +88,8 @@ func TestFileWorkflowStateStore_PersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Artifacts["hello"] != "world" {
-		t.Fatalf("expected persisted artifact, got %#v", got.Artifacts)
+	if got.Inputs["hello"] != "world" {
+		t.Fatalf("expected persisted artifact, got %#v", got.Inputs)
 	}
 	if got.Revision != 1 {
 		t.Fatalf("expected persisted revision 1, got %d", got.Revision)
@@ -118,12 +118,12 @@ func TestFileWorkflowStateStore_SaveConflict(t *testing.T) {
 		t.Fatalf("Get stale: %v", err)
 	}
 
-	current.CurrentNode = domain.NodeKindDecide
+	current.CurrentStep = "decide"
 	if err := s.Save(ctx, current); err != nil {
 		t.Fatalf("save current: %v", err)
 	}
 
-	stale.CurrentNode = domain.NodeKindWait
+	stale.CurrentStep = "wait"
 	err = s.Save(ctx, stale)
 	if !errors.Is(err, store.ErrCheckpointConflict) {
 		t.Fatalf("expected checkpoint conflict, got %v", err)
@@ -136,8 +136,8 @@ func TestFileWorkflowStateStore_SaveConflict(t *testing.T) {
 	if got.Revision != 2 {
 		t.Fatalf("expected revision 2 after conflict, got %d", got.Revision)
 	}
-	if got.CurrentNode != domain.NodeKindDecide {
-		t.Fatalf("expected current node decide after conflict, got %s", got.CurrentNode)
+	if got.CurrentStep != "decide" {
+		t.Fatalf("expected current step decide after conflict, got %s", got.CurrentStep)
 	}
 }
 

@@ -61,11 +61,14 @@ func cloneWorkflowState(ws *domain.WorkflowState) *domain.WorkflowState {
 		return nil
 	}
 	cp := *ws
-	cp.Artifacts = cloneStringMap(ws.Artifacts)
-	if cp.Artifacts == nil {
-		cp.Artifacts = make(map[string]string)
+	cp.Inputs = cloneStringMap(ws.Inputs)
+	if cp.Inputs == nil {
+		cp.Inputs = make(map[string]string)
 	}
-	cp.WaitingFor = append([]domain.EventKind(nil), ws.WaitingFor...)
+	if ws.WaitingExpect != nil {
+		exp := *ws.WaitingExpect
+		cp.WaitingExpect = &exp
+	}
 	return &cp
 }
 

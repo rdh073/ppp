@@ -4,18 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 type compositeToolRegistry struct {
-	registries []nodes.ToolRegistry
+	registries []ToolRegistry
 }
 
 // NewCompositeToolRegistry chains registries in priority order. The first
 // registry that exposes a manifest for a tool owns invocation for that tool.
-func NewCompositeToolRegistry(registries ...nodes.ToolRegistry) nodes.ToolRegistry {
-	filtered := make([]nodes.ToolRegistry, 0, len(registries))
+func NewCompositeToolRegistry(registries ...ToolRegistry) ToolRegistry {
+	filtered := make([]ToolRegistry, 0, len(registries))
 	for _, registry := range registries {
 		if registry != nil {
 			filtered = append(filtered, registry)
@@ -24,13 +22,13 @@ func NewCompositeToolRegistry(registries ...nodes.ToolRegistry) nodes.ToolRegist
 	return compositeToolRegistry{registries: filtered}
 }
 
-func (r compositeToolRegistry) Manifest(toolName string) (nodes.ToolManifest, bool) {
+func (r compositeToolRegistry) Manifest(toolName string) (ToolManifest, bool) {
 	for _, registry := range r.registries {
 		if manifest, ok := registry.Manifest(toolName); ok {
 			return manifest, true
 		}
 	}
-	return nodes.ToolManifest{}, false
+	return ToolManifest{}, false
 }
 
 func (r compositeToolRegistry) Invoke(ctx context.Context, toolName string, params json.RawMessage) (json.RawMessage, error) {
@@ -39,5 +37,5 @@ func (r compositeToolRegistry) Invoke(ctx context.Context, toolName string, para
 			return registry.Invoke(ctx, toolName, params)
 		}
 	}
-	return nil, fmt.Errorf("%w: %s", nodes.ErrToolUnsupported, toolName)
+	return nil, fmt.Errorf("%w: %s", ErrToolUnsupported, toolName)
 }

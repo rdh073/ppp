@@ -99,7 +99,7 @@ func TestMemoryWorkflowStateStore_SaveAndGet(t *testing.T) {
 	ctx := context.Background()
 
 	ws := domain.NewWorkflowState("t-1", "dev-1")
-	ws.Artifacts["key"] = "value"
+	ws.Inputs["key"] = "value"
 
 	if err := s.Save(ctx, ws); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -109,7 +109,7 @@ func TestMemoryWorkflowStateStore_SaveAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Artifacts["key"] != "value" {
+	if got.Inputs["key"] != "value" {
 		t.Errorf("artifact not stored")
 	}
 }
@@ -127,13 +127,13 @@ func TestMemoryWorkflowStateStore_SaveIsolatesCallerMutation(t *testing.T) {
 	ctx := context.Background()
 
 	ws := domain.NewWorkflowState("t-2", "dev-2")
-	ws.Artifacts["k"] = "original"
+	ws.Inputs["k"] = "original"
 	_ = s.Save(ctx, ws)
 
-	ws.Artifacts["k"] = "mutated"
+	ws.Inputs["k"] = "mutated"
 	got, _ := s.Get(ctx, "t-2", "dev-2")
-	if got.Artifacts["k"] != "original" {
-		t.Errorf("store returned mutated artifact: %q", got.Artifacts["k"])
+	if got.Inputs["k"] != "original" {
+		t.Errorf("store returned mutated artifact: %q", got.Inputs["k"])
 	}
 }
 
@@ -141,9 +141,9 @@ func TestMemoryWorkflowStateStore_ListActiveByDevice(t *testing.T) {
 	s := store.NewMemoryWorkflowStateStore()
 	ctx := context.Background()
 
-	active := domain.NewWorkflowState("t-a", "dev-1")   // CurrentNode=Observe (active)
-	terminal := domain.NewWorkflowState("t-b", "dev-1") // will be moved to Terminal
-	terminal.CurrentNode = domain.NodeKindTerminal
+	active := domain.NewWorkflowState("t-a", "dev-1")   // CurrentStep="" (active)
+	terminal := domain.NewWorkflowState("t-b", "dev-1") // will be moved to terminal
+	terminal.CurrentStep = "terminal"
 	other := domain.NewWorkflowState("t-c", "dev-2") // different device
 
 	_ = s.Save(ctx, active)
@@ -174,7 +174,7 @@ func TestMemoryWorkflowStateStore_SaveAdvancesRevision(t *testing.T) {
 		t.Fatalf("expected revision 1 after first save, got %d", ws.Revision)
 	}
 
-	ws.CurrentNode = domain.NodeKindDecide
+	ws.CurrentStep = "decide"
 	if err := s.Save(ctx, ws); err != nil {
 		t.Fatalf("second Save: %v", err)
 	}
@@ -201,12 +201,12 @@ func TestMemoryWorkflowStateStore_SaveConflict(t *testing.T) {
 		t.Fatalf("second Get: %v", err)
 	}
 
-	current.CurrentNode = domain.NodeKindDecide
+	current.CurrentStep = "decide"
 	if err := s.Save(ctx, current); err != nil {
 		t.Fatalf("save current: %v", err)
 	}
 
-	stale.CurrentNode = domain.NodeKindWait
+	stale.CurrentStep = "wait"
 	err = s.Save(ctx, stale)
 	if !errors.Is(err, store.ErrCheckpointConflict) {
 		t.Fatalf("expected checkpoint conflict, got %v", err)
@@ -219,8 +219,8 @@ func TestMemoryWorkflowStateStore_SaveConflict(t *testing.T) {
 	if got.Revision != 2 {
 		t.Fatalf("expected stored revision 2 after conflict, got %d", got.Revision)
 	}
-	if got.CurrentNode != domain.NodeKindDecide {
-		t.Fatalf("expected current node decide after conflict, got %s", got.CurrentNode)
+	if got.CurrentStep != "decide" {
+		t.Fatalf("expected current step decide after conflict, got %s", got.CurrentStep)
 	}
 }
 

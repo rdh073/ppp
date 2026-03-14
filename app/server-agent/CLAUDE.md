@@ -9,6 +9,7 @@ Go control plane for the ppp agent system. See `plans/server-agent-architecture.
 go run ./cmd/server            # default :3000
 go run ./cmd/server -addr :8080
 go run ./cmd/server -tool-dir ./config/tools
+go run ./cmd/server -workflow-dir ./config/examples/workflows   # load YAML workflow defs
 go run ./cmd/tool-provider-example
 go run ./cmd/server -tool-dir ./config/examples/http-provider
 
@@ -34,8 +35,8 @@ internal/
   store/              TaskStore + WorkflowStateStore interfaces + in-memory impls
   eventruntime/       event submission boundary; inline vs redis-streams runtime modes
   dispatcher/         Dispatcher interface — routes device.* commands, correlates responses
-  workflow/           NodeRunner, NodeInput/Output; nodes/: Observe/Decide/Act/Verify/Resync/Terminal
-  orchestrator/       ProcessEvent: per-device lock + watermark + dedup + node run + checkpoint
+  workflow/           Engine (event-driven step graph), DefStore/FSDefStore, ToolInvoker port, matcher, interpolate
+  orchestrator/       ProcessEvent: per-device lock + watermark + dedup + engine run + checkpoint
   usecase/            AgentLifecycle, TaskControl, RuntimeRecovery — thin orchestration glue
   handler/            JSON-RPC agent handler (thin), HTTP task handler
   transport/ws/       WebSocket upgrade, read loop, JSON-RPC framing
@@ -45,7 +46,7 @@ internal/
 **Dependency direction** (strictly inward):
 ```
 transport/ws → handler → usecase → orchestrator → {store, workflow, dispatcher}
-                                    workflow/nodes → dispatcher → registry → domain
+                                    workflow/Engine → {dispatcher, ToolInvoker} → registry → domain
 ```
 
 ## HTTP API
@@ -244,7 +245,7 @@ Notes:
 
 ## Extending
 
-- **New workflow node:** implement `workflow.NodeHandler`, register in `main.go` `buildNodeHandlers`.
+- **New workflow step type:** add a YAML file under `config/examples/workflows/` (or `-workflow-dir`) using the `StepDef` schema (`trigger`, `action`, `tool_call`, `expect`, `on_success`, `on_failure`). No Go code needed for data-driven workflows. For a new built-in workflow, add a YAML file to the default workflow dir or seed it into a `MemoryDefStore` at startup.
 - **New agent.* method:** add case in `transport/ws/server.go:dispatch`, add handler in `handler/agent.go`.
 - **New tool without central hardcode:** add or update `config/tools/manifests/*.yaml`, `config/tools/bindings/*.yaml`, and optional `config/tools/prompts/*`; reuse `builtin`, `http`, `openai`, `anthropic`, `gemini`, or `deepseek` providers where possible.
 - **Example remote provider contract:** use `cmd/tool-provider-example` plus `config/examples/http-provider` as the reference shape for `GET /v1/tools` discovery and `POST /v1/tools/{name}:invoke`.

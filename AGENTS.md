@@ -1,4 +1,4 @@
-## GUARDRAIL
+## LOAD RUNTIME GUARDRAIL
 
 - Load skill `coder` when beginning to write code.
 - use some usefull serena tool:
@@ -10,6 +10,18 @@
 `insert_before_symbol`
 `rename_symbol`
 `replace_symbol_body`
+
+  1. I do not call a major path “working” unless the full boundary is closed.
+  2. I do not expand minor architecture while major dead code or fake abstractions remain.
+  3. I separate:
+
+  - critical: workflow core, execution contract, event semantics, recovery
+  - support: telemetry, demos, examples, convenience APIs
+
+  4. I treat examples as examples, never as proof of runtime completeness.
+  5. If I cannot close the major boundary, I should say it directly.
+
+
 
 ## Architecture
 

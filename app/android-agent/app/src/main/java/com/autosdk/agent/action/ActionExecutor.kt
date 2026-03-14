@@ -35,20 +35,35 @@ class ActionExecutor(private val service: AccessibilityService) {
             global(AccessibilityService.GLOBAL_ACTION_HOME)
 
         is AutomationAction.Click -> withNode(action.selector) { node ->
-            if (!node.isEnabled) return@withNode ActionResult.Failed(
-                "target_not_actionable", "Node is disabled: ${action.selector}"
-            )
-            if (!node.isClickable) return@withNode ActionResult.Failed(
-                "target_not_actionable", "Node is not clickable: ${action.selector}"
-            )
-            dispatchAction(node, AccessibilityNodeInfo.ACTION_CLICK, action.selector)
+            val clickNode = findSelfOrAncestor(node) { it.isClickable }
+                ?: return@withNode ActionResult.Failed(
+                    "target_not_actionable",
+                    "Node and ancestors are not clickable: ${action.selector}",
+                )
+            try {
+                if (!clickNode.isEnabled) return@withNode ActionResult.Failed(
+                    "target_not_actionable", "Node is disabled: ${action.selector}"
+                )
+                dispatchAction(clickNode, AccessibilityNodeInfo.ACTION_CLICK, action.selector)
+            } finally {
+                if (clickNode !== node) clickNode.recycle()
+            }
         }
 
         is AutomationAction.LongPress -> withNode(action.selector) { node ->
-            if (!node.isEnabled) return@withNode ActionResult.Failed(
-                "target_not_actionable", "Node is disabled: ${action.selector}"
-            )
-            dispatchAction(node, AccessibilityNodeInfo.ACTION_LONG_CLICK, action.selector)
+            val longClickNode = findSelfOrAncestor(node) { it.isLongClickable }
+                ?: return@withNode ActionResult.Failed(
+                    "target_not_actionable",
+                    "Node and ancestors are not long-clickable: ${action.selector}",
+                )
+            try {
+                if (!longClickNode.isEnabled) return@withNode ActionResult.Failed(
+                    "target_not_actionable", "Node is disabled: ${action.selector}"
+                )
+                dispatchAction(longClickNode, AccessibilityNodeInfo.ACTION_LONG_CLICK, action.selector)
+            } finally {
+                if (longClickNode !== node) longClickNode.recycle()
+            }
         }
 
         is AutomationAction.InputText -> withNode(action.selector) { node ->
@@ -188,6 +203,26 @@ class ActionExecutor(private val service: AccessibilityService) {
         val ok = if (args != null) node.performAction(action, args) else node.performAction(action)
         return if (ok) ActionResult.Ok
         else ActionResult.Failed("input_rejected", "Action $action rejected by OS for: $selector")
+    }
+
+    /**
+     * Accessibility labels are often nested inside a clickable row container.
+     * For text-based actions we keep selector resolution simple and only climb
+     * at execution time when the requested action needs an actionable ancestor.
+     */
+    private fun findSelfOrAncestor(
+        node: AccessibilityNodeInfo,
+        predicate: (AccessibilityNodeInfo) -> Boolean,
+    ): AccessibilityNodeInfo? {
+        if (predicate(node)) return node
+
+        var current = node
+        while (true) {
+            val parent = current.parent ?: return null
+            if (current !== node) current.recycle()
+            if (predicate(parent)) return parent
+            current = parent
+        }
     }
 
     /**

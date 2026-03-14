@@ -8,8 +8,6 @@ import (
 	"math/big"
 	"strings"
 	"time"
-
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 const (
@@ -79,8 +77,8 @@ type generatedBirthDateResult struct {
 	ReferenceDate string `json:"referenceDate"`
 }
 
-func LocalToolDefinitions() []nodes.ToolDefinition {
-	return []nodes.ToolDefinition{
+func LocalToolDefinitions() []ToolDefinition {
+	return []ToolDefinition{
 		generateIndonesianNameTool(),
 		generateEmailTool(),
 		generatePasswordTool(),
@@ -88,13 +86,13 @@ func LocalToolDefinitions() []nodes.ToolDefinition {
 	}
 }
 
-func NewLocalToolRegistry() nodes.StaticToolRegistry {
-	return nodes.NewStaticToolRegistry(LocalToolDefinitions()...)
+func NewLocalToolRegistry() StaticToolRegistry {
+	return NewStaticToolRegistry(LocalToolDefinitions()...)
 }
 
-func generateIndonesianNameTool() nodes.ToolDefinition {
-	return nodes.ToolDefinition{
-		Manifest: nodes.ToolManifest{
+func generateIndonesianNameTool() ToolDefinition {
+	return ToolDefinition{
+		Manifest: ToolManifest{
 			Name:          "identity.generate_indonesian_name",
 			Description:   "Generates a local Indonesian-style full name",
 			Deterministic: false,
@@ -152,9 +150,9 @@ func generateIndonesianNameTool() nodes.ToolDefinition {
 	}
 }
 
-func generateEmailTool() nodes.ToolDefinition {
-	return nodes.ToolDefinition{
-		Manifest: nodes.ToolManifest{
+func generateEmailTool() ToolDefinition {
+	return ToolDefinition{
+		Manifest: ToolManifest{
 			Name:          "identity.generate_email",
 			Description:   "Composes an email address from a known name",
 			Deterministic: true,
@@ -203,9 +201,9 @@ func generateEmailTool() nodes.ToolDefinition {
 	}
 }
 
-func generatePasswordTool() nodes.ToolDefinition {
-	return nodes.ToolDefinition{
-		Manifest: nodes.ToolManifest{
+func generatePasswordTool() ToolDefinition {
+	return ToolDefinition{
+		Manifest: ToolManifest{
 			Name:          "credential.generate_password",
 			Description:   "Generates a strong local password",
 			Deterministic: false,
@@ -247,9 +245,9 @@ func generatePasswordTool() nodes.ToolDefinition {
 	}
 }
 
-func generateBirthDateTool() nodes.ToolDefinition {
-	return nodes.ToolDefinition{
-		Manifest: nodes.ToolManifest{
+func generateBirthDateTool() ToolDefinition {
+	return ToolDefinition{
+		Manifest: ToolManifest{
 			Name:          "identity.generate_birth_date",
 			Description:   "Generates a local birth date within an age range",
 			Deterministic: false,

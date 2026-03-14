@@ -17,17 +17,15 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 type LoadedCatalog struct {
-	Registry nodes.ToolRegistry
-	Bindings nodes.ToolBindingResolver
+	Registry ToolRegistry
+	Bindings ToolBindingResolver
 }
 
 type catalogProvider interface {
-	Build(ctx context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error)
+	Build(ctx context.Context, manifest catalogToolManifest) (ToolDefinition, error)
 }
 
 type providerCatalogFile struct {
@@ -90,7 +88,7 @@ type bindingArtifactConfig struct {
 }
 
 type catalogToolManifest struct {
-	Manifest       nodes.ToolManifest
+	Manifest       ToolManifest
 	PromptTemplate string
 	SystemPrompt   string
 	ModelPolicy    string
@@ -100,7 +98,7 @@ type builtinProvider struct {
 	log           *slog.Logger
 	modelCfg      ModelToolConfig
 	modelClient   JSONModelClient
-	deterministic map[string]nodes.ToolDefinition
+	deterministic map[string]ToolDefinition
 }
 
 type httpProvider struct {
@@ -165,7 +163,7 @@ func LoadCatalog(ctx context.Context, dir string, log *slog.Logger, modelCfg Mod
 	if err != nil {
 		return nil, err
 	}
-	defs := make([]nodes.ToolDefinition, 0, len(manifests))
+	defs := make([]ToolDefinition, 0, len(manifests))
 	toolNames := make(map[string]struct{}, len(manifests))
 	for _, manifest := range manifests {
 		provider, ok := providers[manifest.Manifest.Provider]
@@ -183,8 +181,8 @@ func LoadCatalog(ctx context.Context, dir string, log *slog.Logger, modelCfg Mod
 	if err != nil {
 		return nil, err
 	}
-	registry := nodes.NewStaticToolRegistry(defs...)
-	bindingResolver := nodes.NewStaticToolBindingResolver(bindings...)
+	registry := NewStaticToolRegistry(defs...)
+	bindingResolver := NewStaticToolBindingResolver(bindings...)
 	return &LoadedCatalog{Registry: registry, Bindings: bindingResolver}, nil
 }
 
@@ -208,7 +206,7 @@ func loadProviders(ctx context.Context, dir string, log *slog.Logger, modelCfg M
 		}
 		switch strings.TrimSpace(cfg.Kind) {
 		case "builtin":
-			defs := make(map[string]nodes.ToolDefinition)
+			defs := make(map[string]ToolDefinition)
 			for _, def := range LocalToolDefinitions() {
 				defs[def.Manifest.Name] = def
 			}
@@ -409,7 +407,7 @@ func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManif
 	if err != nil {
 		return catalogToolManifest{}, fmt.Errorf("system prompt file: %w", err)
 	}
-	manifest := nodes.ToolManifest{
+	manifest := ToolManifest{
 		Name:             strings.TrimSpace(cfg.Name),
 		Provider:         strings.TrimSpace(cfg.Provider),
 		ProviderToolName: strings.TrimSpace(cfg.ProviderToolName),
@@ -433,12 +431,12 @@ func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManif
 	}, nil
 }
 
-func loadToolBindings(dir string, toolNames map[string]struct{}) ([]nodes.ToolBinding, error) {
+func loadToolBindings(dir string, toolNames map[string]struct{}) ([]ToolBinding, error) {
 	paths, err := yamlFilePaths(filepath.Join(dir, "bindings"))
 	if err != nil {
 		return nil, err
 	}
-	bindings := make([]nodes.ToolBinding, 0)
+	bindings := make([]ToolBinding, 0)
 	seen := make(map[string]struct{})
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
@@ -482,14 +480,14 @@ func decodeBindingFile(data []byte) ([]bindingConfig, error) {
 	return []bindingConfig{single}, nil
 }
 
-func normalizeBinding(cfg bindingConfig) (nodes.ToolBinding, error) {
+func normalizeBinding(cfg bindingConfig) (ToolBinding, error) {
 	if strings.TrimSpace(cfg.ID) == "" {
-		return nodes.ToolBinding{}, fmt.Errorf("id required")
+		return ToolBinding{}, fmt.Errorf("id required")
 	}
 	if strings.TrimSpace(cfg.Tool) == "" {
-		return nodes.ToolBinding{}, fmt.Errorf("tool required")
+		return ToolBinding{}, fmt.Errorf("tool required")
 	}
-	binding := nodes.ToolBinding{
+	binding := ToolBinding{
 		ID:             strings.TrimSpace(cfg.ID),
 		ToolName:       strings.TrimSpace(cfg.Tool),
 		Optional:       cfg.Optional,
@@ -499,19 +497,19 @@ func normalizeBinding(cfg bindingConfig) (nodes.ToolBinding, error) {
 	var err error
 	binding.SuccessArtifacts, err = normalizeBindingMappings(cfg.SuccessArtifacts)
 	if err != nil {
-		return nodes.ToolBinding{}, fmt.Errorf("successArtifacts: %w", err)
+		return ToolBinding{}, fmt.Errorf("successArtifacts: %w", err)
 	}
 	binding.FailureArtifacts, err = normalizeBindingMappings(cfg.FailureArtifacts)
 	if err != nil {
-		return nodes.ToolBinding{}, fmt.Errorf("failureArtifacts: %w", err)
+		return ToolBinding{}, fmt.Errorf("failureArtifacts: %w", err)
 	}
 	return binding, nil
 }
 
-func normalizeBindingMappings(configs []bindingArtifactConfig) ([]nodes.ToolArtifactBinding, error) {
-	mappings := make([]nodes.ToolArtifactBinding, 0, len(configs))
+func normalizeBindingMappings(configs []bindingArtifactConfig) ([]ToolArtifactBinding, error) {
+	mappings := make([]ToolArtifactBinding, 0, len(configs))
 	for _, cfg := range configs {
-		mapping := nodes.ToolArtifactBinding{
+		mapping := ToolArtifactBinding{
 			Artifact:        strings.TrimSpace(cfg.Artifact),
 			FromJSONPointer: strings.TrimSpace(cfg.FromJSONPointer),
 			Template:        cfg.Template,
@@ -618,17 +616,17 @@ func yamlFilePaths(dir string) ([]string, error) {
 	return paths, nil
 }
 
-func (p *builtinProvider) Build(_ context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+func (p *builtinProvider) Build(_ context.Context, manifest catalogToolManifest) (ToolDefinition, error) {
 	if def, ok := p.deterministic[manifest.Manifest.ProviderToolName]; ok {
 		return p.wrapProviderDefinition(manifest, def)
 	}
 	if manifest.Manifest.ProviderToolName == builtinOpenAIJSONTool {
 		return p.buildGenericOpenAIJSONTool(manifest)
 	}
-	return nodes.ToolDefinition{}, fmt.Errorf("unsupported builtin provider tool %s", manifest.Manifest.ProviderToolName)
+	return ToolDefinition{}, fmt.Errorf("unsupported builtin provider tool %s", manifest.Manifest.ProviderToolName)
 }
 
-func (p *builtinProvider) wrapProviderDefinition(manifest catalogToolManifest, def nodes.ToolDefinition) (nodes.ToolDefinition, error) {
+func (p *builtinProvider) wrapProviderDefinition(manifest catalogToolManifest, def ToolDefinition) (ToolDefinition, error) {
 	providerManifest := def.Manifest
 	merged := manifest.Manifest
 	if merged.Description == "" {
@@ -643,41 +641,41 @@ func (p *builtinProvider) wrapProviderDefinition(manifest catalogToolManifest, d
 	if len(merged.InputSchema) == 0 {
 		merged.InputSchema = providerManifest.InputSchema
 	} else if len(providerManifest.InputSchema) > 0 && !jsonSchemaEquivalent(merged.InputSchema, providerManifest.InputSchema) {
-		return nodes.ToolDefinition{}, fmt.Errorf("input schema mismatch with provider tool %s", manifest.Manifest.ProviderToolName)
+		return ToolDefinition{}, fmt.Errorf("input schema mismatch with provider tool %s", manifest.Manifest.ProviderToolName)
 	}
 	if len(merged.OutputSchema) == 0 {
 		merged.OutputSchema = providerManifest.OutputSchema
 	} else if len(providerManifest.OutputSchema) > 0 && !jsonSchemaEquivalent(merged.OutputSchema, providerManifest.OutputSchema) {
-		return nodes.ToolDefinition{}, fmt.Errorf("output schema mismatch with provider tool %s", manifest.Manifest.ProviderToolName)
+		return ToolDefinition{}, fmt.Errorf("output schema mismatch with provider tool %s", manifest.Manifest.ProviderToolName)
 	}
 	def.Manifest = merged
 	return def, nil
 }
 
-func (p *builtinProvider) buildGenericOpenAIJSONTool(manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+func (p *builtinProvider) buildGenericOpenAIJSONTool(manifest catalogToolManifest) (ToolDefinition, error) {
 	return buildPromptModelToolDefinition(manifest, builtinOpenAIJSONTool, p.modelClient, "")
 }
 
-func (p *promptModelProvider) Build(_ context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+func (p *promptModelProvider) Build(_ context.Context, manifest catalogToolManifest) (ToolDefinition, error) {
 	return buildPromptModelToolDefinition(manifest, p.expectedTool, p.modelClient, p.disabledReason)
 }
 
-func buildPromptModelToolDefinition(manifest catalogToolManifest, expectedTool string, client JSONModelClient, disabledReason string) (nodes.ToolDefinition, error) {
+func buildPromptModelToolDefinition(manifest catalogToolManifest, expectedTool string, client JSONModelClient, disabledReason string) (ToolDefinition, error) {
 	if manifest.Manifest.ProviderToolName != expectedTool {
-		return nodes.ToolDefinition{}, fmt.Errorf("unsupported prompt provider tool %s", manifest.Manifest.ProviderToolName)
+		return ToolDefinition{}, fmt.Errorf("unsupported prompt provider tool %s", manifest.Manifest.ProviderToolName)
 	}
 	if strings.TrimSpace(manifest.PromptTemplate) == "" {
-		return nodes.ToolDefinition{}, fmt.Errorf("prompt template required for %s", expectedTool)
+		return ToolDefinition{}, fmt.Errorf("prompt template required for %s", expectedTool)
 	}
 	validateParams, err := compileSchemaValidator(manifest.Manifest.InputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
 	validateResult, err := compileSchemaValidator(manifest.Manifest.OutputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
-	return nodes.ToolDefinition{
+	return ToolDefinition{
 		Manifest:       manifest.Manifest,
 		ValidateParams: validateParams,
 		ValidateResult: validateResult,
@@ -687,7 +685,7 @@ func buildPromptModelToolDefinition(manifest catalogToolManifest, expectedTool s
 				if reason == "" {
 					reason = "model client not configured"
 				}
-				return nil, fmt.Errorf("%w: %s", nodes.ErrToolDisabled, reason)
+				return nil, fmt.Errorf("%w: %s", ErrToolDisabled, reason)
 			}
 			prompt, systemPrompt, err := renderPromptTemplates(manifest, params)
 			if err != nil {
@@ -775,17 +773,17 @@ func templateWithJSONFuncs(name string) *template.Template {
 	})
 }
 
-func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) (ToolDefinition, error) {
 	if p.disabledReason != "" {
 		return disabledToolDefinition(manifest.Manifest, fmt.Sprintf("provider %s %s", p.cfg.ID, p.disabledReason))
 	}
 	remoteTools, err := p.discovery(ctx)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
 	remote, ok := remoteTools[manifest.Manifest.ProviderToolName]
 	if !ok {
-		return nodes.ToolDefinition{}, fmt.Errorf("remote tool %s not found", manifest.Manifest.ProviderToolName)
+		return ToolDefinition{}, fmt.Errorf("remote tool %s not found", manifest.Manifest.ProviderToolName)
 	}
 	merged := manifest.Manifest
 	if merged.Description == "" {
@@ -797,7 +795,7 @@ func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) 
 	if merged.Timeout == 0 && strings.TrimSpace(remote.Timeout) != "" {
 		parsed, err := time.ParseDuration(strings.TrimSpace(remote.Timeout))
 		if err != nil {
-			return nodes.ToolDefinition{}, fmt.Errorf("remote timeout: %w", err)
+			return ToolDefinition{}, fmt.Errorf("remote timeout: %w", err)
 		}
 		merged.Timeout = parsed
 	}
@@ -807,22 +805,22 @@ func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) 
 	if len(merged.InputSchema) == 0 {
 		merged.InputSchema = remote.InputSchema
 	} else if len(remote.InputSchema) > 0 && !jsonSchemaEquivalent(merged.InputSchema, remote.InputSchema) {
-		return nodes.ToolDefinition{}, fmt.Errorf("input schema mismatch with remote tool %s", remote.Name)
+		return ToolDefinition{}, fmt.Errorf("input schema mismatch with remote tool %s", remote.Name)
 	}
 	if len(merged.OutputSchema) == 0 {
 		merged.OutputSchema = remote.OutputSchema
 	} else if len(remote.OutputSchema) > 0 && !jsonSchemaEquivalent(merged.OutputSchema, remote.OutputSchema) {
-		return nodes.ToolDefinition{}, fmt.Errorf("output schema mismatch with remote tool %s", remote.Name)
+		return ToolDefinition{}, fmt.Errorf("output schema mismatch with remote tool %s", remote.Name)
 	}
 	validateParams, err := compileSchemaValidator(merged.InputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
 	validateResult, err := compileSchemaValidator(merged.OutputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
-	return nodes.ToolDefinition{
+	return ToolDefinition{
 		Manifest:       merged,
 		ValidateParams: validateParams,
 		ValidateResult: validateResult,
@@ -832,24 +830,24 @@ func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) 
 	}, nil
 }
 
-func disabledToolDefinition(manifest nodes.ToolManifest, reason string) (nodes.ToolDefinition, error) {
+func disabledToolDefinition(manifest ToolManifest, reason string) (ToolDefinition, error) {
 	validateParams, err := compileSchemaValidator(manifest.InputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
 	validateResult, err := compileSchemaValidator(manifest.OutputSchema)
 	if err != nil {
-		return nodes.ToolDefinition{}, err
+		return ToolDefinition{}, err
 	}
 	if strings.TrimSpace(reason) == "" {
 		reason = "provider unavailable"
 	}
-	return nodes.ToolDefinition{
+	return ToolDefinition{
 		Manifest:       manifest,
 		ValidateParams: validateParams,
 		ValidateResult: validateResult,
 		Handler: func(context.Context, json.RawMessage) (json.RawMessage, error) {
-			return nil, fmt.Errorf("%w: %s", nodes.ErrToolDisabled, reason)
+			return nil, fmt.Errorf("%w: %s", ErrToolDisabled, reason)
 		},
 	}, nil
 }
@@ -914,7 +912,7 @@ func (p *httpProvider) invoke(ctx context.Context, remoteToolName string, params
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("remote provider transport: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("remote provider transport: %w", err))
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
@@ -922,10 +920,10 @@ func (p *httpProvider) invoke(ctx context.Context, remoteToolName string, params
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("remote provider read: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("remote provider read: %w", err))
 	}
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError {
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("remote provider status %d: %s", response.StatusCode, compactProviderError(responseBody)))
+		return nil, MarkToolRetryable(fmt.Errorf("remote provider status %d: %s", response.StatusCode, compactProviderError(responseBody)))
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("remote provider status %d: %s", response.StatusCode, compactProviderError(responseBody))
@@ -937,7 +935,7 @@ func (p *httpProvider) invoke(ctx context.Context, remoteToolName string, params
 	if decoded.Error != nil {
 		wrapped := fmt.Errorf("remote provider error %s: %s", strings.TrimSpace(decoded.Error.Code), strings.TrimSpace(decoded.Error.Message))
 		if decoded.Error.Retryable {
-			return nil, nodes.MarkToolRetryable(wrapped)
+			return nil, MarkToolRetryable(wrapped)
 		}
 		return nil, wrapped
 	}

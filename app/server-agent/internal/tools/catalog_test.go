@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/tools"
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 func TestLocalToolRegistry_ContainsExpectedTools(t *testing.T) {
@@ -80,7 +79,7 @@ func TestGenerateEmail_InvalidParams(t *testing.T) {
 	registry := tools.NewLocalToolRegistry()
 
 	_, err := registry.Invoke(context.Background(), "identity.generate_email", json.RawMessage(`{}`))
-	if !errors.Is(err, nodes.ErrToolInvalidParams) {
+	if !errors.Is(err, tools.ErrToolInvalidParams) {
 		t.Fatalf("expected ErrToolInvalidParams, got %v", err)
 	}
 }

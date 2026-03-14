@@ -58,8 +58,8 @@ func (u *RuntimeRecoveryUseCase) Recover(ctx context.Context) (RuntimeRecoveryRe
 			}
 
 			bootstrap := domain.NewBootstrapWorkflowState(task, task.AssignedDevice)
-			bootstrap.Artifacts["recovery_bootstrap"] = "true"
-			bootstrap.Artifacts["recovery_bootstrap_reason"] = "startup_missing_checkpoint"
+			bootstrap.Inputs["recovery_bootstrap"] = "true"
+			bootstrap.Inputs["recovery_bootstrap_reason"] = "startup_missing_checkpoint"
 			if err := u.states.Save(ctx, bootstrap); err != nil {
 				return report, fmt.Errorf("bootstrap workflow state for task %s: %w", task.ID, err)
 			}
@@ -72,13 +72,13 @@ func (u *RuntimeRecoveryUseCase) Recover(ctx context.Context) (RuntimeRecoveryRe
 			continue
 		}
 
-		if state.CurrentNode != domain.NodeKindTerminal {
+		if !state.IsTerminal() {
 			continue
 		}
 
-		reconciledStatus := domain.TaskStatusFailed
-		if state.Artifacts["goal_reached"] == "true" {
-			reconciledStatus = domain.TaskStatusCompleted
+		reconciledStatus := domain.TaskStatusCompleted
+		if !state.TerminalSuccess {
+			reconciledStatus = domain.TaskStatusFailed
 		}
 		if task.Status == reconciledStatus {
 			continue

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 const (
@@ -242,7 +241,7 @@ type deepSeekChatCompletionsResponse struct {
 
 // NewDefaultToolRegistry builds the production tool registry: deterministic
 // local tools first, then model-backed tools behind the same boundary.
-func NewDefaultToolRegistry(log *slog.Logger, cfg ModelToolConfig) nodes.ToolRegistry {
+func NewDefaultToolRegistry(log *slog.Logger, cfg ModelToolConfig) ToolRegistry {
 	local := NewLocalToolRegistry()
 
 	var client JSONModelClient
@@ -327,18 +326,18 @@ func NewDeepSeekChatCompletionsJSONClient(cfg ModelToolConfig, log *slog.Logger)
 
 // NewModelToolRegistry registers the model-backed tools. A nil client keeps the
 // tools visible to workflows but disabled, allowing explicit workflow fallback.
-func NewModelToolRegistry(log *slog.Logger, client JSONModelClient) nodes.StaticToolRegistry {
-	return nodes.NewStaticToolRegistry(ModelToolDefinitions(log, client)...)
+func NewModelToolRegistry(log *slog.Logger, client JSONModelClient) StaticToolRegistry {
+	return NewStaticToolRegistry(ModelToolDefinitions(log, client)...)
 }
 
-func ModelToolDefinitions(log *slog.Logger, client JSONModelClient) []nodes.ToolDefinition {
-	return []nodes.ToolDefinition{
+func ModelToolDefinitions(log *slog.Logger, client JSONModelClient) []ToolDefinition {
+	return []ToolDefinition{
 		generateWelcomeEmailTool(log, client),
 	}
 }
 
-func generateWelcomeEmailTool(log *slog.Logger, client JSONModelClient) nodes.ToolDefinition {
-	manifest := nodes.ToolManifest{
+func generateWelcomeEmailTool(log *slog.Logger, client JSONModelClient) ToolDefinition {
+	manifest := ToolManifest{
 		Name:          "content.generate_welcome_email",
 		Description:   "Generates a short welcome email body from profile fields",
 		Deterministic: false,
@@ -368,13 +367,13 @@ func generateWelcomeEmailTool(log *slog.Logger, client JSONModelClient) nodes.To
 		}`),
 	}
 
-	return nodes.ToolDefinition{
+	return ToolDefinition{
 		Manifest:       manifest,
 		ValidateParams: validateGenerateWelcomeEmailParams,
 		ValidateResult: validateGeneratedWelcomeEmailResult,
 		Handler: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			if client == nil {
-				return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+				return nil, fmt.Errorf("%w: model client not configured", ErrToolDisabled)
 			}
 
 			params, err := parseGenerateWelcomeEmailParams(raw)
@@ -521,7 +520,7 @@ Requirements:
 
 func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
 	if c == nil {
-		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+		return nil, fmt.Errorf("%w: model client not configured", ErrToolDisabled)
 	}
 
 	var schema any
@@ -577,7 +576,7 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("llm transport: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("llm transport: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -586,7 +585,7 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("read llm response: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("read llm response: %w", err))
 	}
 
 	if c.log != nil {
@@ -598,7 +597,7 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("llm provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+		return nil, MarkToolRetryable(fmt.Errorf("llm provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("llm provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
@@ -632,7 +631,7 @@ func (c *geminiGenerateContentJSONClient) endpoint() string {
 
 func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
 	if c == nil {
-		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+		return nil, fmt.Errorf("%w: model client not configured", ErrToolDisabled)
 	}
 
 	var schema any
@@ -687,7 +686,7 @@ func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request 
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("anthropic transport: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("anthropic transport: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -696,7 +695,7 @@ func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request 
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("read anthropic response: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("read anthropic response: %w", err))
 	}
 
 	if c.log != nil {
@@ -708,7 +707,7 @@ func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request 
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("anthropic provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+		return nil, MarkToolRetryable(fmt.Errorf("anthropic provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("anthropic provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
@@ -730,7 +729,7 @@ func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request 
 
 func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
 	if c == nil {
-		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+		return nil, fmt.Errorf("%w: model client not configured", ErrToolDisabled)
 	}
 
 	var schema any
@@ -779,7 +778,7 @@ func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, requ
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("gemini transport: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("gemini transport: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -788,7 +787,7 @@ func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, requ
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("read gemini response: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("read gemini response: %w", err))
 	}
 
 	if c.log != nil {
@@ -800,7 +799,7 @@ func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, requ
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("gemini provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+		return nil, MarkToolRetryable(fmt.Errorf("gemini provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("gemini provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
@@ -823,7 +822,7 @@ func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, requ
 
 func (c *deepSeekChatCompletionsJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
 	if c == nil {
-		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+		return nil, fmt.Errorf("%w: model client not configured", ErrToolDisabled)
 	}
 
 	var schema any
@@ -883,7 +882,7 @@ func (c *deepSeekChatCompletionsJSONClient) GenerateJSON(ctx context.Context, re
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("deepseek transport: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("deepseek transport: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -892,7 +891,7 @@ func (c *deepSeekChatCompletionsJSONClient) GenerateJSON(ctx context.Context, re
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("read deepseek response: %w", err))
+		return nil, MarkToolRetryable(fmt.Errorf("read deepseek response: %w", err))
 	}
 
 	if c.log != nil {
@@ -904,7 +903,7 @@ func (c *deepSeekChatCompletionsJSONClient) GenerateJSON(ctx context.Context, re
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-		return nil, nodes.MarkToolRetryable(fmt.Errorf("deepseek provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+		return nil, MarkToolRetryable(fmt.Errorf("deepseek provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("deepseek provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
@@ -1050,7 +1049,7 @@ func compactProviderError(raw []byte) string {
 }
 
 func errorsIsRetryable(err error) bool {
-	return errors.Is(err, nodes.ErrToolRetryable)
+	return errors.Is(err, ErrToolRetryable)
 }
 
 func defaultSystemPrompt(value string) string {

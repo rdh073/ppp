@@ -1,88 +1,137 @@
-# Example workflow definition for setting Android Private DNS through the
-# Settings UI.
+# Declarative workflow for setting Android Private DNS through the Settings UI.
 #
-# This YAML matches the current server-agent WorkflowDef schema and can be
-# loaded through `-workflow-dir` or `PUT /workflows/{name}`.
+# Load with: go run ./cmd/server -workflow-dir config/examples/workflows
+# Create task: POST /tasks {"goal":"set private dns","workflowName":"android-settings-private-dns","inputArtifacts":{"private_dns_hostname":"dns.example.com"}}
 #
-# Important:
-# - This file only defines node routing and transition conditions.
-# - The current WorkflowDef schema does not have declarative action steps like
-#   `click`, `input_text`, or `scroll`.
-# - For this workflow, those actions are planned in Go code:
-#   `internal/workflow/nodes/android_settings_private_dns_workflow.go`
-# - The runtime still boots new tasks from `observe`.
-# - A task/bootstrapper must seed these artifacts:
-#   - private_dns_hostname: the hostname to enter, e.g. `dns.example.com`
-#   - private_dns_step: current UI step identifier
-#   - pending_action: JSON payload for `device.execute`
-#   - wait_for_events: comma-separated event kinds expected by WaitNode
-#   - goal_reached: `true` once final verification passes
-#   - terminal_reason: final completion or failure reason
+# Schema: WorkflowDef v2 (trigger / action / tool_call / expect / on_success / on_failure)
 #
-# Current built-in planner progression:
-# 1. open Settings app
-# 2. navigate to "Network & internet"
-# 3. open "Private DNS"
-# 4. choose "Private DNS provider hostname"
-# 5. input `private_dns_hostname`
-# 6. tap "Save"
-# 7. verify the hostname is visible in the post-action snapshot
+# Step execution model
+# --------------------
+# - trigger non-empty  → wait for a matching device event before executing.
+# - trigger empty      → auto-executed immediately when reached (no extra event needed).
+#
+# "UI no transition" handling
+# ---------------------------
+# Every action step arms an `expect` with a `timeout`. If the expect event never
+# arrives before the deadline, the next incoming device event triggers a retry via
+# handleFailure. After `max_retry` exhausted the step follows `on_failure`.
+#
+# Multi-device
+# ------------
+# Workflow state is keyed by (taskId, deviceId). The orchestrator serialises
+# ProcessEvent calls per device so concurrent devices run independently.
+#
+# Required input artifact
+# -----------------------
+#   private_dns_hostname  — hostname to configure, e.g. "dns.example.com"
 
 name: android-settings-private-dns
-version: 1
-entry: observe
-nodes:
-  observe:
-    transitions:
-      - to: decide
-        when: success
-      - to: resync
-        when: failure
+version: 2
 
-  decide:
-    transitions:
-      - to: terminal
-        when: "artifacts.goal_reached == 'true'"
-      - to: terminal
-        when: "errorCount >= 5"
-      - to: wait
-        when: "artifacts.wait_for_events != ''"
-      - to: act
-        when: "artifacts.pending_action != ''"
-      - to: observe
-        when: default
+# Entry step fires on the first event that arrives after the task is assigned
+# (typically agent.online or an accessibility event). Its empty trigger means
+# "activate on any event" — the first device event kicks off the workflow.
+entry: open_settings
 
-  act:
-    transitions:
-      - to: verify
-        when: success
-      - to: resync
-        when: failure
+steps:
 
-  verify:
-    transitions:
-      - to: decide
-        when: success
-      - to: resync
-        when: failure
+  # ── Step 1: open Settings ──────────────────────────────────────────────────
+  open_settings:
+    # Activated by any incoming event (agent.online, first accessibility event …).
+    trigger: {}
+    action:
+      kind: open_app
+      package: com.android.settings
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    timeout: 15s
+    max_retry: 2
+    on_success: click_network
+    on_failure: terminal
 
-  wait:
-    transitions:
-      - to: decide
-        when: "event.kind == 'android.activity.created'"
-      - to: decide
-        when: "event.kind == 'android.activity.resumed'"
-      - to: decide
-        when: "event.kind == 'android.screen.changed'"
-      - to: resync
-        when: failure
+  # ── Step 2: tap "Network & internet" ───────────────────────────────────────
+  # Empty trigger → auto-executes immediately after open_settings succeeds.
+  click_network:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Network & internet"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    timeout: 10s
+    max_retry: 3
+    on_success: click_private_dns
+    on_failure: terminal
 
-  resync:
-    transitions:
-      - to: decide
-        when: success
-      - to: decide
-        when: failure
+  # ── Step 3: tap "Private DNS" ──────────────────────────────────────────────
+  click_private_dns:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Private DNS"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+      text_contains: "Private DNS"
+    timeout: 10s
+    max_retry: 3
+    on_success: click_hostname_option
+    on_failure: terminal
 
-  terminal:
-    transitions: []
+  # ── Step 4: choose "Private DNS provider hostname" ─────────────────────────
+  click_hostname_option:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Private DNS provider hostname"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    timeout: 10s
+    max_retry: 2
+    on_success: input_hostname
+    on_failure: terminal
+
+  # ── Step 5: type the hostname ──────────────────────────────────────────────
+  # {{input.private_dns_hostname}} is interpolated from task.inputArtifacts.
+  input_hostname:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "android:id/edit"
+      input_text: "{{input.private_dns_hostname}}"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    timeout: 10s
+    max_retry: 2
+    on_success: click_save
+    on_failure: terminal
+
+  # ── Step 6: tap "Save" ─────────────────────────────────────────────────────
+  click_save:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Save"
+    # Expect the hostname to appear in the Settings screen after saving.
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+      text_contains: "{{input.private_dns_hostname}}"
+    timeout: 15s
+    max_retry: 2
+    on_success: terminal
+    on_failure: terminal

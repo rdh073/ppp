@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/autosdk/ppp/server-agent/internal/tools"
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 type scriptedModelClient struct {
@@ -34,7 +33,7 @@ func (c *scriptedModelClient) GenerateJSON(_ context.Context, _ tools.JSONModelR
 func TestModelToolRegistry_InvokeRetriesTransientFailure(t *testing.T) {
 	client := &scriptedModelClient{
 		errs: []error{
-			nodes.MarkToolRetryable(errors.New("temporary provider error")),
+			tools.MarkToolRetryable(errors.New("temporary provider error")),
 		},
 		results: []json.RawMessage{
 			nil,
@@ -71,7 +70,7 @@ func TestDefaultToolRegistry_DisabledModelToolStillFailsClosed(t *testing.T) {
 	}
 
 	_, err := registry.Invoke(context.Background(), "content.generate_welcome_email", json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, nodes.ErrToolDisabled) {
+	if !errors.Is(err, tools.ErrToolDisabled) {
 		t.Fatalf("expected ErrToolDisabled, got %v", err)
 	}
 }

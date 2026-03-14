@@ -8,13 +8,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/tools"
 	"github.com/autosdk/ppp/server-agent/internal/tools/exampleprovider"
-	"github.com/autosdk/ppp/server-agent/internal/workflow"
-	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 func defaultToolDir() string {
@@ -107,7 +103,7 @@ func TestLoadCatalog_DefaultConfig_ModelToolRemainsVisibleWhenDisabled(t *testin
 		t.Fatal("expected content.generate_welcome_email manifest")
 	}
 	_, err = catalog.Registry.Invoke(context.Background(), "content.generate_welcome_email", json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, nodes.ErrToolDisabled) {
+	if !errors.Is(err, tools.ErrToolDisabled) {
 		t.Fatalf("expected ErrToolDisabled, got %v", err)
 	}
 }
@@ -122,7 +118,7 @@ func TestLoadCatalog_DefaultConfig_OpenAINativeToolRemainsVisibleWhenDisabled(t 
 		t.Fatal("expected content.generate_welcome_email.openai manifest")
 	}
 	_, err = catalog.Registry.Invoke(context.Background(), "content.generate_welcome_email.openai", json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, nodes.ErrToolDisabled) {
+	if !errors.Is(err, tools.ErrToolDisabled) {
 		t.Fatalf("expected ErrToolDisabled, got %v", err)
 	}
 }
@@ -178,7 +174,7 @@ func TestLoadCatalog_DefaultConfig_DeepSeekNativeToolRemainsVisibleWhenDisabled(
 		t.Fatal("expected content.generate_welcome_email.deepseek manifest")
 	}
 	_, err = catalog.Registry.Invoke(context.Background(), "content.generate_welcome_email.deepseek", json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, nodes.ErrToolDisabled) {
+	if !errors.Is(err, tools.ErrToolDisabled) {
 		t.Fatalf("expected ErrToolDisabled, got %v", err)
 	}
 }
@@ -245,7 +241,7 @@ func TestLoadCatalog_DefaultConfig_HTTPToolRemainsVisibleWhenProviderDisabled(t 
 		t.Fatal("expected example_remote.generate_alias_email binding")
 	}
 	_, err = catalog.Registry.Invoke(context.Background(), exampleprovider.ToolName, json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, nodes.ErrToolDisabled) {
+	if !errors.Is(err, tools.ErrToolDisabled) {
 		t.Fatalf("expected ErrToolDisabled, got %v", err)
 	}
 }
@@ -261,10 +257,22 @@ func TestLoadCatalog_DefaultConfig_HTTPProviderInvokesWhenConfigured(t *testing.
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 
-	assertAliasEmailBindingRun(t, catalog, "profile_alias_email", "profile_alias_email_source")
+	raw, err := catalog.Registry.Invoke(context.Background(), exampleprovider.ToolName, json.RawMessage(`{"fullName":"Ayu Lestari"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var result struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.Email == "" {
+		t.Fatal("expected non-empty alias email from HTTP provider")
+	}
 }
 
-func TestLoadCatalog_HTTPProvider_EndToEndViaBinding(t *testing.T) {
+func TestLoadCatalog_HTTPProvider_EndToEndViaRegistry(t *testing.T) {
 	server := httptest.NewServer(exampleprovider.NewHandler(nil))
 	defer server.Close()
 
@@ -275,7 +283,19 @@ func TestLoadCatalog_HTTPProvider_EndToEndViaBinding(t *testing.T) {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 
-	assertAliasEmailBindingRun(t, catalog, "profile_alias_email", "profile_alias_email_source")
+	raw, err := catalog.Registry.Invoke(context.Background(), exampleprovider.ToolName, json.RawMessage(`{"fullName":"Ayu Lestari"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	var result struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.Email == "" {
+		t.Fatal("expected non-empty alias email from HTTP example catalog")
+	}
 }
 
 func TestLoadCatalog_AnthropicProviderCatalog_InvokesWhenConfigured(t *testing.T) {
@@ -459,57 +479,5 @@ func assertWelcomeEmailInvokeTool(t *testing.T, catalog *tools.LoadedCatalog, to
 	}
 	if result.Subject == "" || result.Body == "" {
 		t.Fatalf("unexpected welcome email result: %s", raw)
-	}
-}
-
-func assertAliasEmailBindingRun(t *testing.T, catalog *tools.LoadedCatalog, emailArtifact string, sourceArtifact string) {
-	t.Helper()
-
-	node := nodes.NewToolCallNodeWithBindings(catalog.Registry, catalog.Bindings)
-	state := domain.NewWorkflowState(domain.TaskID("task-http"), domain.DeviceID("device-http"))
-	state.Artifacts["profile_full_name"] = "Ayu Lestari"
-	state.Artifacts["pending_tool_binding"] = "example_remote.generate_alias_email"
-	task := &domain.Task{
-		ID:        domain.TaskID("task-http"),
-		Goal:      "generate alias email",
-		Status:    domain.TaskStatusRunning,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-
-	out, err := node.Run(context.Background(), workflow.NodeInput{State: state, Task: task})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if out.Status != workflow.NodeStatusSuccess {
-		t.Fatalf("expected success, got %s", out.Status)
-	}
-	if out.Artifacts[emailArtifact] != "ayu.lestari.sandbox@remote.autosdk.id" {
-		t.Fatalf("unexpected alias email %q", out.Artifacts[emailArtifact])
-	}
-	if out.Artifacts[sourceArtifact] != "example-http-provider" {
-		t.Fatalf("unexpected alias email source %q", out.Artifacts[sourceArtifact])
-	}
-	if out.Artifacts["last_tool_name"] != exampleprovider.ToolName {
-		t.Fatalf("unexpected last_tool_name %q", out.Artifacts["last_tool_name"])
-	}
-	if out.Artifacts["last_tool_binding"] != "example_remote.generate_alias_email" {
-		t.Fatalf("unexpected last_tool_binding %q", out.Artifacts["last_tool_binding"])
-	}
-	if len(out.EmittedEvents) != 1 {
-		t.Fatalf("expected one emitted event, got %d", len(out.EmittedEvents))
-	}
-	payload, ok := out.EmittedEvents[0].Payload.(domain.ToolResultPayload)
-	if !ok {
-		t.Fatalf("expected ToolResultPayload, got %T", out.EmittedEvents[0].Payload)
-	}
-	if payload.BindingID != "example_remote.generate_alias_email" {
-		t.Fatalf("unexpected binding id %q", payload.BindingID)
-	}
-	if payload.ToolName != exampleprovider.ToolName {
-		t.Fatalf("unexpected tool name %q", payload.ToolName)
-	}
-	if payload.ErrString != "" {
-		t.Fatalf("expected empty tool error, got %q", payload.ErrString)
 	}
 }

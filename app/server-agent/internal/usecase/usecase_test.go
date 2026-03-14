@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
@@ -33,14 +34,36 @@ func (r *recordingProcessor) ProcessEvent(_ context.Context, e domain.Event) err
 	return nil
 }
 
-type pendingNode struct{}
+// noopDispatcher satisfies dispatcher.Dispatcher but never sends to a device.
+type noopDispatcher struct{}
 
-func (pendingNode) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
-	return workflow.NodeOutput{
-		Status:     workflow.NodeStatusPending,
-		WaitingFor: []domain.EventKind{domain.EventKindAgentOffline},
-	}, nil
+func (noopDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan domain.CommandResult, error) {
+	ch := make(chan domain.CommandResult, 1)
+	ch <- domain.CommandResult{CommandID: cmd.ID, Success: true}
+	close(ch)
+	return ch, nil
 }
+
+func (noopDispatcher) DeliverResponse(domain.CommandResult) {}
+
+// loopWorkflowDef matches any event but routes back to itself — state is
+// persisted with the seeded Inputs and the task stays running.
+func loopWorkflowDef() *domain.WorkflowDef {
+	return &domain.WorkflowDef{
+		Name:  "loop",
+		Entry: "run",
+		Steps: map[string]domain.StepDef{
+			"run": {
+				Trigger:   domain.EventMatch{}, // matches any event
+				OnSuccess: "run",              // stay in same step
+				OnFailure: "terminal",
+			},
+		},
+	}
+}
+
+// ensure noopDispatcher satisfies the interface at compile time.
+var _ dispatcher.Dispatcher = noopDispatcher{}
 
 func newLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -223,19 +246,17 @@ func TestCreateTask_WithConnectedDevice_BootstrapsWorkflowStateWithInputArtifact
 
 	tasks := store.NewMemoryTaskStore()
 	states := store.NewMemoryWorkflowStateStore()
-	runner := workflow.NewRunner(
-		map[domain.NodeKind]workflow.NodeHandler{
-			domain.NodeKindObserve: pendingNode{},
-		},
-		workflow.NewMemoryDefStore(),
-		workflow.DefaultWorkflowName,
-	)
-	orch := orchestrator.New(tasks, states, runner, newLog())
+	defStore := workflow.NewMemoryDefStore()
+	def := loopWorkflowDef()
+	_ = defStore.Put(context.Background(), def.Name, def)
+	engine := workflow.NewEngine(defStore, noopDispatcher{})
+	orch := orchestrator.New(tasks, states, engine, newLog())
 	uc := usecase.NewTaskControl(tasks, states, orch, reg, newLog())
 
 	task, err := uc.CreateTask(ctx, usecase.CreateTaskRequest{
 		Goal:           "run on device",
 		DeviceID:       "dev-bootstrap",
+		WorkflowName:   def.Name,
 		InputArtifacts: map[string]string{"account.email": "ada@example.com", "ticket.id": "42"},
 	})
 	if err != nil {
@@ -246,8 +267,8 @@ func TestCreateTask_WithConnectedDevice_BootstrapsWorkflowStateWithInputArtifact
 	if err != nil {
 		t.Fatalf("Get state: %v", err)
 	}
-	if state.Artifacts["account.email"] != "ada@example.com" || state.Artifacts["ticket.id"] != "42" {
-		t.Fatalf("expected bootstrapped inputArtifacts in workflow state, got %#v", state.Artifacts)
+	if state.Inputs["account.email"] != "ada@example.com" || state.Inputs["ticket.id"] != "42" {
+		t.Fatalf("expected bootstrapped inputArtifacts in workflow state, got %#v", state.Inputs)
 	}
 	if state.Revision != 1 {
 		t.Fatalf("expected bootstrapped state revision 1, got %d", state.Revision)

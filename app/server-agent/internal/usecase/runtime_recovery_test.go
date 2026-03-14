@@ -41,17 +41,17 @@ func TestRuntimeRecovery_BootstrapsMissingWorkflowState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get state: %v", err)
 	}
-	if state.CurrentNode != domain.NodeKindObserve {
-		t.Fatalf("expected observe bootstrap node, got %s", state.CurrentNode)
+	if state.CurrentStep != "" {
+		t.Fatalf("expected empty bootstrap step (resolves to entry), got %q", state.CurrentStep)
 	}
-	if state.Artifacts["recovery_bootstrap"] != "true" {
-		t.Fatalf("expected recovery_bootstrap artifact, got %#v", state.Artifacts)
+	if state.Inputs["recovery_bootstrap"] != "true" {
+		t.Fatalf("expected recovery_bootstrap in Inputs, got %#v", state.Inputs)
 	}
-	if state.Artifacts["recovery_bootstrap_reason"] != "startup_missing_checkpoint" {
-		t.Fatalf("expected recovery bootstrap reason, got %#v", state.Artifacts)
+	if state.Inputs["recovery_bootstrap_reason"] != "startup_missing_checkpoint" {
+		t.Fatalf("expected recovery bootstrap reason, got %#v", state.Inputs)
 	}
-	if state.Artifacts["account.email"] != "ada@example.com" {
-		t.Fatalf("expected recovery bootstrap to seed inputArtifacts, got %#v", state.Artifacts)
+	if state.Inputs["account.email"] != "ada@example.com" {
+		t.Fatalf("expected recovery bootstrap to seed inputArtifacts, got %#v", state.Inputs)
 	}
 	if state.Revision != 1 {
 		t.Fatalf("expected bootstrap revision 1, got %d", state.Revision)
@@ -86,8 +86,8 @@ func TestRuntimeRecovery_ReconcilesTerminalTaskStatus(t *testing.T) {
 			}
 
 			state := domain.NewWorkflowState(task.ID, task.AssignedDevice)
-			state.CurrentNode = domain.NodeKindTerminal
-			state.Artifacts["goal_reached"] = tc.goalReached
+			state.CurrentStep = "terminal"
+			state.TerminalSuccess = tc.goalReached == "true"
 			if err := states.Save(ctx, state); err != nil {
 				t.Fatalf("Save state: %v", err)
 			}
@@ -167,11 +167,11 @@ func TestRuntimeRecovery_FileStoresAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get state after recover: %v", err)
 	}
-	if got.Artifacts["recovery_bootstrap"] != "true" {
-		t.Fatalf("expected persisted recovery bootstrap artifact, got %#v", got.Artifacts)
+	if got.Inputs["recovery_bootstrap"] != "true" {
+		t.Fatalf("expected persisted recovery bootstrap in Inputs, got %#v", got.Inputs)
 	}
-	if got.Artifacts["account.email"] != "ada@example.com" {
-		t.Fatalf("expected persisted inputArtifacts in recovered state, got %#v", got.Artifacts)
+	if got.Inputs["account.email"] != "ada@example.com" {
+		t.Fatalf("expected persisted inputArtifacts in recovered state, got %#v", got.Inputs)
 	}
 	if got.Revision != 1 {
 		t.Fatalf("expected persisted recovery revision 1, got %d", got.Revision)
