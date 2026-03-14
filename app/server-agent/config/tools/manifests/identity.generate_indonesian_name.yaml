@@ -1,0 +1,24 @@
+name: identity.generate_indonesian_name
+provider: builtin
+providerToolName: identity.generate_indonesian_name
+description: Generates a local Indonesian-style full name
+deterministic: false
+timeout: 250ms
+retryBudget: 0
+inputSchema:
+  type: object
+  properties:
+    gender:
+      enum: [male, female]
+outputSchema:
+  type: object
+  required: [fullName, firstName, lastName, gender]
+  properties:
+    fullName:
+      type: string
+    firstName:
+      type: string
+    lastName:
+      type: string
+    gender:
+      enum: [male, female]

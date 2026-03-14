@@ -1,0 +1,26 @@
+name: identity.generate_birth_date
+provider: builtin
+providerToolName: identity.generate_birth_date
+description: Generates a local birth date within an age range
+deterministic: false
+timeout: 250ms
+retryBudget: 0
+inputSchema:
+  type: object
+  properties:
+    minAge:
+      type: integer
+    maxAge:
+      type: integer
+    referenceDate:
+      type: string
+outputSchema:
+  type: object
+  required: [birthDate, age, referenceDate]
+  properties:
+    birthDate:
+      type: string
+    age:
+      type: integer
+    referenceDate:
+      type: string

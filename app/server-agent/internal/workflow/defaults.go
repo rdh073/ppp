@@ -15,7 +15,8 @@ const (
 //
 //	observe:  success→decide, failure→resync
 //	decide:   goal_reached=='true'→terminal, errorCount>=5→terminal,
-//	          pending_tool!=''→toolcall, pending_action!=''→act, default→observe
+//	          pending_tool_binding!=''→toolcall, pending_tool!=''→toolcall,
+//	          pending_action!=''→act, default→observe
 //	act:      success→verify, failure→resync
 //	verify:   success→decide, failure→resync
 //	resync:   success→decide, failure→decide
@@ -48,6 +49,7 @@ func newStandardWorkflowDef(name string) *domain.WorkflowDef {
 				Transitions: []domain.Transition{
 					{To: domain.NodeKindTerminal, When: "artifacts.goal_reached == 'true'"},
 					{To: domain.NodeKindTerminal, When: "errorCount >= 5"},
+					{To: domain.NodeKindToolCall, When: "artifacts.pending_tool_binding != ''"},
 					{To: domain.NodeKindToolCall, When: "artifacts.pending_tool != ''"},
 					{To: domain.NodeKindAct, When: "artifacts.pending_action != ''"},
 					{To: domain.NodeKindObserve, When: ""},

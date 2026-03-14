@@ -129,6 +129,7 @@ type UiObservationPayload struct {
 // ToolResultPayload carries the result of an internal tool call.
 type ToolResultPayload struct {
 	TaskID    TaskID
+	BindingID string
 	ToolName  string
 	Result    []byte // raw JSON
 	ErrString string // non-empty on failure

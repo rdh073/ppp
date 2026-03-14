@@ -79,13 +79,17 @@ type generatedBirthDateResult struct {
 	ReferenceDate string `json:"referenceDate"`
 }
 
-func NewLocalToolRegistry() nodes.StaticToolRegistry {
-	return nodes.NewStaticToolRegistry(
+func LocalToolDefinitions() []nodes.ToolDefinition {
+	return []nodes.ToolDefinition{
 		generateIndonesianNameTool(),
 		generateEmailTool(),
 		generatePasswordTool(),
 		generateBirthDateTool(),
-	)
+	}
+}
+
+func NewLocalToolRegistry() nodes.StaticToolRegistry {
+	return nodes.NewStaticToolRegistry(LocalToolDefinitions()...)
 }
 
 func generateIndonesianNameTool() nodes.ToolDefinition {
@@ -95,8 +99,20 @@ func generateIndonesianNameTool() nodes.ToolDefinition {
 			Description:   "Generates a local Indonesian-style full name",
 			Deterministic: false,
 			Timeout:       250 * time.Millisecond,
-			InputSchema:   rawSchema(`{"type":"object","properties":{"gender":{"enum":["male","female"]}}}`),
-			OutputSchema:  rawSchema(`{"type":"object","required":["fullName","firstName","lastName","gender"]}`),
+			InputSchema: rawSchema(`{
+				"type":"object",
+				"properties":{"gender":{"enum":["male","female"]}}
+			}`),
+			OutputSchema: rawSchema(`{
+				"type":"object",
+				"required":["fullName","firstName","lastName","gender"],
+				"properties":{
+					"fullName":{"type":"string"},
+					"firstName":{"type":"string"},
+					"lastName":{"type":"string"},
+					"gender":{"enum":["male","female"]}
+				}
+			}`),
 		},
 		ValidateParams: validateGenerateNameParams,
 		ValidateResult: validateGeneratedNameResult,
@@ -143,8 +159,23 @@ func generateEmailTool() nodes.ToolDefinition {
 			Description:   "Composes an email address from a known name",
 			Deterministic: true,
 			Timeout:       250 * time.Millisecond,
-			InputSchema:   rawSchema(`{"type":"object","required":["fullName"],"properties":{"domain":{"type":"string"}}}`),
-			OutputSchema:  rawSchema(`{"type":"object","required":["email","localPart","domain"]}`),
+			InputSchema: rawSchema(`{
+				"type":"object",
+				"required":["fullName"],
+				"properties":{
+					"fullName":{"type":"string"},
+					"domain":{"type":"string"}
+				}
+			}`),
+			OutputSchema: rawSchema(`{
+				"type":"object",
+				"required":["email","localPart","domain"],
+				"properties":{
+					"email":{"type":"string"},
+					"localPart":{"type":"string"},
+					"domain":{"type":"string"}
+				}
+			}`),
 		},
 		ValidateParams: validateGenerateEmailParams,
 		ValidateResult: validateGeneratedEmailResult,
@@ -179,8 +210,22 @@ func generatePasswordTool() nodes.ToolDefinition {
 			Description:   "Generates a strong local password",
 			Deterministic: false,
 			Timeout:       250 * time.Millisecond,
-			InputSchema:   rawSchema(`{"type":"object","properties":{"length":{"type":"integer"},"includeSymbols":{"type":"boolean"}}}`),
-			OutputSchema:  rawSchema(`{"type":"object","required":["password","length","hasSymbol"]}`),
+			InputSchema: rawSchema(`{
+				"type":"object",
+				"properties":{
+					"length":{"type":"integer"},
+					"includeSymbols":{"type":"boolean"}
+				}
+			}`),
+			OutputSchema: rawSchema(`{
+				"type":"object",
+				"required":["password","length","hasSymbol"],
+				"properties":{
+					"password":{"type":"string"},
+					"length":{"type":"integer"},
+					"hasSymbol":{"type":"boolean"}
+				}
+			}`),
 		},
 		ValidateParams: validateGeneratePasswordParams,
 		ValidateResult: validateGeneratedPasswordResult,
@@ -209,8 +254,23 @@ func generateBirthDateTool() nodes.ToolDefinition {
 			Description:   "Generates a local birth date within an age range",
 			Deterministic: false,
 			Timeout:       250 * time.Millisecond,
-			InputSchema:   rawSchema(`{"type":"object","properties":{"minAge":{"type":"integer"},"maxAge":{"type":"integer"},"referenceDate":{"type":"string"}}}`),
-			OutputSchema:  rawSchema(`{"type":"object","required":["birthDate","age","referenceDate"]}`),
+			InputSchema: rawSchema(`{
+				"type":"object",
+				"properties":{
+					"minAge":{"type":"integer"},
+					"maxAge":{"type":"integer"},
+					"referenceDate":{"type":"string"}
+				}
+			}`),
+			OutputSchema: rawSchema(`{
+				"type":"object",
+				"required":["birthDate","age","referenceDate"],
+				"properties":{
+					"birthDate":{"type":"string"},
+					"age":{"type":"integer"},
+					"referenceDate":{"type":"string"}
+				}
+			}`),
 		},
 		ValidateParams: validateGenerateBirthDateParams,
 		ValidateResult: validateGeneratedBirthDateResult,

@@ -208,6 +208,45 @@ func TestToolCallNode_Success_Decide(t *testing.T) {
 	}
 }
 
+func TestToolCallNode_BindingSuccess_MapsArtifacts(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "bound_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
+			if string(params) != `{"fullName":"Ayu Lestari"}` {
+				return nil, errors.New("unexpected params")
+			}
+			return json.RawMessage(`{"email":"ayu@example.id","mode":"llm"}`), nil
+		},
+	})
+	bindings := nodes.NewStaticToolBindingResolver(nodes.ToolBinding{
+		ID:             "binding.generate_email",
+		ToolName:       "bound_tool",
+		ParamsTemplate: `{"fullName": {{ json (artifact "profile_full_name") }}}`,
+		SuccessArtifacts: []nodes.ToolArtifactBinding{
+			{Artifact: "profile_email", FromJSONPointer: "/email"},
+			{Artifact: "generation_mode", FromJSONPointer: "/mode"},
+		},
+	})
+	n := nodes.NewToolCallNodeWithBindings(registry, bindings)
+	state := newState("t-bind", "dev-bind")
+	state.Artifacts["profile_full_name"] = "Ayu Lestari"
+	state.Artifacts["pending_tool_binding"] = "binding.generate_email"
+
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-bind")})
+	if out.Status != workflow.NodeStatusSuccess {
+		t.Fatalf("expected success, got %s", out.Status)
+	}
+	if out.Artifacts["profile_email"] != "ayu@example.id" {
+		t.Fatalf("expected mapped email, got %q", out.Artifacts["profile_email"])
+	}
+	if out.Artifacts["last_tool_binding"] != "binding.generate_email" {
+		t.Fatalf("expected last_tool_binding to be set, got %q", out.Artifacts["last_tool_binding"])
+	}
+}
+
 func TestToolCallNode_Success_RecordsToolMetric(t *testing.T) {
 	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
 		Manifest: nodes.ToolManifest{
@@ -301,6 +340,42 @@ func TestToolCallNode_OptionalToolError_ReturnsToolErrorForFallback(t *testing.T
 	}
 }
 
+func TestToolCallNode_BindingOptionalFailure_MapsFallbackArtifacts(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "optional_bound_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	})
+	bindings := nodes.NewStaticToolBindingResolver(nodes.ToolBinding{
+		ID:             "binding.optional",
+		ToolName:       "optional_bound_tool",
+		Optional:       true,
+		ParamsTemplate: `{}`,
+		FailureArtifacts: []nodes.ToolArtifactBinding{
+			{Artifact: "welcome_email_generation_mode", Value: strPtr("fallback_template")},
+			{Artifact: "welcome_email_error", Template: "{{ .ToolError }}"},
+		},
+	})
+	n := nodes.NewToolCallNodeWithBindings(registry, bindings)
+	state := newState("t-optional-binding", "dev-optional-binding")
+	state.Artifacts["pending_tool_binding"] = "binding.optional"
+
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-optional-binding")})
+	if out.Status != workflow.NodeStatusSuccess {
+		t.Fatalf("expected success for optional binding failure, got %s", out.Status)
+	}
+	if out.Artifacts["welcome_email_generation_mode"] != "fallback_template" {
+		t.Fatalf("expected fallback mapping, got %q", out.Artifacts["welcome_email_generation_mode"])
+	}
+	if out.Artifacts["last_tool_binding"] != "binding.optional" {
+		t.Fatalf("expected last_tool_binding, got %q", out.Artifacts["last_tool_binding"])
+	}
+}
+
 func TestToolCallNode_InvalidResult_Resync(t *testing.T) {
 	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
 		Manifest: nodes.ToolManifest{
@@ -326,6 +401,8 @@ func TestToolCallNode_InvalidResult_Resync(t *testing.T) {
 		t.Error("expected resync_reason to be set on invalid tool result")
 	}
 }
+
+func strPtr(value string) *string { return &value }
 
 func TestToolCallNode_Timeout_Resync(t *testing.T) {
 	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{

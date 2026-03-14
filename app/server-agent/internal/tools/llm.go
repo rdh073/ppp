@@ -34,8 +34,10 @@ func (c ModelToolConfig) Enabled() bool {
 // JSONModelRequest is the provider-neutral contract used by model-backed tools.
 type JSONModelRequest struct {
 	ToolName     string
+	SystemPrompt string
 	Prompt       string
 	OutputSchema json.RawMessage
+	Temperature  *float64
 }
 
 // JSONModelClient generates a JSON object that satisfies the supplied schema.
@@ -139,9 +141,13 @@ func NewOpenAICompatibleJSONClient(cfg ModelToolConfig, log *slog.Logger) JSONMo
 // NewModelToolRegistry registers the model-backed tools. A nil client keeps the
 // tools visible to workflows but disabled, allowing explicit workflow fallback.
 func NewModelToolRegistry(log *slog.Logger, client JSONModelClient) nodes.StaticToolRegistry {
-	return nodes.NewStaticToolRegistry(
+	return nodes.NewStaticToolRegistry(ModelToolDefinitions(log, client)...)
+}
+
+func ModelToolDefinitions(log *slog.Logger, client JSONModelClient) []nodes.ToolDefinition {
+	return []nodes.ToolDefinition{
 		generateWelcomeEmailTool(log, client),
-	)
+	}
 }
 
 func generateWelcomeEmailTool(log *slog.Logger, client JSONModelClient) nodes.ToolDefinition {
@@ -338,13 +344,17 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 	if err := json.Unmarshal(request.OutputSchema, &schema); err != nil {
 		return nil, fmt.Errorf("decode output schema: %w", err)
 	}
+	temperature := 0.2
+	if request.Temperature != nil {
+		temperature = *request.Temperature
+	}
 
 	body, err := json.Marshal(openAIChatCompletionsRequest{
 		Model: c.model,
 		Messages: []openAIMessage{
 			{
 				Role:    "system",
-				Content: "You are a backend workflow tool. Return a single JSON object that satisfies the schema exactly.",
+				Content: defaultSystemPrompt(request.SystemPrompt),
 			},
 			{
 				Role:    "user",
@@ -359,7 +369,7 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 				Schema: schema,
 			},
 		},
-		Temperature: 0.2,
+		Temperature: temperature,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal llm request: %w", err)
@@ -506,4 +516,12 @@ func compactProviderError(raw []byte) string {
 
 func errorsIsRetryable(err error) bool {
 	return errors.Is(err, nodes.ErrToolRetryable)
+}
+
+func defaultSystemPrompt(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "You are a backend workflow tool. Return a single JSON object that satisfies the schema exactly."
+	}
+	return value
 }

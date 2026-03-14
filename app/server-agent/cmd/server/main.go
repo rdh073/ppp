@@ -31,6 +31,7 @@ func main() {
 	workflowDir := flag.String("workflow-dir", "", "directory to watch for YAML workflow defs (optional)")
 	workflowPoll := flag.Duration("workflow-poll", 5*time.Second, "polling interval for workflow-dir")
 	dataDir := flag.String("data-dir", filepath.Join(".", "var"), "directory for persisted runtime data")
+	toolDir := flag.String("tool-dir", filepath.Join(".", "config", "tools"), "directory containing tool providers, manifests, bindings, and prompts")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -82,18 +83,22 @@ func main() {
 	}
 
 	// --- workflow runner ---
-	toolRegistry := toolcatalog.NewDefaultToolRegistry(log, toolcatalog.ModelToolConfig{
+	toolCatalog, err := toolcatalog.LoadCatalog(context.Background(), *toolDir, log, toolcatalog.ModelToolConfig{
 		APIURL: os.Getenv("AUTO_TOOL_LLM_API_URL"),
 		APIKey: os.Getenv("AUTO_TOOL_LLM_API_KEY"),
 		Model:  os.Getenv("AUTO_TOOL_LLM_MODEL"),
 	})
+	if err != nil {
+		log.Error("failed to load tool catalog", "dir", *toolDir, "err", err)
+		os.Exit(1)
+	}
 	runner := workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
 		domain.NodeKindObserve:  nodes.NewObserveNode(disp),
 		domain.NodeKindDecide:   nodes.NewDecideNode(),
 		domain.NodeKindAct:      nodes.NewActNode(disp),
 		domain.NodeKindVerify:   nodes.NewVerifyNode(),
 		domain.NodeKindResync:   nodes.NewResyncNode(disp),
-		domain.NodeKindToolCall: nodes.NewToolCallNode(toolRegistry, metricsRegistry),
+		domain.NodeKindToolCall: nodes.NewToolCallNodeWithBindings(toolCatalog.Registry, toolCatalog.Bindings, metricsRegistry),
 		domain.NodeKindWait:     nodes.NewWaitNode(),
 		domain.NodeKindTerminal: nodes.NewTerminalNode(),
 	}, defStore, workflow.DefaultWorkflowName, metricsRegistry)

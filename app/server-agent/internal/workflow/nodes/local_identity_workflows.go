@@ -9,6 +9,14 @@ import (
 	workflowpkg "github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
+const (
+	localIdentityBindingGenerateName        = "local_identity.generate_name"
+	localIdentityBindingGenerateEmail       = "local_identity.generate_email"
+	localIdentityBindingGeneratePassword    = "local_identity.generate_password"
+	localIdentityBindingGenerateBirthDate   = "local_identity.generate_birth_date"
+	localIdentityBindingGenerateWelcomeMail = "local_identity.generate_welcome_email"
+)
+
 type localIdentityWorkflowOptions struct {
 	includeWelcomeEmail bool
 }
@@ -66,43 +74,47 @@ func runLocalIdentityWorkflowDecision(input workflowpkg.NodeInput, opts localIde
 		Artifacts: map[string]string{},
 	}
 
-	if toolResult := input.State.Artifacts["tool_result"]; toolResult != "" {
-		lastToolName := input.State.Artifacts["last_tool_name"]
-		if lastToolName == "" {
-			return localIdentityFailure(opts, fmt.Errorf("tool_result present without last_tool_name")), nil
+	if input.State.Artifacts["last_tool_binding"] != "" {
+		out.DeleteArtifacts = append(out.DeleteArtifacts, "tool_result", "tool_error", "last_tool_name", "last_tool_binding")
+	} else {
+		if toolResult := input.State.Artifacts["tool_result"]; toolResult != "" {
+			lastToolName := input.State.Artifacts["last_tool_name"]
+			if lastToolName == "" {
+				return localIdentityFailure(opts, fmt.Errorf("tool_result present without last_tool_name")), nil
+			}
+			consumed, err := consumeLocalIdentityToolResult(lastToolName, toolResult)
+			if err != nil {
+				return localIdentityFailure(opts, err), nil
+			}
+			for k, v := range consumed {
+				out.Artifacts[k] = v
+			}
+			out.DeleteArtifacts = append(out.DeleteArtifacts, "tool_result", "last_tool_name", "tool_error")
 		}
-		consumed, err := consumeLocalIdentityToolResult(lastToolName, toolResult)
-		if err != nil {
-			return localIdentityFailure(opts, err), nil
-		}
-		for k, v := range consumed {
-			out.Artifacts[k] = v
-		}
-		out.DeleteArtifacts = append(out.DeleteArtifacts, "tool_result", "last_tool_name", "tool_error")
-	}
 
-	if toolError := input.State.Artifacts["tool_error"]; toolError != "" {
-		lastToolName := input.State.Artifacts["last_tool_name"]
-		if lastToolName == "" {
-			return localIdentityFailure(opts, fmt.Errorf("tool_error present without last_tool_name")), nil
+		if toolError := input.State.Artifacts["tool_error"]; toolError != "" {
+			lastToolName := input.State.Artifacts["last_tool_name"]
+			if lastToolName == "" {
+				return localIdentityFailure(opts, fmt.Errorf("tool_error present without last_tool_name")), nil
+			}
+			consumed, err := consumeLocalIdentityToolFailure(lastToolName, toolError, input.State.Artifacts, opts)
+			if err != nil {
+				return localIdentityFailure(opts, err), nil
+			}
+			for k, v := range consumed {
+				out.Artifacts[k] = v
+			}
+			out.DeleteArtifacts = append(out.DeleteArtifacts, "tool_error", "last_tool_name", "tool_result")
 		}
-		consumed, err := consumeLocalIdentityToolFailure(lastToolName, toolError, input.State.Artifacts, opts)
-		if err != nil {
-			return localIdentityFailure(opts, err), nil
-		}
-		for k, v := range consumed {
-			out.Artifacts[k] = v
-		}
-		out.DeleteArtifacts = append(out.DeleteArtifacts, "tool_error", "last_tool_name", "tool_result")
 	}
 
 	artifacts := mergeArtifacts(input.State.Artifacts, out.Artifacts, out.DeleteArtifacts)
-	if artifacts["pending_tool"] != "" || artifacts["goal_reached"] == "true" {
+	if artifacts["pending_tool_binding"] != "" || artifacts["pending_tool"] != "" || artifacts["goal_reached"] == "true" {
 		return out, nil
 	}
 
-	if nextToolName, nextParams, optional, ok := nextLocalIdentityTool(artifacts, opts); ok {
-		return queueLocalIdentityTool(out, nextToolName, nextParams, optional, opts), nil
+	if nextBindingID, ok := nextLocalIdentityBinding(artifacts, opts); ok {
+		return queueLocalIdentityToolBinding(out, nextBindingID), nil
 	}
 
 	for k, v := range finalizeLocalIdentityArtifacts(artifacts, opts) {
@@ -196,38 +208,20 @@ func consumeLocalIdentityToolFailure(
 	}
 }
 
-func nextLocalIdentityTool(
-	artifacts map[string]string,
-	opts localIdentityWorkflowOptions,
-) (toolName string, params map[string]any, optional bool, ok bool) {
+func nextLocalIdentityBinding(artifacts map[string]string, opts localIdentityWorkflowOptions) (bindingID string, ok bool) {
 	switch {
 	case artifacts["profile_full_name"] == "":
-		return "identity.generate_indonesian_name", map[string]any{}, false, true
+		return localIdentityBindingGenerateName, true
 	case artifacts["profile_email"] == "":
-		return "identity.generate_email", map[string]any{
-			"fullName": artifacts["profile_full_name"],
-		}, false, true
+		return localIdentityBindingGenerateEmail, true
 	case artifacts["profile_password"] == "":
-		return "credential.generate_password", map[string]any{
-			"length":         20,
-			"includeSymbols": true,
-		}, false, true
+		return localIdentityBindingGeneratePassword, true
 	case artifacts["profile_birth_date"] == "":
-		return "identity.generate_birth_date", map[string]any{
-			"minAge": 25,
-			"maxAge": 35,
-		}, false, true
+		return localIdentityBindingGenerateBirthDate, true
 	case opts.includeWelcomeEmail && artifacts["welcome_email_subject"] == "":
-		return "content.generate_welcome_email", map[string]any{
-			"fullName":    artifacts["profile_full_name"],
-			"email":       artifacts["profile_email"],
-			"productName": "AutoSDK",
-			"senderName":  "AutoSDK",
-			"language":    "id",
-			"tone":        "professional_warm",
-		}, true, true
+		return localIdentityBindingGenerateWelcomeMail, true
 	default:
-		return "", nil, false, false
+		return "", false
 	}
 }
 
@@ -245,22 +239,8 @@ func finalizeLocalIdentityArtifacts(artifacts map[string]string, opts localIdent
 	return final
 }
 
-func queueLocalIdentityTool(
-	out workflowpkg.NodeOutput,
-	toolName string,
-	params map[string]any,
-	optional bool,
-	opts localIdentityWorkflowOptions,
-) workflowpkg.NodeOutput {
-	raw, err := json.Marshal(params)
-	if err != nil {
-		return localIdentityFailure(opts, fmt.Errorf("marshal params for %s: %w", toolName, err))
-	}
-	out.Artifacts["pending_tool"] = toolName
-	out.Artifacts["pending_tool_params"] = string(raw)
-	if optional {
-		out.Artifacts["pending_tool_optional"] = "true"
-	}
+func queueLocalIdentityToolBinding(out workflowpkg.NodeOutput, bindingID string) workflowpkg.NodeOutput {
+	out.Artifacts["pending_tool_binding"] = bindingID
 	return out
 }
 
@@ -274,7 +254,7 @@ func localIdentityFailure(opts localIdentityWorkflowOptions, err error) workflow
 		Artifacts: map[string]string{
 			"resync_reason": fmt.Sprintf("%s decide failed: %v", scope, err),
 		},
-		DeleteArtifacts: []string{"tool_result", "last_tool_name", "tool_error"},
+		DeleteArtifacts: []string{"pending_tool_binding", "tool_result", "last_tool_name", "last_tool_binding", "tool_error"},
 	}
 }
 

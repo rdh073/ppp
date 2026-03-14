@@ -108,7 +108,11 @@ Implemented:
 
 - fail-closed manifest-backed tool registry
 - local deterministic tool catalog
-- composite registry wiring for local plus model-backed tools
+- startup-loaded tool catalog under `app/server-agent/config/tools`
+- provider-backed production wiring instead of hardcoded registry composition in `main.go`
+- declarative workflow tool bindings via `pending_tool_binding`
+- generic prompt-backed OpenAI-compatible JSON tool executor for config-only LLM tools
+- provider kinds: `builtin` and `http`
 - manifest timeout handling
 - manifest retry budget handling for retryable tool failures
 - input and output validation hooks
@@ -127,8 +131,10 @@ Key files:
 
 - `app/server-agent/internal/workflow/nodes/toolcall.go`
 - `app/server-agent/internal/tools/catalog.go`
-- `app/server-agent/internal/tools/registry.go`
+- `app/server-agent/internal/tools/catalog_loader.go`
+- `app/server-agent/internal/tools/schema.go`
 - `app/server-agent/internal/tools/llm.go`
+- `app/server-agent/config/tools/`
 - `app/server-agent/cmd/server/main.go`
 
 ### Server-Agent Workflow Adoption
@@ -232,25 +238,30 @@ Status: done
 
 Outcome:
 
-- production tool wiring now composes deterministic local tools with one model-backed tool
+- production tool wiring now loads provider-backed tools from `config/tools`
+- config-only prompt-backed model tools can be added without central registry edits
 - model-backed tool output is schema-validated before artifact persistence
 - retry budget and trace logging exist for model-backed calls
 - shipped workflow fallback exists when the model-backed tool is disabled, times out, or fails
 
 Implemented in:
 
+- [catalog_loader.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/catalog_loader.go)
+- [schema.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/schema.go)
 - [llm.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/llm.go)
-- [registry.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/registry.go)
 - [toolcall.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/workflow/nodes/toolcall.go)
 - [local_identity_workflows.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/workflow/nodes/local_identity_workflows.go)
 - [orchestrator_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/orchestrator/orchestrator_test.go)
 - [llm_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/llm_test.go)
+- [catalog_loader_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/tools/catalog_loader_test.go)
+- [config/tools](/home/xtrzy/Workspace/ppp/app/server-agent/config/tools)
 
 Runtime config:
 
 - `AUTO_TOOL_LLM_API_URL`
 - `AUTO_TOOL_LLM_API_KEY`
 - `AUTO_TOOL_LLM_MODEL`
+- `-tool-dir ./config/tools`
 
 Validation:
 

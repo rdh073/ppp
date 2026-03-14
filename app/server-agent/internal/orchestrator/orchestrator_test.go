@@ -114,6 +114,78 @@ func newRealRunner() *workflow.Runner {
 	return newRealRunnerWithTools(toolcatalog.NewLocalToolRegistry())
 }
 
+func newLocalIdentityBindings() nodes.ToolBindingResolver {
+	return nodes.NewStaticToolBindingResolver(
+		nodes.ToolBinding{
+			ID:             "local_identity.generate_name",
+			ToolName:       "identity.generate_indonesian_name",
+			ParamsTemplate: `{}`,
+			SuccessArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "profile_full_name", FromJSONPointer: "/fullName"},
+				{Artifact: "profile_first_name", FromJSONPointer: "/firstName"},
+				{Artifact: "profile_last_name", FromJSONPointer: "/lastName"},
+				{Artifact: "profile_gender", FromJSONPointer: "/gender"},
+			},
+		},
+		nodes.ToolBinding{
+			ID:             "local_identity.generate_email",
+			ToolName:       "identity.generate_email",
+			ParamsTemplate: `{"fullName": {{ json (artifact "profile_full_name") }}}`,
+			SuccessArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "profile_email", FromJSONPointer: "/email"},
+				{Artifact: "profile_email_local_part", FromJSONPointer: "/localPart"},
+				{Artifact: "profile_email_domain", FromJSONPointer: "/domain"},
+			},
+		},
+		nodes.ToolBinding{
+			ID:             "local_identity.generate_password",
+			ToolName:       "credential.generate_password",
+			Constants:      map[string]any{"length": 20, "includeSymbols": true},
+			ParamsTemplate: `{"length": {{ json (constant "length") }}, "includeSymbols": {{ json (constant "includeSymbols") }}}`,
+			SuccessArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "profile_password", FromJSONPointer: "/password"},
+				{Artifact: "profile_password_length", FromJSONPointer: "/length"},
+				{Artifact: "profile_password_hasSymbol", FromJSONPointer: "/hasSymbol"},
+			},
+		},
+		nodes.ToolBinding{
+			ID:             "local_identity.generate_birth_date",
+			ToolName:       "identity.generate_birth_date",
+			Constants:      map[string]any{"minAge": 25, "maxAge": 35},
+			ParamsTemplate: `{"minAge": {{ json (constant "minAge") }}, "maxAge": {{ json (constant "maxAge") }}}`,
+			SuccessArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "profile_birth_date", FromJSONPointer: "/birthDate"},
+				{Artifact: "profile_age", FromJSONPointer: "/age"},
+				{Artifact: "profile_reference_date", FromJSONPointer: "/referenceDate"},
+			},
+		},
+		nodes.ToolBinding{
+			ID:             "local_identity.generate_welcome_email",
+			ToolName:       "content.generate_welcome_email",
+			Optional:       true,
+			Constants:      map[string]any{"productName": "AutoSDK", "senderName": "AutoSDK", "language": "id", "tone": "professional_warm"},
+			ParamsTemplate: `{"fullName": {{ json (artifact "profile_full_name") }}, "email": {{ json (artifact "profile_email") }}, "productName": {{ json (constant "productName") }}, "senderName": {{ json (constant "senderName") }}, "language": {{ json (constant "language") }}, "tone": {{ json (constant "tone") }}}`,
+			SuccessArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "welcome_email_subject", FromJSONPointer: "/subject"},
+				{Artifact: "welcome_email_body", FromJSONPointer: "/body"},
+				{Artifact: "welcome_email_language", FromJSONPointer: "/language"},
+				{Artifact: "welcome_email_tone", FromJSONPointer: "/tone"},
+				{Artifact: "welcome_email_generation_mode", Value: stringPtr("llm")},
+			},
+			FailureArtifacts: []nodes.ToolArtifactBinding{
+				{Artifact: "welcome_email_subject", Value: stringPtr("Selamat datang di AutoSDK")},
+				{Artifact: "welcome_email_body", Template: "Halo {{ default \"Pengguna\" (artifact \"profile_full_name\") }},\n\nAkun AutoSDK Anda sudah siap digunakan. Email yang kami siapkan untuk profil ini adalah {{ artifact \"profile_email\" }}. Silakan lanjutkan verifikasi dan simpan kredensial Anda dengan aman sebelum memulai workflow berikutnya.\n\nJika Anda membutuhkan bantuan, balas email ini dan tim AutoSDK akan membantu Anda.\n\nSalam,\nAutoSDK"},
+				{Artifact: "welcome_email_language", Value: stringPtr("id")},
+				{Artifact: "welcome_email_tone", Value: stringPtr("professional_warm")},
+				{Artifact: "welcome_email_generation_mode", Value: stringPtr("fallback_template")},
+				{Artifact: "welcome_email_error", Template: "{{ .ToolError }}"},
+			},
+		},
+	)
+}
+
+func stringPtr(value string) *string { return &value }
+
 type fakeModelClient struct {
 	result json.RawMessage
 	err    error
@@ -141,7 +213,7 @@ func newRealRunnerWithTools(toolRegistry nodes.ToolRegistry) *workflow.Runner {
 		domain.NodeKindAct:      nodes.NewActNode(disp),
 		domain.NodeKindVerify:   nodes.NewVerifyNode(),
 		domain.NodeKindResync:   nodes.NewResyncNode(disp),
-		domain.NodeKindToolCall: nodes.NewToolCallNode(toolRegistry),
+		domain.NodeKindToolCall: nodes.NewToolCallNodeWithBindings(toolRegistry, newLocalIdentityBindings()),
 		domain.NodeKindWait:     nodes.NewWaitNode(),
 		domain.NodeKindTerminal: nodes.NewTerminalNode(),
 	}, seededDefStore(), workflow.DefaultWorkflowName)
