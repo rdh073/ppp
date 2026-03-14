@@ -29,6 +29,7 @@ internal/
   domain/             pure types — Session, Task, WorkflowState, Event, Command, UiSnapshot
   registry/           MemoryRegistry + Sender interface + AgentRegistry port
   store/              TaskStore + WorkflowStateStore interfaces + in-memory impls
+  eventruntime/       event submission boundary; inline vs redis-streams runtime modes
   dispatcher/         Dispatcher interface — routes device.* commands, correlates responses
   workflow/           NodeRunner, NodeInput/Output; nodes/: Observe/Decide/Act/Verify/Resync/Terminal
   orchestrator/       ProcessEvent: per-device lock + watermark + dedup + node run + checkpoint
@@ -76,6 +77,13 @@ Optional env vars:
 - `AUTO_ADB_SERVER_PORT` (default: `5037`)
 - `AUTO_AGENT_ACCESSIBILITY_COMPONENT` (default: `com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService`)
 - `AUTO_ADB_SERIAL_BY_DEVICE` (optional fallback mapping; format: `deviceId1=serial1,deviceId2=serial2`)
+- `AUTO_EVENT_RUNTIME` (`inline` by default; set `redis-streams` to externalize ingress events onto Redis Streams)
+- `AUTO_REDIS_ADDR` (default: `localhost:6379`)
+- `AUTO_REDIS_PASSWORD` (optional)
+- `AUTO_REDIS_DB` (default: `0`)
+- `AUTO_EVENT_BUS_PARTITIONS` (default: `8`; same `deviceId` always hashes to the same `workflow.wakeup.pNN` stream)
+- `AUTO_REDIS_GROUP` (default: `server-agent`)
+- `AUTO_REDIS_CONSUMER_PREFIX` (default: `server-agent`)
 - `AUTO_TOOL_LLM_API_URL` (optional OpenAI-compatible chat-completions endpoint for model-backed tools)
 - `AUTO_TOOL_LLM_API_KEY` (optional bearer token for the model-backed tool endpoint)
 - `AUTO_TOOL_LLM_MODEL` (required together with `AUTO_TOOL_LLM_API_URL` to enable model-backed tools)
@@ -84,6 +92,7 @@ Runtime persistence:
 - `go run ./cmd/server -data-dir ./var`
 - Default runtime data directory is `./var` relative to `app/server-agent/`
 - On startup, `RuntimeRecovery` scans persisted tasks and workflow state before the server accepts traffic
+- On startup, the event runtime is initialized before the server accepts traffic
 - The server persists:
   - tasks
   - workflow checkpoints
@@ -111,6 +120,10 @@ Notes:
 - Workflow checkpoints use a persisted optimistic `Revision` token; stale checkpoint saves fail with a store conflict instead of silently overwriting newer state.
 - Startup recovery bootstraps missing workflow checkpoints for assigned non-terminal tasks and reconciles persisted terminal workflow state back into task status.
 - Bootstrapped checkpoints are tagged with artifacts `recovery_bootstrap=true` and `recovery_bootstrap_reason=startup_missing_checkpoint`.
+- `AUTO_EVENT_RUNTIME=inline` is the explicit development mode: accept event, then process it in-process immediately.
+- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` and partitioned wakeup streams `workflow.wakeup.pNN`, then worker goroutines consume them through Redis consumer groups.
+- In `redis-streams` mode, if wakeup publication fails after durable acceptance, the runtime falls back to inline processing for correctness.
+- Current limitation: internal emitted events such as `tool.result` still stay in the event-plane store and continue inline inside the orchestrator path; only ingress accepted events are externalized to Redis Streams in this phase slice.
 
 ## Extending
 

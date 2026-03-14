@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/eventruntime"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
@@ -109,15 +112,58 @@ func main() {
 		"tasksReconciled", recoveryReport.TasksReconciled,
 	)
 
-	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
-	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
+	runtimeMode := strings.TrimSpace(os.Getenv("AUTO_EVENT_RUNTIME"))
+	if runtimeMode == "" {
+		runtimeMode = "inline"
+	}
+
+	var runtime eventruntime.Runtime
+	switch runtimeMode {
+	case "inline":
+		runtime = eventruntime.NewInlineRuntime(eventStore, orch, log)
+	case "redis-streams":
+		partitions, err := intEnv("AUTO_EVENT_BUS_PARTITIONS", 8)
+		if err != nil {
+			log.Error("invalid AUTO_EVENT_BUS_PARTITIONS", "err", err)
+			os.Exit(1)
+		}
+		redisDB, err := intEnv("AUTO_REDIS_DB", 0)
+		if err != nil {
+			log.Error("invalid AUTO_REDIS_DB", "err", err)
+			os.Exit(1)
+		}
+		bus, err := eventruntime.NewRedisStreamsBus(eventruntime.RedisStreamsConfig{
+			Addr:           stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
+			Password:       os.Getenv("AUTO_REDIS_PASSWORD"),
+			DB:             redisDB,
+			Partitions:     partitions,
+			Group:          stringEnv("AUTO_REDIS_GROUP", "server-agent"),
+			ConsumerPrefix: stringEnv("AUTO_REDIS_CONSUMER_PREFIX", "server-agent"),
+		}, log)
+		if err != nil {
+			log.Error("failed to configure redis streams runtime", "err", err)
+			os.Exit(1)
+		}
+		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log)
+	default:
+		log.Error("unsupported AUTO_EVENT_RUNTIME", "mode", runtimeMode)
+		os.Exit(1)
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		log.Error("event runtime start failed", "mode", runtimeMode, "err", err)
+		os.Exit(1)
+	}
+	log.Info("event runtime ready", "mode", runtimeMode)
+
+	lifecycleUC := usecase.NewAgentLifecycle(reg, runtime, log)
+	taskUC := usecase.NewTaskControl(taskStore, stateStore, runtime, reg, log)
 	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
 		os.Getenv("AUTO_ADB_SERVER_HOST"),
 		os.Getenv("AUTO_ADB_SERVER_PORT"),
 		os.Getenv("AUTO_AGENT_ACCESSIBILITY_COMPONENT"),
 		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
 	)
-	eventUC := usecase.NewEventIngestion(orch, autoEnabler)
+	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
@@ -142,4 +188,24 @@ func main() {
 		log.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+func stringEnv(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func intEnv(key string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }

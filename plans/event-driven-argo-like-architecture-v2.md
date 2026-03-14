@@ -1012,6 +1012,16 @@ Workspace state at phase end:
 - no stream name exists without a producer and consumer
 - any in-process pub/sub fallback is kept only as an explicit development mode, not as dead parallel code
 
+Current implementation status:
+
+- partially implemented in the current codebase
+- ingress accepted events can run through `AUTO_EVENT_RUNTIME=redis-streams`
+- accepted ingress events publish to `events.accepted`
+- wakeups publish to partitioned Redis Streams named `workflow.wakeup.pNN`
+- one worker goroutine per partition consumes with Redis consumer groups and deterministic consumer names
+- `AUTO_EVENT_RUNTIME=inline` remains the explicit development mode
+- current limitation: internal emitted events such as `tool.result` still stay inline inside the orchestrator path and are not yet published onto Redis Streams
+
 ### 16.9 Phase 7: Operational Hardening
 
 Goal:

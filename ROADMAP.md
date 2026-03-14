@@ -69,11 +69,14 @@ Implemented:
 - side effects execute only after accepted event
 - ADB accessibility recovery validates `android_id` against `deviceId`
 - ADB target supports `adbSerial`, env mapping, and single-device fallback
+- explicit event runtime modes exist: `inline` and `redis-streams`
 
 Key files:
 
 - `app/server-agent/internal/transport/ws/server.go`
 - `app/server-agent/internal/usecase/event_ingestion.go`
+- `app/server-agent/internal/eventruntime/runtime.go`
+- `app/server-agent/internal/eventruntime/redis_streams.go`
 - `app/server-agent/internal/orchestrator/orchestrator.go`
 - `app/server-agent/internal/usecase/accessibility_auto_enabler.go`
 - `app/server-agent/internal/store/file.go`
@@ -310,16 +313,30 @@ Remaining note:
 
 ### Phase 6: Redis Streams Scale-Out
 
-Status: planned
+Status: in progress
 
 Goal:
 
 - externalize the pub/sub seam without changing workflow semantics
 
+Implemented in this slice:
+
+- explicit event runtime boundary added around event acceptance and dispatch
+- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted`
+- wakeups are partitioned by `deviceId` into `workflow.wakeup.pNN`
+- one worker goroutine per partition consumes from Redis consumer groups using deterministic consumer names
+- `inline` remains the explicit development fallback mode
+- if stream publication fails after durable acceptance, runtime falls back to inline processing to preserve correctness
+
 Required end state:
 
 - `events.accepted`, `workflow.wakeup`, and `events.deadletter` have real producers and consumers
 - any in-process pub/sub fallback is explicit dev-only mode, not dead parallel code
+
+Remaining gap before Phase 6 can be called done:
+
+- internal emitted events such as `tool.result` are still accepted inline in the event plane and are not yet published onto Redis Streams
+- current worker topology is single-process partition workers, not multi-process partition ownership
 
 ### Phase 7: Operational Hardening
 
@@ -375,8 +392,8 @@ A phase is done only if all are true:
 
 ## Immediate Next Action
 
-Implement Phase 6:
+Continue Phase 6:
 
-1. externalize `events.accepted`, `workflow.wakeup`, and `events.deadletter`
-2. preserve the same per-device ordering guarantees when workers scale out
-3. keep the current in-process path only as an explicit development mode
+1. externalize internal emitted events such as `tool.result` without double execution
+2. harden Redis worker restart and pending-message recovery beyond single-process deterministic consumer names
+3. preserve the same per-device ordering guarantees when multiple server processes share partitions

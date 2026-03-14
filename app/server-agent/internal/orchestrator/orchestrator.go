@@ -71,6 +71,12 @@ func (o *Orchestrator) ProcessEvent(ctx context.Context, e domain.Event) error {
 		return domain.ErrEventDropped
 	}
 
+	return o.ProcessAcceptedEvent(ctx, e)
+}
+
+// ProcessAcceptedEvent drives workflow execution for an event that has already
+// passed acceptance, watermark, and dedup checks.
+func (o *Orchestrator) ProcessAcceptedEvent(ctx context.Context, e domain.Event) error {
 	mu := o.lockFor(e.DeviceID)
 	mu.Lock()
 	defer mu.Unlock()
