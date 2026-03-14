@@ -39,12 +39,13 @@ func New() *Registry {
 	}
 }
 
-func (r *Registry) Add(session *domain.Session, conn Sender) {
+func (r *Registry) Add(session *domain.Session, conn Sender) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := &entry{session: session, conn: conn}
 	r.bySession[session.ID] = e
 	r.byDevice[session.DeviceID] = e
+	return nil
 }
 
 func (r *Registry) Remove(id domain.SessionID) {

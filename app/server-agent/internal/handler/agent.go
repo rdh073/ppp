@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
+	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
 // JSON-RPC error codes used by the server.
@@ -18,8 +18,7 @@ const (
 	ErrSessionUnknown = -32001
 )
 
-// Conn is the minimal interface the handler needs to respond to an agent
-// and register it in the session store.
+// Conn is the minimal interface the handler needs to respond to an agent.
 // It is a superset of registry.Sender so values can be passed to reg.Add directly.
 type Conn interface {
 	SendRequest(id, method string, params any) error
@@ -27,19 +26,20 @@ type Conn interface {
 	SendError(id string, code int, message string) error
 	Close() error
 	// SetSession associates this connection with a session after registration.
-	// The transport layer uses the session ID for cleanup on disconnect.
 	SetSession(id domain.SessionID)
+	// SetDevice associates this connection with a device ID for response correlation.
+	SetDevice(id domain.DeviceID)
 }
 
-// AgentHandler handles the agent lifecycle JSON-RPC methods:
-// agent.hello, agent.resume, agent.heartbeat, agent.disconnect.
+// AgentHandler is a thin JSON-RPC dispatcher that delegates to AgentLifecycleUseCase.
+// It owns only parameter parsing and response shaping — no business logic.
 type AgentHandler struct {
-	reg *registry.Registry
+	uc  *usecase.AgentLifecycleUseCase
 	log *slog.Logger
 }
 
-func NewAgentHandler(reg *registry.Registry, log *slog.Logger) *AgentHandler {
-	return &AgentHandler{reg: reg, log: log}
+func NewAgentHandler(uc *usecase.AgentLifecycleUseCase, log *slog.Logger) *AgentHandler {
+	return &AgentHandler{uc: uc, log: log}
 }
 
 // --- inbound param types ---
@@ -75,29 +75,22 @@ func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams jso
 		return
 	}
 
-	// Replace any existing session for this device.
-	if existing, _, ok := h.reg.GetByDevice(domain.DeviceID(p.DeviceID)); ok {
-		h.reg.Remove(existing.ID)
-		h.log.Info("replaced existing session", "deviceId", p.DeviceID, "old_session", existing.ID)
-	}
-
-	sessionID := domain.NewSessionID()
-	now := time.Now()
-	session := &domain.Session{
-		ID:              sessionID,
+	resp, err := h.uc.Hello(ctx, usecase.HelloRequest{
 		DeviceID:        domain.DeviceID(p.DeviceID),
 		AgentInstanceID: p.AgentInstanceID,
 		Capabilities:    p.Capabilities,
-		ConnectedAt:     now,
-		LastHeartbeatAt: now,
+	}, connAsSender(conn))
+	if err != nil {
+		h.log.Error("hello failed", "err", err)
+		_ = conn.SendError(id, ErrInternalError, err.Error())
+		return
 	}
-	h.reg.Add(session, conn)
-	conn.SetSession(sessionID)
 
-	h.log.Info("agent.hello accepted", "deviceId", p.DeviceID, "sessionId", sessionID)
+	conn.SetSession(resp.SessionID)
+	conn.SetDevice(domain.DeviceID(p.DeviceID))
 	_ = conn.SendSuccess(id, map[string]any{
 		"accepted":  true,
-		"sessionId": string(sessionID),
+		"sessionId": string(resp.SessionID),
 	})
 }
 
@@ -108,25 +101,21 @@ func (h *AgentHandler) HandleResume(ctx context.Context, id string, rawParams js
 		return
 	}
 
-	existing, _, ok := h.reg.GetBySession(domain.SessionID(p.SessionID))
-	if !ok {
-		// Agent must fall back to agent.hello.
-		h.log.Info("agent.resume rejected: session unknown", "deviceId", p.DeviceID, "sessionId", p.SessionID)
+	resp, err := h.uc.Resume(ctx, usecase.ResumeRequest{
+		DeviceID:     domain.DeviceID(p.DeviceID),
+		SessionID:    domain.SessionID(p.SessionID),
+		Capabilities: p.Capabilities,
+	}, connAsSender(conn))
+	if err != nil {
 		_ = conn.SendError(id, ErrSessionUnknown, fmt.Sprintf("session unknown: %s", p.SessionID))
 		return
 	}
 
-	// Re-register with the new connection, preserving the session.
-	h.reg.Remove(existing.ID)
-	existing.Capabilities = p.Capabilities
-	existing.LastHeartbeatAt = time.Now()
-	h.reg.Add(existing, conn)
-	conn.SetSession(existing.ID)
-
-	h.log.Info("agent.resume accepted", "deviceId", p.DeviceID, "sessionId", p.SessionID)
+	conn.SetSession(resp.SessionID)
+	conn.SetDevice(domain.DeviceID(p.DeviceID))
 	_ = conn.SendSuccess(id, map[string]any{
 		"accepted":  true,
-		"sessionId": p.SessionID,
+		"sessionId": string(resp.SessionID),
 	})
 }
 
@@ -136,11 +125,7 @@ func (h *AgentHandler) HandleHeartbeat(ctx context.Context, id string, rawParams
 		_ = conn.SendError(id, ErrInvalidParams, "invalid params")
 		return
 	}
-	if p.SessionID != "" {
-		if session, _, ok := h.reg.GetBySession(domain.SessionID(p.SessionID)); ok {
-			session.LastHeartbeatAt = time.Now()
-		}
-	}
+	h.uc.Heartbeat(ctx, domain.DeviceID(p.DeviceID), domain.SessionID(p.SessionID))
 	_ = conn.SendSuccess(id, map[string]any{"accepted": true})
 }
 
@@ -150,7 +135,12 @@ func (h *AgentHandler) HandleDisconnect(ctx context.Context, id string, rawParam
 		_ = conn.SendError(id, ErrInvalidParams, "invalid params: sessionId required")
 		return
 	}
-	h.reg.Remove(domain.SessionID(p.SessionID))
-	h.log.Info("agent.disconnect received", "deviceId", p.DeviceID, "sessionId", p.SessionID)
+	h.uc.Disconnect(ctx, domain.DeviceID(p.DeviceID), domain.SessionID(p.SessionID))
 	_ = conn.SendSuccess(id, map[string]any{"accepted": true})
+}
+
+// connAsSender adapts handler.Conn to registry.Sender (subset of the interface).
+// Both are satisfied by *ws.Conn so this is always safe.
+func connAsSender(conn Conn) registry.Sender {
+	return conn.(registry.Sender)
 }

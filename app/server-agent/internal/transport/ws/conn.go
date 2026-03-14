@@ -11,13 +11,18 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 )
 
+type sessionInfo struct {
+	sessionID domain.SessionID
+	deviceID  domain.DeviceID
+}
+
 // Conn wraps a gorilla WebSocket connection and implements handler.Conn.
 // It is safe for concurrent writes from multiple goroutines.
 type Conn struct {
-	ws        *websocket.Conn
-	writeMu   sync.Mutex
-	log       *slog.Logger
-	sessionID atomic.Pointer[domain.SessionID]
+	ws      *websocket.Conn
+	writeMu sync.Mutex
+	log     *slog.Logger
+	info    atomic.Pointer[sessionInfo]
 }
 
 func newConn(ws *websocket.Conn, log *slog.Logger) *Conn {
@@ -25,15 +30,41 @@ func newConn(ws *websocket.Conn, log *slog.Logger) *Conn {
 }
 
 // SetSession records which session this connection belongs to.
-// Called by the handler after a successful hello/resume.
+// DeviceID is obtained from the registry via the session after Hello/Resume.
+// It is called by the handler with both IDs so deliverResponse can correlate responses.
 func (c *Conn) SetSession(id domain.SessionID) {
-	c.sessionID.Store(&id)
+	// DeviceID is set separately via SetDevice; here we just store the session ID.
+	cur := c.info.Load()
+	var devID domain.DeviceID
+	if cur != nil {
+		devID = cur.deviceID
+	}
+	c.info.Store(&sessionInfo{sessionID: id, deviceID: devID})
 }
 
-// Session returns the current session ID, or empty string if not yet registered.
+// SetDevice records the device ID associated with this connection.
+// Called by the handler after a successful Hello/Resume.
+func (c *Conn) SetDevice(id domain.DeviceID) {
+	cur := c.info.Load()
+	var sessID domain.SessionID
+	if cur != nil {
+		sessID = cur.sessionID
+	}
+	c.info.Store(&sessionInfo{sessionID: sessID, deviceID: id})
+}
+
+// Session returns the current session ID, or empty if not yet registered.
 func (c *Conn) Session() domain.SessionID {
-	if p := c.sessionID.Load(); p != nil {
-		return *p
+	if p := c.info.Load(); p != nil {
+		return p.sessionID
+	}
+	return ""
+}
+
+// DeviceID returns the device ID associated with this connection, or empty if unknown.
+func (c *Conn) DeviceID() domain.DeviceID {
+	if p := c.info.Load(); p != nil {
+		return p.deviceID
 	}
 	return ""
 }

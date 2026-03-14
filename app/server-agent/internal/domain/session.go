@@ -1,11 +1,6 @@
 package domain
 
-import (
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
-	"time"
-)
+import "time"
 
 type SessionID string
 type DeviceID string
@@ -28,9 +23,5 @@ type Session struct {
 }
 
 func NewSessionID() SessionID {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return SessionID(fmt.Sprintf("sess-%d", time.Now().UnixNano()))
-	}
-	return SessionID("sess-" + hex.EncodeToString(b))
+	return SessionID("sess-" + newID())
 }

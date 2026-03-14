@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
+	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
+	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
 var upgrader = websocket.Upgrader{
@@ -18,15 +23,25 @@ var upgrader = websocket.Upgrader{
 }
 
 // AgentServer is the HTTP handler for /ws/agent.
-// It upgrades connections to WebSocket and runs a read loop per connection.
+// It upgrades connections to WebSocket, runs a per-connection read loop,
+// and routes inbound messages to either the agent handler, event ingestion,
+// or the dispatcher (response correlation).
 type AgentServer struct {
 	agentHandler *handler.AgentHandler
-	reg          *registry.Registry
+	eventUC      *usecase.EventIngestionUseCase
+	reg          registry.AgentRegistry
+	disp         dispatcher.Dispatcher
 	log          *slog.Logger
 }
 
-func NewAgentServer(h *handler.AgentHandler, reg *registry.Registry, log *slog.Logger) *AgentServer {
-	return &AgentServer{agentHandler: h, reg: reg, log: log}
+func NewAgentServer(
+	h *handler.AgentHandler,
+	eventUC *usecase.EventIngestionUseCase,
+	reg registry.AgentRegistry,
+	disp dispatcher.Dispatcher,
+	log *slog.Logger,
+) *AgentServer {
+	return &AgentServer{agentHandler: h, eventUC: eventUC, reg: reg, disp: disp, log: log}
 }
 
 func (s *AgentServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,11 +86,34 @@ func (s *AgentServer) readLoop(ctx context.Context, conn *Conn) {
 		}
 
 		if in.Method != "" {
-			// Incoming request from the agent (agent.hello, agent.resume, etc.)
+			// Inbound request/notification from the agent.
 			s.dispatch(ctx, in, conn)
+		} else {
+			// Inbound response to a device.* command the server sent.
+			s.deliverResponse(conn, in)
 		}
-		// Incoming responses (to device.* commands we sent) are not handled here yet.
 	}
+}
+
+// deliverResponse correlates an agent's device.* response with the pending Dispatch call.
+func (s *AgentServer) deliverResponse(conn *Conn, in inbound) {
+	if in.ID == "" {
+		s.log.Warn("received response with empty id — dropping")
+		return
+	}
+
+	result := domain.CommandResult{
+		CommandID:  in.ID,
+		DeviceID:   conn.DeviceID(),
+		Success:    in.Error == nil,
+		Raw:        in.Result,
+		ReceivedAt: time.Now(),
+	}
+	if in.Error != nil {
+		result.Err = &domain.CommandError{Code: in.Error.Code, Message: in.Error.Message}
+	}
+
+	s.disp.DeliverResponse(result)
 }
 
 func (s *AgentServer) dispatch(ctx context.Context, req inbound, conn *Conn) {
@@ -89,6 +127,15 @@ func (s *AgentServer) dispatch(ctx context.Context, req inbound, conn *Conn) {
 	case "agent.disconnect":
 		s.agentHandler.HandleDisconnect(ctx, req.ID, req.Params, conn)
 	default:
+		// Device-originated event notifications (android.*) are routed to
+		// the event ingestion use case. They may or may not have an id;
+		// we don't send a response for pure notifications (id == "").
+		if strings.HasPrefix(req.Method, "android.") {
+			if err := s.eventUC.IngestNotification(ctx, conn.DeviceID(), req.Method, req.Params); err != nil {
+				s.log.Warn("event ingestion failed", "method", req.Method, "err", err)
+			}
+			return
+		}
 		_ = conn.SendError(req.ID, ErrMethodUnknown, "method not found: "+req.Method)
 		s.log.Warn("unknown method", "method", req.Method)
 	}

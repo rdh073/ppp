@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## GUARDRAIL
+
+- Load skill `coder` when beginning to write code.
+- use some usefull serena tool if needed
+
 ## Architecture
 
 Read `AGENTS.md` before writing code. Two sub-projects:
@@ -74,8 +79,6 @@ go vet ./...
 ```
 
 ## Code Conventions
-
-- Load skill `coder` when beginning to write code.
 - State changes: add to `AgentEvent`, handle in `AgentReducer`, add `AgentEffect` types if side-effects are needed, handle in `AgentStateCoordinator.runEffect`.
 - New JSON-RPC methods: add a `when` branch in `AgentRuntime.handleRequest` and a private `handle*` function.
 - Tests are JVM-only (Robolectric); no instrumented tests. Test the reducer and coordinator in isolation by faking `AgentTransportDriver`, `AgentHeartbeatScheduler`, etc.
