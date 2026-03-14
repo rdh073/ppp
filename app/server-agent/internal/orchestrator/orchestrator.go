@@ -137,18 +137,24 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 		return nil
 	}
 
-	// If the workflow is suspended (WaitNode set WaitingFor), skip unless
-	// the incoming event matches one of the expected kinds.
-	if len(state.WaitingFor) > 0 && !eventMatchesWaitList(e.Kind, state.WaitingFor) {
-		o.log.Debug("skipping event — workflow waiting for specific event",
-			"taskId", task.ID, "deviceId", e.DeviceID,
-			"event", e.Kind, "waitingFor", state.WaitingFor)
-		return nil
-	}
-
 	currentState := state
 	currentEvent := e
+	var pendingEvents []domain.Event
 	for step := 0; step < maxAutoAdvanceSteps; step++ {
+		// If the workflow is suspended (WaitNode set WaitingFor), skip unless
+		// the current event matches one of the expected kinds. Inline-emitted
+		// events are drained in-order before we return to the caller.
+		if len(currentState.WaitingFor) > 0 && !eventMatchesWaitList(currentEvent.Kind, currentState.WaitingFor) {
+			o.log.Debug("skipping event — workflow waiting for specific event",
+				"taskId", task.ID, "deviceId", e.DeviceID,
+				"event", currentEvent.Kind, "waitingFor", currentState.WaitingFor)
+			if len(pendingEvents) == 0 {
+				return nil
+			}
+			currentEvent, pendingEvents = pendingEvents[0], pendingEvents[1:]
+			continue
+		}
+
 		input := workflow.NodeInput{Event: currentEvent, State: currentState, Task: task}
 		newState, done, emittedEvents, err := o.runner.Run(ctx, input)
 		if err != nil {
@@ -162,14 +168,14 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 		}
 
 		if len(emittedEvents) > 0 {
-			nextEvent, continueInline, err := o.acceptEmittedEvents(ctx, emittedEvents)
+			inlineEvents, continueInline, err := o.acceptEmittedEvents(ctx, currentState.DeviceID, emittedEvents)
 			if err != nil {
 				return err
 			}
 			if !continueInline {
 				return nil
 			}
-			currentEvent = nextEvent
+			pendingEvents = append(pendingEvents, inlineEvents...)
 		}
 
 		if done {
@@ -196,62 +202,90 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 			"eventKind", currentEvent.Kind,
 		)
 
+		currentState = newState
+		if len(pendingEvents) > 0 {
+			currentEvent, pendingEvents = pendingEvents[0], pendingEvents[1:]
+			continue
+		}
 		if len(newState.WaitingFor) > 0 || !isAutoAdvanceNode(newState.CurrentNode) {
 			return nil
 		}
-
-		currentState = newState
 	}
 
 	return fmt.Errorf("workflow auto-advance exceeded %d steps for task %s", maxAutoAdvanceSteps, task.ID)
 }
 
-func (o *Orchestrator) acceptEmittedEvents(ctx context.Context, events []domain.Event) (domain.Event, bool, error) {
-	if o.bus != nil && len(events) > 1 {
-		return domain.Event{}, false, fmt.Errorf("multiple emitted events are not supported with external bus")
-	}
+func (o *Orchestrator) acceptEmittedEvents(
+	ctx context.Context,
+	expectedDeviceID domain.DeviceID,
+	events []domain.Event,
+) ([]domain.Event, bool, error) {
+	inlineEvents := make([]domain.Event, 0, len(events))
+	wakeupPublishCount := 0
+	busActive := o.bus != nil
 
-	var next domain.Event
 	for _, emitted := range events {
+		if emitted.DeviceID == "" {
+			return nil, false, fmt.Errorf("emitted event %s missing device id", emitted.ID)
+		}
+		if emitted.DeviceID != expectedDeviceID {
+			return nil, false, fmt.Errorf(
+				"emitted event %s targets device %s, expected %s",
+				emitted.ID, emitted.DeviceID, expectedDeviceID,
+			)
+		}
+
 		status, err := o.events.Accept(ctx, emitted)
 		if err != nil {
 			o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&emitted, nil, fmt.Sprintf("accept emitted event: %v", err), "orchestrator"))
-			return domain.Event{}, false, fmt.Errorf("accept emitted event %s: %w", emitted.ID, err)
+			return nil, false, fmt.Errorf("accept emitted event %s: %w", emitted.ID, err)
 		}
 		if status != domain.EventAcceptanceAccepted {
 			o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&emitted, nil, fmt.Sprintf("unexpected emitted event status: %s", status), "orchestrator"))
-			return domain.Event{}, false, fmt.Errorf("unexpected emitted event status %s for %s", status, emitted.ID)
+			return nil, false, fmt.Errorf("unexpected emitted event status %s for %s", status, emitted.ID)
 		}
 
-		if o.bus != nil {
+		if busActive {
 			record := domain.AcceptedEventRecord{
 				Event:      emitted,
 				AcceptedAt: time.Now(),
 				Source:     "internal",
 			}
 			if err := o.bus.PublishAccepted(ctx, record); err != nil {
-				o.log.Warn("publish accepted emitted event failed; continuing inline",
+				o.log.Warn("publish accepted emitted event failed; continuing with durable store as source of truth",
 					"eventId", emitted.ID,
 					"deviceId", emitted.DeviceID,
 					"err", err,
 				)
-				next = emitted
-				continue
 			}
 			if err := o.bus.PublishWakeup(ctx, emitted); err != nil {
-				o.log.Warn("publish wakeup emitted event failed; continuing inline",
+				o.log.Warn("publish wakeup emitted event failed; evaluating inline fallback",
 					"eventId", emitted.ID,
 					"deviceId", emitted.DeviceID,
 					"err", err,
 				)
-				next = emitted
+				if wakeupPublishCount > 0 {
+					return nil, false, fmt.Errorf(
+						"publish wakeup emitted event %s after %d prior wakeups: %w",
+						emitted.ID,
+						wakeupPublishCount,
+						err,
+					)
+				}
+				busActive = false
+				inlineEvents = append(inlineEvents, emitted)
 				continue
 			}
-			return domain.Event{}, false, nil
+			wakeupPublishCount++
+			continue
 		}
-		next = emitted
+		inlineEvents = append(inlineEvents, emitted)
 	}
-	return next, true, nil
+
+	if o.bus != nil && busActive {
+		return nil, false, nil
+	}
+	return inlineEvents, true, nil
 }
 
 func (o *Orchestrator) lockFor(deviceID domain.DeviceID) *sync.Mutex {

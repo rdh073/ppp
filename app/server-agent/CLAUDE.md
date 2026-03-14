@@ -84,6 +84,11 @@ Optional env vars:
 - `AUTO_EVENT_BUS_PARTITIONS` (default: `8`; same `deviceId` always hashes to the same `workflow.wakeup.pNN` stream)
 - `AUTO_REDIS_GROUP` (default: `server-agent`)
 - `AUTO_REDIS_CONSUMER_PREFIX` (default: `server-agent`)
+- `AUTO_REDIS_INSTANCE_ID` (optional; stable worker identity suffix for Redis partition ownership)
+- `AUTO_EVENT_BUS_LEASE_TTL` (default: `15s`; Redis partition lease TTL for `workflow.wakeup.pNN.owner`)
+- `AUTO_EVENT_BUS_PENDING_IDLE` (default: `45s`; minimum idle time before a worker may reclaim pending wakeups)
+- `AUTO_EVENT_BUS_CLAIM_COUNT` (default: `16`; max pending wakeups reclaimed per `XAUTOCLAIM` loop)
+- `AUTO_EVENT_BUS_OWNERSHIP_RETRY` (default: `500ms`; backoff before retrying partition ownership)
 - `AUTO_TOOL_LLM_API_URL` (optional OpenAI-compatible chat-completions endpoint for model-backed tools)
 - `AUTO_TOOL_LLM_API_KEY` (optional bearer token for the model-backed tool endpoint)
 - `AUTO_TOOL_LLM_MODEL` (required together with `AUTO_TOOL_LLM_API_URL` to enable model-backed tools)
@@ -122,9 +127,27 @@ Notes:
 - Bootstrapped checkpoints are tagged with artifacts `recovery_bootstrap=true` and `recovery_bootstrap_reason=startup_missing_checkpoint`.
 - `AUTO_EVENT_RUNTIME=inline` is the explicit development mode: accept event, then process it in-process immediately.
 - `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` and partitioned wakeup streams `workflow.wakeup.pNN`, then worker goroutines consume them through Redis consumer groups.
-- In `redis-streams` mode, if wakeup publication fails after durable acceptance, the runtime falls back to inline processing for correctness.
+- In `redis-streams` mode, partition ownership is coordinated with Redis lease keys `workflow.wakeup.pNN.owner`; only the current lease holder drains and processes that lane.
+- Each partition worker recovers in this order: drain its own pending entries, claim idle pending entries with `XAUTOCLAIM`, then read new entries.
+- In `redis-streams` mode, ingress accepted events and accepted-event replay fall back inline if wakeup publication fails after durable acceptance.
 - Internal emitted events such as `tool.result` are externalized onto Redis Streams in `AUTO_EVENT_RUNTIME=redis-streams`; the orchestrator checkpoints state, publishes the internal event, and stops inline auto-advance until a worker replays that accepted event.
-- Current limitation: the external bus path assumes one emitted internal event per node step. If a future node emits multiple internal events in one step, the orchestrator fails closed instead of silently dropping later events.
+- Accepted events and dead letters can be inspected and replayed through:
+  - `GET /events/accepted`
+  - `GET /events/accepted/{eventId}`
+  - `POST /events/accepted/{eventId}/replay`
+  - `GET /events/deadletters`
+  - `GET /events/deadletters/{deadLetterId}`
+  - `POST /events/deadletters/{deadLetterId}/replay`
+- Accepted-event replay does not re-accept a duplicate event. It replays through the current runtime mode: inline processing for `inline`, wakeup requeue for `redis-streams`, with inline fallback if wakeup publication fails.
+- Dead-letter replay routes `source=ingestion` records back through notification ingestion and routes orchestrator/runtime dead letters back through accepted-event replay.
+- `workflow.NodeOutput.EmittedEvents` contract:
+  - emitted events must target the same `deviceId` as the current workflow state
+  - emitted events are accepted in slice order
+  - `AUTO_EVENT_RUNTIME=inline` drains accepted emitted events in slice order for the current task path
+  - `AUTO_EVENT_RUNTIME=redis-streams` publishes wakeups in slice order to the same device partition
+  - if wakeup publication fails before any wakeup in the emitted batch has been published, the batch falls back inline
+  - if wakeup publication fails after one or more wakeups in the batch have already been published, orchestration fails closed to avoid reordering
+- Current limitation: `/events/accepted` and `/events/deadletters` currently return the full record list without pagination or filtering.
 
 ## Extending
 

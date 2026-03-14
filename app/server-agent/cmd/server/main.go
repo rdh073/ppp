@@ -132,13 +132,38 @@ func main() {
 			log.Error("invalid AUTO_REDIS_DB", "err", err)
 			os.Exit(1)
 		}
+		leaseTTL, err := durationEnv("AUTO_EVENT_BUS_LEASE_TTL", 15*time.Second)
+		if err != nil {
+			log.Error("invalid AUTO_EVENT_BUS_LEASE_TTL", "err", err)
+			os.Exit(1)
+		}
+		pendingIdle, err := durationEnv("AUTO_EVENT_BUS_PENDING_IDLE", 45*time.Second)
+		if err != nil {
+			log.Error("invalid AUTO_EVENT_BUS_PENDING_IDLE", "err", err)
+			os.Exit(1)
+		}
+		pendingClaimCount, err := intEnv("AUTO_EVENT_BUS_CLAIM_COUNT", 16)
+		if err != nil {
+			log.Error("invalid AUTO_EVENT_BUS_CLAIM_COUNT", "err", err)
+			os.Exit(1)
+		}
+		ownershipRetry, err := durationEnv("AUTO_EVENT_BUS_OWNERSHIP_RETRY", 500*time.Millisecond)
+		if err != nil {
+			log.Error("invalid AUTO_EVENT_BUS_OWNERSHIP_RETRY", "err", err)
+			os.Exit(1)
+		}
 		bus, err := eventruntime.NewRedisStreamsBus(eventruntime.RedisStreamsConfig{
-			Addr:           stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
-			Password:       os.Getenv("AUTO_REDIS_PASSWORD"),
-			DB:             redisDB,
-			Partitions:     partitions,
-			Group:          stringEnv("AUTO_REDIS_GROUP", "server-agent"),
-			ConsumerPrefix: stringEnv("AUTO_REDIS_CONSUMER_PREFIX", "server-agent"),
+			Addr:              stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
+			Password:          os.Getenv("AUTO_REDIS_PASSWORD"),
+			DB:                redisDB,
+			Partitions:        partitions,
+			Group:             stringEnv("AUTO_REDIS_GROUP", "server-agent"),
+			ConsumerPrefix:    stringEnv("AUTO_REDIS_CONSUMER_PREFIX", "server-agent"),
+			InstanceID:        os.Getenv("AUTO_REDIS_INSTANCE_ID"),
+			LeaseTTL:          leaseTTL,
+			PendingIdle:       pendingIdle,
+			PendingClaimCount: int64(pendingClaimCount),
+			OwnershipRetry:    ownershipRetry,
 		}, log)
 		if err != nil {
 			log.Error("failed to configure redis streams runtime", "err", err)
@@ -165,11 +190,13 @@ func main() {
 		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
 	)
 	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
+	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log)
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
+	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
 
 	// --- HTTP mux ---
@@ -179,6 +206,8 @@ func main() {
 	mux.Handle("/tasks/", taskHandler)
 	mux.Handle("/workflows", workflowHandler)
 	mux.Handle("/workflows/", workflowHandler)
+	mux.Handle("/events", eventPlaneHandler)
+	mux.Handle("/events/", eventPlaneHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -205,6 +234,18 @@ func intEnv(key string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
+}
+
+func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, err
 	}

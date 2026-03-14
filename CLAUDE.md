@@ -5,7 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## GUARDRAIL
 
 - Load skill `coder` when beginning to write code.
-- use some usefull serena tool if needed
+- use some usefull serena tool:
+`search_for_pattern`
+`find_symbol`
+`find_referencing_symbols`
+`get_symbols_overview`
+`insert_after_symbol`
+`insert_before_symbol`
+`rename_symbol`
+`replace_symbol_body`
 
 ## Architecture
 

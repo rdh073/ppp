@@ -46,7 +46,12 @@ func (u *EventIngestionUseCase) IngestNotification(
 ) error {
 	kind := domain.EventKind(method)
 	if !kind.IsDeviceOriginated() {
-		u.recordDeadLetter(ctx, domain.NewDeadLetterRecord(nil, rawParams, fmt.Sprintf("unexpected method %q", method), "ingestion"))
+		event := domain.Event{
+			Kind:     kind,
+			DeviceID: deviceID,
+			Payload:  rawParams,
+		}
+		u.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&event, rawParams, fmt.Sprintf("unexpected method %q", method), "ingestion"))
 		return fmt.Errorf("IngestNotification: unexpected method %q", method)
 	}
 

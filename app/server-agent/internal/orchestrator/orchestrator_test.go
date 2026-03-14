@@ -142,10 +142,12 @@ func newOrchWithEventStore(
 }
 
 type fakeEmittedEventBus struct {
-	accepted  []domain.AcceptedEventRecord
-	wakeups   []domain.Event
-	acceptErr error
-	wakeupErr error
+	accepted        []domain.AcceptedEventRecord
+	wakeups         []domain.Event
+	acceptErr       error
+	wakeupErr       error
+	wakeupErrAtCall int
+	wakeupCallCount int
 }
 
 func (b *fakeEmittedEventBus) PublishAccepted(_ context.Context, record domain.AcceptedEventRecord) error {
@@ -154,8 +156,90 @@ func (b *fakeEmittedEventBus) PublishAccepted(_ context.Context, record domain.A
 }
 
 func (b *fakeEmittedEventBus) PublishWakeup(_ context.Context, event domain.Event) error {
+	b.wakeupCallCount++
 	b.wakeups = append(b.wakeups, event)
+	if b.wakeupErrAtCall > 0 {
+		if b.wakeupCallCount == b.wakeupErrAtCall {
+			return b.wakeupErr
+		}
+		return nil
+	}
 	return b.wakeupErr
+}
+
+type multiEmitHandler struct{}
+
+func (h *multiEmitHandler) Run(_ context.Context, input workflow.NodeInput) (workflow.NodeOutput, error) {
+	switch input.Event.ID {
+	case "ev-multi-start":
+		return workflow.NodeOutput{
+			Status: workflow.NodeStatusPending,
+			WaitingFor: []domain.EventKind{
+				domain.EventKindToolResult,
+			},
+			EmittedEvents: []domain.Event{
+				{
+					ID:         "ev-multi-1",
+					Kind:       domain.EventKindToolResult,
+					DeviceID:   input.State.DeviceID,
+					OccurredAt: time.Now(),
+					Payload:    json.RawMessage(`{"step":1}`),
+				},
+				{
+					ID:         "ev-multi-2",
+					Kind:       domain.EventKindToolResult,
+					DeviceID:   input.State.DeviceID,
+					OccurredAt: time.Now(),
+					Payload:    json.RawMessage(`{"step":2}`),
+				},
+			},
+		}, nil
+	case "ev-multi-1":
+		return workflow.NodeOutput{
+			Status: workflow.NodeStatusPending,
+			WaitingFor: []domain.EventKind{
+				domain.EventKindToolResult,
+			},
+			Artifacts: map[string]string{
+				"first_seen": "true",
+			},
+		}, nil
+	case "ev-multi-2":
+		return workflow.NodeOutput{
+			Done: true,
+			Artifacts: map[string]string{
+				"second_seen":  "true",
+				"goal_reached": "true",
+			},
+		}, nil
+	default:
+		return workflow.NodeOutput{Status: workflow.NodeStatusSuccess}, nil
+	}
+}
+
+type wrongDeviceEmitHandler struct{}
+
+func (h *wrongDeviceEmitHandler) Run(_ context.Context, input workflow.NodeInput) (workflow.NodeOutput, error) {
+	return workflow.NodeOutput{
+		Status: workflow.NodeStatusPending,
+		WaitingFor: []domain.EventKind{
+			domain.EventKindToolResult,
+		},
+		EmittedEvents: []domain.Event{{
+			ID:         "ev-wrong-device",
+			Kind:       domain.EventKindToolResult,
+			DeviceID:   "other-device",
+			OccurredAt: time.Now(),
+			Payload:    json.RawMessage(`{"step":"bad"}`),
+		}},
+	}, nil
+}
+
+func newMultiEmitRunner(handler workflow.NodeHandler) *workflow.Runner {
+	return workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
+		domain.NodeKindObserve:  handler,
+		domain.NodeKindTerminal: &fakeNodeHandler{done: true},
+	}, seededDefStore(), workflow.DefaultWorkflowName)
 }
 
 // --- tests ---
@@ -646,6 +730,194 @@ func TestProcessAcceptedEvent_LocalIdentityWorkflow_FallsBackInlineWhenEmittedWa
 	}
 	if len(bus.wakeups) != 4 {
 		t.Fatalf("expected wakeup publish attempts for each tool.result, got %d", len(bus.wakeups))
+	}
+}
+
+func TestProcessEvent_MultipleEmittedEvents_RunInlineInOrder(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+
+	task := &domain.Task{
+		ID:             "task-multi-inline",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-multi-inline",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newMultiEmitRunner(&multiEmitHandler{}), tasks, states, events)
+	event := domain.Event{
+		ID:         "ev-multi-start",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	finalTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Get task: %v", err)
+	}
+	if finalTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task, got %s", finalTask.Status)
+	}
+
+	finalState, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("Get state: %v", err)
+	}
+	if finalState.CurrentNode != domain.NodeKindTerminal {
+		t.Fatalf("expected terminal state, got %s", finalState.CurrentNode)
+	}
+	if finalState.Artifacts["first_seen"] != "true" || finalState.Artifacts["second_seen"] != "true" {
+		t.Fatalf("expected both emitted events to be drained in order, got artifacts=%v", finalState.Artifacts)
+	}
+
+	accepted, err := events.ListAccepted(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccepted: %v", err)
+	}
+	emittedCount := 0
+	for _, record := range accepted {
+		if record.Event.ID == "ev-multi-1" || record.Event.ID == "ev-multi-2" {
+			emittedCount++
+		}
+	}
+	if emittedCount != 2 {
+		t.Fatalf("expected both emitted events accepted, got %d", emittedCount)
+	}
+}
+
+func TestProcessEvent_MultipleEmittedEvents_ExternalBusPublishesInOrder(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+	bus := &fakeEmittedEventBus{}
+
+	task := &domain.Task{
+		ID:             "task-multi-bus",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-multi-bus",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newMultiEmitRunner(&multiEmitHandler{}), tasks, states, events)
+	orch.SetEmittedEventPublisher(bus)
+	event := domain.Event{
+		ID:         "ev-multi-start",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+	if len(bus.wakeups) != 2 || bus.wakeups[0].ID != "ev-multi-1" || bus.wakeups[1].ID != "ev-multi-2" {
+		t.Fatalf("expected emitted wakeups in order, got %#v", bus.wakeups)
+	}
+
+	if err := orch.ProcessAcceptedEvent(context.Background(), bus.wakeups[0]); err != nil {
+		t.Fatalf("ProcessAcceptedEvent first wakeup: %v", err)
+	}
+	stateAfterFirst, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("Get state after first wakeup: %v", err)
+	}
+	if stateAfterFirst.Artifacts["first_seen"] != "true" || stateAfterFirst.CurrentNode == domain.NodeKindTerminal {
+		t.Fatalf("expected first wakeup to advance partially, got state=%+v", stateAfterFirst)
+	}
+
+	if err := orch.ProcessAcceptedEvent(context.Background(), bus.wakeups[1]); err != nil {
+		t.Fatalf("ProcessAcceptedEvent second wakeup: %v", err)
+	}
+	finalTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Get final task: %v", err)
+	}
+	if finalTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task, got %s", finalTask.Status)
+	}
+}
+
+func TestProcessEvent_MultipleEmittedEvents_FailsClosedAfterPartialWakeupPublish(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+	bus := &fakeEmittedEventBus{
+		wakeupErr:       errors.New("redis unavailable"),
+		wakeupErrAtCall: 2,
+	}
+
+	task := &domain.Task{
+		ID:             "task-multi-partial-fail",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-multi-partial-fail",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newMultiEmitRunner(&multiEmitHandler{}), tasks, states, events)
+	orch.SetEmittedEventPublisher(bus)
+	event := domain.Event{
+		ID:         "ev-multi-start",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	err := orch.ProcessEvent(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected partial wakeup publish to fail closed")
+	}
+	if len(bus.wakeups) != 2 {
+		t.Fatalf("expected two wakeup publish attempts, got %d", len(bus.wakeups))
+	}
+	deadLetters, deadErr := events.ListDeadLetters(context.Background())
+	if deadErr != nil {
+		t.Fatalf("ListDeadLetters: %v", deadErr)
+	}
+	if len(deadLetters) == 0 {
+		t.Fatal("expected dead letter for partial wakeup publish failure")
+	}
+}
+
+func TestProcessEvent_EmittedEventWrongDevice_FailsClosed(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+
+	task := &domain.Task{
+		ID:             "task-wrong-device",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-right-device",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newMultiEmitRunner(&wrongDeviceEmitHandler{}), tasks, states, events)
+	event := domain.Event{
+		ID:         "ev-wrong-device-start",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err == nil {
+		t.Fatal("expected wrong-device emitted event to fail")
 	}
 }
 

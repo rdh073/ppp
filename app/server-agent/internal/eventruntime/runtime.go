@@ -21,6 +21,7 @@ type AcceptedEventProcessor interface {
 // processes them inline or publishes them to an external wakeup bus.
 type Runtime interface {
 	ProcessEvent(ctx context.Context, e domain.Event) error
+	ReplayAcceptedEvent(ctx context.Context, e domain.Event) error
 	RecordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error
 	Start(ctx context.Context) error
 }
@@ -60,6 +61,10 @@ func (r *InlineRuntime) ProcessEvent(ctx context.Context, e domain.Event) error 
 	default:
 		return r.processor.ProcessAcceptedEvent(ctx, e)
 	}
+}
+
+func (r *InlineRuntime) ReplayAcceptedEvent(ctx context.Context, e domain.Event) error {
+	return r.processor.ProcessAcceptedEvent(ctx, e)
 }
 
 func (r *InlineRuntime) RecordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error {
@@ -112,6 +117,15 @@ func (r *QueuedRuntime) ProcessEvent(ctx context.Context, e domain.Event) error 
 	}
 	if err := r.bus.PublishWakeup(ctx, e); err != nil {
 		r.log.Warn("publish workflow wakeup failed; processing inline",
+			"eventId", e.ID, "deviceId", e.DeviceID, "err", err)
+		return r.processor.ProcessAcceptedEvent(ctx, e)
+	}
+	return nil
+}
+
+func (r *QueuedRuntime) ReplayAcceptedEvent(ctx context.Context, e domain.Event) error {
+	if err := r.bus.PublishWakeup(ctx, e); err != nil {
+		r.log.Warn("publish workflow wakeup replay failed; processing inline",
 			"eventId", e.ID, "deviceId", e.DeviceID, "err", err)
 		return r.processor.ProcessAcceptedEvent(ctx, e)
 	}

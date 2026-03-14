@@ -313,7 +313,7 @@ Remaining note:
 
 ### Phase 6: Redis Streams Scale-Out
 
-Status: in progress
+Status: completed
 
 Goal:
 
@@ -324,20 +324,24 @@ Implemented in this slice:
 - explicit event runtime boundary added around event acceptance and dispatch
 - `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted`
 - wakeups are partitioned by `deviceId` into `workflow.wakeup.pNN`
-- one worker goroutine per partition consumes from Redis consumer groups using deterministic consumer names
+- one worker goroutine per partition consumes from Redis consumer groups
+- multi-process partition ownership is guarded by Redis lease keys `workflow.wakeup.pNN.owner`
+- each partition worker renews its lease while active and backs off when ownership is held by another instance
+- each partition worker first drains its own pending messages, then claims idle pending work with `XAUTOCLAIM`, then reads new messages
 - internal emitted events such as `tool.result` now publish to the same wakeup bus instead of continuing inline when publication succeeds
+- accepted events and dead letters now have explicit control-plane inspection and replay routes under `/events/*`
+- accepted-event replay respects runtime mode: inline processing in dev mode, wakeup requeue in `redis-streams` mode
+- dead-letter replay routes ingestion failures back through `EventIngestionUseCase` and orchestrator failures back through accepted-event replay
+- multiple emitted internal events from one node step are now accepted and handled in slice order instead of silently dropping earlier entries
+- emitted internal events must stay on the current `deviceId` lane; mismatched-device emitted events fail closed
+- in `redis-streams` mode, ordered wakeup publication falls back inline only if no prior wakeup in the same emitted batch has already been published; otherwise orchestration fails closed to avoid reordering
 - `inline` remains the explicit development fallback mode
-- if stream publication fails after durable acceptance, runtime falls back to inline processing to preserve correctness
+- ingress accepted events and accepted-event replay still fall back inline when wakeup publication fails after durable acceptance
 
 Required end state:
 
-- `events.accepted`, `workflow.wakeup`, and `events.deadletter` have real producers and consumers
+- `events.accepted`, `workflow.wakeup`, and `events.deadletter` have real producers plus explicit worker or operator replay paths
 - any in-process pub/sub fallback is explicit dev-only mode, not dead parallel code
-
-Remaining gap before Phase 6 can be called done:
-
-- current worker topology is single-process partition workers, not multi-process partition ownership
-- external bus handling currently assumes one emitted internal event per node step; multi-emission steps fail closed and need a deliberate design before new nodes rely on them
 
 ### Phase 7: Operational Hardening
 
@@ -350,7 +354,7 @@ Goal:
 Required end state:
 
 - dashboard coverage for lane health, ingest lag, retries, DLQ growth, and tool-call latency
-- operator replay tooling exists for dead-letter events
+- replay tooling remains observable and safe under failure and load
 
 ## Continuity Protocol
 
@@ -393,8 +397,8 @@ A phase is done only if all are true:
 
 ## Immediate Next Action
 
-Continue Phase 6:
+Start Phase 7:
 
-1. externalize internal emitted events such as `tool.result` without double execution
-2. harden Redis worker restart and pending-message recovery beyond single-process deterministic consumer names
-3. preserve the same per-device ordering guarantees when multiple server processes share partitions
+1. add pagination/filtering around `/events/accepted` and `/events/deadletters` before operator volume grows
+2. add metrics for wakeup publish fallback, lease loss, dead-letter replay, and replay outcomes
+3. decide whether `events.accepted` should remain an audit mirror or gain a dedicated downstream consumer

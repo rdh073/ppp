@@ -1014,14 +1014,22 @@ Workspace state at phase end:
 
 Current implementation status:
 
-- partially implemented in the current codebase
+- implemented in the current codebase for the current phase scope
 - ingress accepted events can run through `AUTO_EVENT_RUNTIME=redis-streams`
 - accepted ingress events publish to `events.accepted`
 - wakeups publish to partitioned Redis Streams named `workflow.wakeup.pNN`
-- one worker goroutine per partition consumes with Redis consumer groups and deterministic consumer names
+- one worker goroutine per partition consumes with Redis consumer groups
+- partition ownership is coordinated across processes through Redis lease keys `workflow.wakeup.pNN.owner`
+- each worker renews its lease while active, drains its own pending entries first, then claims idle pending entries with `XAUTOCLAIM`, then reads new entries
 - internal emitted events such as `tool.result` also publish to the same wakeup streams when external runtime mode is enabled
+- accepted events and dead letters have explicit operator-facing inspection and replay routes under `/events/*`
+- accepted-event replay uses the current runtime mode instead of re-accepting duplicates
+- dead-letter replay routes ingestion failures back through notification ingestion and orchestrator failures back through accepted-event replay
+- node steps may emit more than one internal event; the orchestrator accepts and drains or publishes them in slice order
+- emitted internal events are constrained to the current `deviceId` lane; mismatches fail closed
+- in `redis-streams` mode, ordered wakeup publication may fall back inline only before any wakeup in that emitted batch has been published; later failures fail closed to avoid reordering
 - `AUTO_EVENT_RUNTIME=inline` remains the explicit development mode
-- current limitation: the external bus path assumes one emitted internal event per node step and fails closed if a future node emits more than one
+- current limitation: `/events/*` currently lists all records without pagination or filtering
 
 ### 16.9 Phase 7: Operational Hardening
 

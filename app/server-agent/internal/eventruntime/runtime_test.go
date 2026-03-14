@@ -165,3 +165,50 @@ func TestQueuedRuntime_RecordDeadLetter_PersistsAndPublishes(t *testing.T) {
 		t.Fatalf("expected one published dead letter, got %d", len(bus.deadLetters))
 	}
 }
+
+func TestInlineRuntime_ReplayAcceptedEvent_ProcessesInline(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	processor := &recordingProcessor{}
+	runtime := eventruntime.NewInlineRuntime(events, processor, newLog())
+
+	event := newEvent("dev-inline-replay", 4)
+	if err := runtime.ReplayAcceptedEvent(context.Background(), event); err != nil {
+		t.Fatalf("ReplayAcceptedEvent: %v", err)
+	}
+	if len(processor.events) != 1 || processor.events[0].ID != event.ID {
+		t.Fatalf("expected replayed event to be processed inline, got %#v", processor.events)
+	}
+}
+
+func TestQueuedRuntime_ReplayAcceptedEvent_PublishesWakeup(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	processor := &recordingProcessor{}
+	bus := &fakeBus{}
+	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog())
+
+	event := newEvent("dev-queued-replay", 5)
+	if err := runtime.ReplayAcceptedEvent(context.Background(), event); err != nil {
+		t.Fatalf("ReplayAcceptedEvent: %v", err)
+	}
+	if len(bus.wakeups) != 1 || bus.wakeups[0].ID != event.ID {
+		t.Fatalf("expected wakeup replay publish, got %#v", bus.wakeups)
+	}
+	if len(processor.events) != 0 {
+		t.Fatalf("expected no inline replay processing, got %#v", processor.events)
+	}
+}
+
+func TestQueuedRuntime_ReplayAcceptedEvent_FallsBackInline(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	processor := &recordingProcessor{}
+	bus := &fakeBus{wakeupErr: errors.New("redis unavailable")}
+	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog())
+
+	event := newEvent("dev-queued-inline-replay", 6)
+	if err := runtime.ReplayAcceptedEvent(context.Background(), event); err != nil {
+		t.Fatalf("ReplayAcceptedEvent: %v", err)
+	}
+	if len(processor.events) != 1 || processor.events[0].ID != event.ID {
+		t.Fatalf("expected inline replay fallback, got %#v", processor.events)
+	}
+}
