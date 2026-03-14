@@ -274,6 +274,83 @@ func TestMemoryEventPlaneStore_AcceptAndDeadLetter(t *testing.T) {
 	}
 }
 
+func TestMemoryEventPlaneStore_QueryAccepted_CursorPagination(t *testing.T) {
+	s := store.NewMemoryEventPlaneStore()
+	ctx := context.Background()
+
+	for idx, event := range []domain.Event{
+		{ID: "mem-query-1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-mem-query"},
+		{ID: "mem-query-2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-mem-query", SeqNo: 1},
+		{ID: "mem-query-3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-mem-query", SeqNo: 2},
+	} {
+		if _, err := s.Accept(ctx, event); err != nil {
+			t.Fatalf("Accept(%s): %v", event.ID, err)
+		}
+		if idx < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	page1, err := s.QueryAccepted(ctx, store.AcceptedEventListQuery{
+		Order: store.EventListOrderDesc,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("QueryAccepted page1: %v", err)
+	}
+	if !page1.HasMore || page1.NextCursor == "" {
+		t.Fatalf("expected next cursor, got %+v", page1)
+	}
+	if len(page1.Items) != 2 || page1.Items[0].Event.ID != "mem-query-3" || page1.Items[1].Event.ID != "mem-query-2" {
+		t.Fatalf("unexpected first page: %#v", page1.Items)
+	}
+
+	page2, err := s.QueryAccepted(ctx, store.AcceptedEventListQuery{
+		Order:  store.EventListOrderDesc,
+		Limit:  2,
+		Cursor: page1.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("QueryAccepted page2: %v", err)
+	}
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("expected terminal page, got %+v", page2)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Event.ID != "mem-query-1" {
+		t.Fatalf("unexpected second page: %#v", page2.Items)
+	}
+}
+
+func TestMemoryEventPlaneStore_QueryDeadLetters_TimeRange(t *testing.T) {
+	s := store.NewMemoryEventPlaneStore()
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-10 * time.Minute)
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{ID: "mem-dead-a", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-query"}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "mem-dead-b", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-query"}, nil, "second", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "mem-dead-c", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-query"}, nil, "third", "orchestrator"),
+	}
+	for idx := range records {
+		records[idx].RecordedAt = base.Add(time.Duration(idx) * time.Minute)
+		if err := s.RecordDeadLetter(ctx, records[idx]); err != nil {
+			t.Fatalf("RecordDeadLetter(%s): %v", records[idx].ID, err)
+		}
+	}
+
+	page, err := s.QueryDeadLetters(ctx, store.DeadLetterListQuery{
+		From:  base.Add(30 * time.Second),
+		To:    base.Add(90 * time.Second),
+		Order: store.EventListOrderAsc,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("QueryDeadLetters: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].Reason != "second" {
+		t.Fatalf("unexpected dead-letter query page: %#v", page.Items)
+	}
+}
+
 func TestMemoryCommandOutboxStore_Lifecycle(t *testing.T) {
 	s := store.NewMemoryCommandOutboxStore()
 	ctx := context.Background()

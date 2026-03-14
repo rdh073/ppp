@@ -8,6 +8,7 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 )
 
 // AcceptedEventProcessor runs workflow logic for events that have already
@@ -30,17 +31,24 @@ type InlineRuntime struct {
 	events    store.EventPlaneStore
 	processor AcceptedEventProcessor
 	log       *slog.Logger
+	metrics   *telemetry.Registry
 }
 
 func NewInlineRuntime(
 	events store.EventPlaneStore,
 	processor AcceptedEventProcessor,
 	log *slog.Logger,
+	metrics ...*telemetry.Registry,
 ) *InlineRuntime {
+	registry := telemetry.NewRegistry()
+	if len(metrics) > 0 && metrics[0] != nil {
+		registry = metrics[0]
+	}
 	return &InlineRuntime{
 		events:    events,
 		processor: processor,
 		log:       log,
+		metrics:   registry,
 	}
 }
 
@@ -76,6 +84,7 @@ type QueuedRuntime struct {
 	processor AcceptedEventProcessor
 	bus       Bus
 	log       *slog.Logger
+	metrics   *telemetry.Registry
 }
 
 func NewQueuedRuntime(
@@ -83,12 +92,18 @@ func NewQueuedRuntime(
 	processor AcceptedEventProcessor,
 	bus Bus,
 	log *slog.Logger,
+	metrics ...*telemetry.Registry,
 ) *QueuedRuntime {
+	registry := telemetry.NewRegistry()
+	if len(metrics) > 0 && metrics[0] != nil {
+		registry = metrics[0]
+	}
 	return &QueuedRuntime{
 		events:    events,
 		processor: processor,
 		bus:       bus,
 		log:       log,
+		metrics:   registry,
 	}
 }
 
@@ -116,6 +131,7 @@ func (r *QueuedRuntime) ProcessEvent(ctx context.Context, e domain.Event) error 
 		return r.processor.ProcessAcceptedEvent(ctx, e)
 	}
 	if err := r.bus.PublishWakeup(ctx, e); err != nil {
+		r.metrics.RecordWakeupFallback(telemetry.WakeupFallbackIngress)
 		r.log.Warn("publish workflow wakeup failed; processing inline",
 			"eventId", e.ID, "deviceId", e.DeviceID, "err", err)
 		return r.processor.ProcessAcceptedEvent(ctx, e)
@@ -125,6 +141,7 @@ func (r *QueuedRuntime) ProcessEvent(ctx context.Context, e domain.Event) error 
 
 func (r *QueuedRuntime) ReplayAcceptedEvent(ctx context.Context, e domain.Event) error {
 	if err := r.bus.PublishWakeup(ctx, e); err != nil {
+		r.metrics.RecordWakeupFallback(telemetry.WakeupFallbackAcceptedReplay)
 		r.log.Warn("publish workflow wakeup replay failed; processing inline",
 			"eventId", e.ID, "deviceId", e.DeviceID, "err", err)
 		return r.processor.ProcessAcceptedEvent(ctx, e)

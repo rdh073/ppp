@@ -13,13 +13,18 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 )
 
 const (
+	// acceptedStreamName is an append-only audit mirror for accepted events.
+	// Workflow execution is driven by workflow.wakeup.pNN; no runtime worker
+	// consumes events.accepted in the current design.
 	acceptedStreamName       = "events.accepted"
 	deadLetterStreamName     = "events.deadletter"
 	defaultRedisGroup        = "server-agent"
 	defaultBlockTimeout      = 2 * time.Second
+	defaultQueueDepthPoll    = 2 * time.Second
 	pendingProbeTimeout      = 10 * time.Millisecond
 	defaultLeaseTTL          = 15 * time.Second
 	defaultPendingIdle       = 45 * time.Second
@@ -44,6 +49,8 @@ return 0
 
 // Bus is the external event-bus seam used by the queued runtime.
 type Bus interface {
+	// PublishAccepted mirrors already-accepted events for audit and operator
+	// replay. It is not the workflow execution trigger.
 	PublishAccepted(ctx context.Context, record domain.AcceptedEventRecord) error
 	PublishWakeup(ctx context.Context, event domain.Event) error
 	PublishDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error
@@ -69,6 +76,7 @@ type redisStreamClient interface {
 	Ping(ctx context.Context) error
 	XAdd(ctx context.Context, args *redis.XAddArgs) error
 	XGroupCreateMkStream(ctx context.Context, stream, group, start string) error
+	XInfoGroups(ctx context.Context, stream string) ([]redis.XInfoGroup, error)
 	XReadGroup(ctx context.Context, args *redis.XReadGroupArgs) ([]redis.XStream, error)
 	XAck(ctx context.Context, stream, group string, ids ...string) error
 	XAutoClaim(ctx context.Context, args *redis.XAutoClaimArgs) ([]redis.XMessage, string, error)
@@ -90,6 +98,10 @@ func (c *goRedisClient) XAdd(ctx context.Context, args *redis.XAddArgs) error {
 
 func (c *goRedisClient) XGroupCreateMkStream(ctx context.Context, stream, group, start string) error {
 	return c.client.XGroupCreateMkStream(ctx, stream, group, start).Err()
+}
+
+func (c *goRedisClient) XInfoGroups(ctx context.Context, stream string) ([]redis.XInfoGroup, error) {
+	return c.client.XInfoGroups(ctx, stream).Result()
 }
 
 func (c *goRedisClient) XReadGroup(ctx context.Context, args *redis.XReadGroupArgs) ([]redis.XStream, error) {
@@ -124,9 +136,14 @@ type RedisStreamsBus struct {
 	pendingClaimCount int64
 	ownershipRetry    time.Duration
 	log               *slog.Logger
+	metrics           *telemetry.Registry
 }
 
-func NewRedisStreamsBus(cfg RedisStreamsConfig, log *slog.Logger) (*RedisStreamsBus, error) {
+func NewRedisStreamsBus(
+	cfg RedisStreamsConfig,
+	log *slog.Logger,
+	metrics ...*telemetry.Registry,
+) (*RedisStreamsBus, error) {
 	if strings.TrimSpace(cfg.Addr) == "" {
 		return nil, fmt.Errorf("redis addr is required")
 	}
@@ -135,13 +152,14 @@ func NewRedisStreamsBus(cfg RedisStreamsConfig, log *slog.Logger) (*RedisStreams
 		Password: cfg.Password,
 		DB:       cfg.DB,
 	})
-	return newRedisStreamsBusWithClient(cfg, &goRedisClient{client: client}, log)
+	return newRedisStreamsBusWithClient(cfg, &goRedisClient{client: client}, log, metrics...)
 }
 
 func newRedisStreamsBusWithClient(
 	cfg RedisStreamsConfig,
 	client redisStreamClient,
 	log *slog.Logger,
+	metrics ...*telemetry.Registry,
 ) (*RedisStreamsBus, error) {
 	if cfg.Partitions <= 0 {
 		cfg.Partitions = 8
@@ -171,6 +189,10 @@ func newRedisStreamsBusWithClient(
 	if instanceID == "" {
 		instanceID = defaultInstanceID()
 	}
+	registry := telemetry.NewRegistry()
+	if len(metrics) > 0 && metrics[0] != nil {
+		registry = metrics[0]
+	}
 
 	return &RedisStreamsBus{
 		client:            client,
@@ -184,6 +206,7 @@ func newRedisStreamsBusWithClient(
 		pendingClaimCount: cfg.PendingClaimCount,
 		ownershipRetry:    cfg.OwnershipRetry,
 		log:               log,
+		metrics:           registry,
 	}, nil
 }
 
@@ -256,6 +279,55 @@ func (b *RedisStreamsBus) Start(ctx context.Context, processor AcceptedEventProc
 	for partition := 0; partition < b.partitions; partition++ {
 		go b.runPartitionWorker(ctx, partition, processor)
 	}
+	go b.runQueueDepthSampler(ctx)
+	return nil
+}
+
+func (b *RedisStreamsBus) runQueueDepthSampler(ctx context.Context) {
+	if err := b.sampleWakeupQueueDepth(ctx); err != nil && ctx.Err() == nil {
+		b.log.Warn("sample workflow wakeup queue depth failed", "err", err)
+	}
+
+	ticker := time.NewTicker(defaultQueueDepthPoll)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := b.sampleWakeupQueueDepth(ctx); err != nil && ctx.Err() == nil {
+				b.log.Warn("sample workflow wakeup queue depth failed", "err", err)
+			}
+		}
+	}
+}
+
+func (b *RedisStreamsBus) sampleWakeupQueueDepth(ctx context.Context) error {
+	var total int64
+	for partition := 0; partition < b.partitions; partition++ {
+		stream := b.partitionStream(partition)
+		groups, err := b.client.XInfoGroups(ctx, stream)
+		if err != nil {
+			return fmt.Errorf("xinfo groups for %s: %w", stream, err)
+		}
+		partitionDepth := int64(0)
+		for _, group := range groups {
+			if group.Name != b.group {
+				continue
+			}
+			if group.Lag > 0 {
+				partitionDepth += group.Lag
+			}
+			if group.Pending > 0 {
+				partitionDepth += group.Pending
+			}
+			break
+		}
+		total += partitionDepth
+		b.metrics.SetWakeupPartitionDepth(b.partitionLabel(partition), partitionDepth)
+	}
+	b.metrics.SetWakeupQueueDepth(total)
 	return nil
 }
 
@@ -534,12 +606,14 @@ func (b *RedisStreamsBus) maintainPartitionLease(
 					"err", err,
 				)
 				if time.Since(lastSuccess) >= b.leaseTTL {
+					b.metrics.RecordLeaseLost()
 					signalLeaseLost(lostLease)
 					return
 				}
 				continue
 			}
 			if !owned {
+				b.metrics.RecordLeaseLost()
 				signalLeaseLost(lostLease)
 				return
 			}
@@ -596,6 +670,10 @@ func (b *RedisStreamsBus) wakeupStream(deviceID domain.DeviceID) string {
 
 func (b *RedisStreamsBus) partitionStream(partition int) string {
 	return fmt.Sprintf("workflow.wakeup.p%02d", partition)
+}
+
+func (b *RedisStreamsBus) partitionLabel(partition int) string {
+	return fmt.Sprintf("p%02d", partition)
 }
 
 func (b *RedisStreamsBus) partitionLeaseKey(partition int) string {

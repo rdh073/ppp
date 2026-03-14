@@ -18,6 +18,7 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools"
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
@@ -38,6 +39,7 @@ func main() {
 
 	// --- infrastructure ---
 	reg := registry.New()
+	metricsRegistry := telemetry.NewRegistry()
 	taskStore, err := store.NewFileTaskStore(*dataDir)
 	if err != nil {
 		log.Error("failed to open task store", "dir", *dataDir, "err", err)
@@ -58,7 +60,7 @@ func main() {
 		log.Error("failed to open command outbox store", "dir", *dataDir, "err", err)
 		os.Exit(1)
 	}
-	disp := dispatcher.NewMemoryDispatcher(reg, commandOutbox)
+	disp := dispatcher.NewMemoryDispatcher(reg, commandOutbox, metricsRegistry)
 
 	// --- workflow def store ---
 	var defStore workflow.DefStore
@@ -91,13 +93,14 @@ func main() {
 		domain.NodeKindAct:      nodes.NewActNode(disp),
 		domain.NodeKindVerify:   nodes.NewVerifyNode(),
 		domain.NodeKindResync:   nodes.NewResyncNode(disp),
-		domain.NodeKindToolCall: nodes.NewToolCallNode(toolRegistry),
+		domain.NodeKindToolCall: nodes.NewToolCallNode(toolRegistry, metricsRegistry),
 		domain.NodeKindWait:     nodes.NewWaitNode(),
 		domain.NodeKindTerminal: nodes.NewTerminalNode(),
-	}, defStore, workflow.DefaultWorkflowName)
+	}, defStore, workflow.DefaultWorkflowName, metricsRegistry)
 
 	// --- orchestrator ---
 	orch := orchestrator.New(taskStore, stateStore, runner, log, eventStore)
+	orch.SetOperationalMetrics(metricsRegistry)
 
 	// --- use cases ---
 	recoveryUC := usecase.NewRuntimeRecovery(taskStore, stateStore, log)
@@ -120,7 +123,7 @@ func main() {
 	var runtime eventruntime.Runtime
 	switch runtimeMode {
 	case "inline":
-		runtime = eventruntime.NewInlineRuntime(eventStore, orch, log)
+		runtime = eventruntime.NewInlineRuntime(eventStore, orch, log, metricsRegistry)
 	case "redis-streams":
 		partitions, err := intEnv("AUTO_EVENT_BUS_PARTITIONS", 8)
 		if err != nil {
@@ -164,13 +167,13 @@ func main() {
 			PendingIdle:       pendingIdle,
 			PendingClaimCount: int64(pendingClaimCount),
 			OwnershipRetry:    ownershipRetry,
-		}, log)
+		}, log, metricsRegistry)
 		if err != nil {
 			log.Error("failed to configure redis streams runtime", "err", err)
 			os.Exit(1)
 		}
 		orch.SetEmittedEventPublisher(bus)
-		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log)
+		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log, metricsRegistry)
 	default:
 		log.Error("unsupported AUTO_EVENT_RUNTIME", "mode", runtimeMode)
 		os.Exit(1)
@@ -190,13 +193,14 @@ func main() {
 		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
 	)
 	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
-	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log)
+	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log, metricsRegistry)
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)
+	metricsHandler := handler.NewMetricsHandler(metricsRegistry)
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
 
 	// --- HTTP mux ---
@@ -208,6 +212,7 @@ func main() {
 	mux.Handle("/workflows/", workflowHandler)
 	mux.Handle("/events", eventPlaneHandler)
 	mux.Handle("/events/", eventPlaneHandler)
+	mux.Handle("/metrics", metricsHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

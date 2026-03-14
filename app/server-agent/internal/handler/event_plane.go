@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
@@ -150,10 +151,17 @@ func parseAcceptedEventListQuery(r *http.Request) (usecase.AcceptedEventListQuer
 	if err != nil {
 		return usecase.AcceptedEventListQuery{}, err
 	}
+	from, to, err := parseTimeRange(r)
+	if err != nil {
+		return usecase.AcceptedEventListQuery{}, err
+	}
 	return usecase.AcceptedEventListQuery{
 		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
 		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
+		From:     from,
+		To:       to,
+		Cursor:   strings.TrimSpace(r.URL.Query().Get("cursor")),
 		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
 		Limit:    limit,
 		Offset:   offset,
@@ -165,11 +173,18 @@ func parseDeadLetterListQuery(r *http.Request) (usecase.DeadLetterListQuery, err
 	if err != nil {
 		return usecase.DeadLetterListQuery{}, err
 	}
+	from, to, err := parseTimeRange(r)
+	if err != nil {
+		return usecase.DeadLetterListQuery{}, err
+	}
 	return usecase.DeadLetterListQuery{
 		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
 		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
 		EventID:  strings.TrimSpace(r.URL.Query().Get("eventId")),
+		From:     from,
+		To:       to,
+		Cursor:   strings.TrimSpace(r.URL.Query().Get("cursor")),
 		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
 		Limit:    limit,
 		Offset:   offset,
@@ -198,4 +213,28 @@ func parseIntQueryParam(r *http.Request, key string) (int, error) {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
 	return value, nil
+}
+
+func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
+	from, err := parseTimeQueryParam(r, "from")
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	to, err := parseTimeQueryParam(r, "to")
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return from, to, nil
+}
+
+func parseTimeQueryParam(r *http.Request, key string) (time.Time, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	return value.UTC(), nil
 }

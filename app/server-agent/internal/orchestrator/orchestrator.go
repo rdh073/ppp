@@ -10,6 +10,7 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
@@ -24,12 +25,13 @@ const maxAutoAdvanceSteps = 32
 // DeviceIDs. Calls for the same DeviceID are serialised by a per-device mutex
 // to prevent concurrent node execution on the same workflow instance.
 type Orchestrator struct {
-	tasks  store.TaskStore
-	states store.WorkflowStateStore
-	runner *workflow.Runner
-	events store.EventPlaneStore
-	log    *slog.Logger
-	bus    emittedEventPublisher
+	tasks   store.TaskStore
+	states  store.WorkflowStateStore
+	runner  *workflow.Runner
+	events  store.EventPlaneStore
+	log     *slog.Logger
+	bus     emittedEventPublisher
+	metrics *telemetry.Registry
 
 	// deviceLocks provides per-device serialisation without a global lock.
 	deviceLocks sync.Map // domain.DeviceID → *sync.Mutex
@@ -87,6 +89,18 @@ func (o *Orchestrator) ProcessAcceptedEvent(ctx context.Context, e domain.Event)
 	mu.Lock()
 	defer mu.Unlock()
 
+	if o.metrics != nil {
+		o.metrics.EnterDeviceLane()
+		defer o.metrics.LeaveDeviceLane()
+	}
+	if o.metrics != nil && !e.OccurredAt.IsZero() {
+		source := telemetry.IngestSourceInternal
+		if e.Kind.IsDeviceOriginated() {
+			source = telemetry.IngestSourceDevice
+		}
+		o.metrics.ObserveIngestLag(source, time.Since(e.OccurredAt))
+	}
+
 	tasks, err := o.tasks.ListByDevice(ctx, e.DeviceID)
 	if err != nil {
 		o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&e, nil, fmt.Sprintf("list tasks: %v", err), "orchestrator"))
@@ -120,6 +134,10 @@ func (o *Orchestrator) RecordDeadLetter(ctx context.Context, record domain.DeadL
 
 func (o *Orchestrator) SetEmittedEventPublisher(bus emittedEventPublisher) {
 	o.bus = bus
+}
+
+func (o *Orchestrator) SetOperationalMetrics(metrics *telemetry.Registry) {
+	o.metrics = metrics
 }
 
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
@@ -271,6 +289,9 @@ func (o *Orchestrator) acceptEmittedEvents(
 						wakeupPublishCount,
 						err,
 					)
+				}
+				if o.metrics != nil {
+					o.metrics.RecordWakeupFallback(telemetry.WakeupFallbackEmittedBatch)
 				}
 				busActive = false
 				inlineEvents = append(inlineEvents, emitted)

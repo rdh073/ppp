@@ -103,6 +103,96 @@ func TestEventPlaneHandler_ListAccepted(t *testing.T) {
 	}
 }
 
+func TestEventPlaneHandler_ListAccepted_TimeRange(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	for idx, event := range []domain.Event{
+		{ID: "dev-http-time:1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-http-time"},
+		{ID: "dev-http-time:2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-http-time", SeqNo: 1},
+		{ID: "dev-http-time:3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-http-time", SeqNo: 2},
+	} {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+		if idx < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	records, err := events.ListAccepted(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccepted snapshot: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("expected 3 accepted records, got %d", len(records))
+	}
+
+	from := records[1].AcceptedAt.UTC().Format(time.RFC3339Nano)
+	to := records[2].AcceptedAt.UTC().Format(time.RFC3339Nano)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?from="+from+"&to="+to+"&order=asc&limit=10", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /events/accepted time range: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload usecase.AcceptedEventPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 2 || len(payload.Items) != 2 {
+		t.Fatalf("unexpected accepted time-range payload: %#v", payload)
+	}
+	if payload.Items[0].Event.ID != "dev-http-time:2" || payload.Items[1].Event.ID != "dev-http-time:3" {
+		t.Fatalf("unexpected accepted time-range items: %#v", payload.Items)
+	}
+}
+
+func TestEventPlaneHandler_ListAccepted_CursorPagination(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	for idx, event := range []domain.Event{
+		{ID: "dev-http-cursor:1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-http-cursor"},
+		{ID: "dev-http-cursor:2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-http-cursor", SeqNo: 1},
+		{ID: "dev-http-cursor:3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-http-cursor", SeqNo: 2},
+	} {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+		if idx < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodGet, "/events/accepted?order=desc&limit=2", nil)
+	h.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("GET /events/accepted page1: expected 200, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+	var page1 usecase.AcceptedEventPage
+	if err := json.NewDecoder(rec1.Body).Decode(&page1); err != nil {
+		t.Fatalf("decode first page: %v", err)
+	}
+	if !page1.HasMore || page1.NextCursor == "" {
+		t.Fatalf("expected next cursor, got %#v", page1)
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/events/accepted?order=desc&limit=2&cursor="+page1.NextCursor, nil)
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET /events/accepted page2: expected 200, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	var page2 usecase.AcceptedEventPage
+	if err := json.NewDecoder(rec2.Body).Decode(&page2); err != nil {
+		t.Fatalf("decode second page: %v", err)
+	}
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("expected terminal second page, got %#v", page2)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Event.ID != "dev-http-cursor:1" {
+		t.Fatalf("unexpected second cursor page: %#v", page2.Items)
+	}
+}
+
 func TestEventPlaneHandler_ListAccepted_InvalidLimit_400(t *testing.T) {
 	h, _, _, _ := newEventPlaneHandler(t)
 
@@ -112,6 +202,30 @@ func TestEventPlaneHandler_ListAccepted_InvalidLimit_400(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("GET /events/accepted with invalid limit: expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEventPlaneHandler_ListAccepted_InvalidFrom_400(t *testing.T) {
+	h, _, _, _ := newEventPlaneHandler(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?from=not-a-timestamp", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET /events/accepted with invalid from: expected 400, got %d", rec.Code)
+	}
+}
+
+func TestEventPlaneHandler_ListAccepted_InvalidCursor_400(t *testing.T) {
+	h, _, _, _ := newEventPlaneHandler(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?cursor=not-base64", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET /events/accepted with invalid cursor: expected 400, got %d", rec.Code)
 	}
 }
 
@@ -171,5 +285,40 @@ func TestEventPlaneHandler_ListDeadLetters_FilterBySource(t *testing.T) {
 	}
 	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Reason != "first" {
 		t.Fatalf("unexpected dead-letter payload: %#v", payload)
+	}
+}
+
+func TestEventPlaneHandler_ListDeadLetters_TimeRange(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	base := time.Now().UTC().Add(-5 * time.Minute)
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-http-a", Kind: domain.EventKindToolResult, DeviceID: "dev-http-dead-time"}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-http-b", Kind: domain.EventKindToolResult, DeviceID: "dev-http-dead-time"}, nil, "second", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-http-c", Kind: domain.EventKindToolResult, DeviceID: "dev-http-dead-time"}, nil, "third", "orchestrator"),
+	}
+	records[0].RecordedAt = base
+	records[1].RecordedAt = base.Add(1 * time.Minute)
+	records[2].RecordedAt = base.Add(2 * time.Minute)
+	for _, record := range records {
+		if err := events.RecordDeadLetter(context.Background(), record); err != nil {
+			t.Fatalf("RecordDeadLetter: %v", err)
+		}
+	}
+
+	from := base.Add(30 * time.Second).Format(time.RFC3339Nano)
+	to := base.Add(90 * time.Second).Format(time.RFC3339Nano)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/deadletters?from="+from+"&to="+to+"&order=asc&limit=10", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /events/deadletters time range: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload usecase.DeadLetterPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Reason != "second" {
+		t.Fatalf("unexpected dead-letter time-range payload: %#v", payload)
 	}
 }

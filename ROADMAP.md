@@ -322,7 +322,7 @@ Goal:
 Implemented in this slice:
 
 - explicit event runtime boundary added around event acceptance and dispatch
-- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted`
+- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` as an audit mirror
 - wakeups are partitioned by `deviceId` into `workflow.wakeup.pNN`
 - one worker goroutine per partition consumes from Redis consumer groups
 - multi-process partition ownership is guarded by Redis lease keys `workflow.wakeup.pNN.owner`
@@ -340,7 +340,8 @@ Implemented in this slice:
 
 Required end state:
 
-- `events.accepted`, `workflow.wakeup`, and `events.deadletter` have real producers plus explicit worker or operator replay paths
+- `workflow.wakeup` has real worker consumers
+- `events.accepted` and `events.deadletter` are explicit audit or operator streams with inspection and replay paths
 - any in-process pub/sub fallback is explicit dev-only mode, not dead parallel code
 
 ### Phase 7: Operational Hardening
@@ -356,13 +357,67 @@ Implemented in this slice:
 - `/events/accepted` and `/events/deadletters` now support `limit`, `offset`, and `order`
 - accepted-event list supports exact-match filters: `deviceId`, `kind`, `source`
 - dead-letter list supports exact-match filters: `deviceId`, `kind`, `source`, `eventId`
+- list endpoints now support inclusive `from` and `to` RFC3339 time filters on the event-plane record timestamp
+  - accepted events filter on `acceptedAt`
+  - dead letters filter on `recordedAt`
+- list endpoints now support opaque cursor pagination through `cursor` request param and `nextCursor` response field
+- cursor tokens are keyset-style anchors over record timestamp plus record id, scoped to the current sort order
+- cursor pagination and filtering are now executed through the `EventPlaneStore` contract instead of the use-case layer
 - list endpoints now return pagination metadata: `items`, `total`, `offset`, `limit`, `hasMore`
 - default list limit is `100`; max accepted limit is `500`
+- `/metrics` now exposes Prometheus text output for current operational counters
+- `/metrics` now also exposes:
+  - `autosdk_server_workflow_wakeup_queue_depth` gauge
+  - `autosdk_server_workflow_wakeup_partition_depth{partition=...}` gauge
+  - `autosdk_server_device_lane_active` gauge
+  - `autosdk_server_command_inflight` gauge
+  - `autosdk_server_command_timeout_total{kind=...}` counter
+  - `autosdk_server_event_ingest_lag_seconds` histogram by `source=device|internal`
+  - `autosdk_server_workflow_node_duration_seconds` histogram by `node` and `outcome`
+  - `autosdk_server_tool_call_duration_seconds` histogram by `tool` and `outcome`
+  - `autosdk_server_command_duration_seconds` histogram by `kind` and `outcome`
+- decision locked: `events.accepted` remains an audit mirror, not a second runtime consumer path
+- wakeup publish fallback is counted by path:
+  - `ingress`
+  - `accepted_replay`
+  - `emitted_batch`
+- Redis partition lease loss is counted after ownership has been acquired
+- Redis queue depth is sampled from `XINFO GROUPS` on `workflow.wakeup.pNN` and reported as `lag + pending` for the configured consumer group
+- Redis queue depth is also exposed per partition as `autosdk_server_workflow_wakeup_partition_depth{partition="pNN"}`
+- active device-lane saturation is observed in `orchestrator.ProcessAcceptedEvent`
+- in-flight command saturation is observed in `dispatcher.MemoryDispatcher`
+- accepted-event ingest lag is observed when `ProcessAcceptedEvent` starts after device-lane serialization
+- workflow node duration is observed in `workflow.Runner`
+- tool-call duration is observed in `nodes.ToolCallNode`
+- command duration is observed from `Command.IssuedAt` to dispatch failure or agent response delivery in `dispatcher.MemoryDispatcher`
+- explicit command timeouts are counted in `dispatcher.MemoryDispatcher`; timeout cancellation now also clears inflight tracking instead of waiting for a late response
+- operator-triggered replay is counted by path and outcome:
+  - `accepted`
+  - `dead_letter_ingestion`
+  - `dead_letter_accepted_event`
+  - outcomes: `attempted`, `succeeded`, `failed`
+- current metric names are:
+  - `autosdk_server_wakeup_publish_fallback_total`
+  - `autosdk_server_redis_partition_lease_lost_total`
+  - `autosdk_server_event_replay_total`
+  - `autosdk_server_workflow_wakeup_queue_depth`
+  - `autosdk_server_workflow_wakeup_partition_depth`
+  - `autosdk_server_device_lane_active`
+  - `autosdk_server_command_inflight`
+  - `autosdk_server_command_timeout_total`
+  - `autosdk_server_event_ingest_lag_seconds`
+  - `autosdk_server_workflow_node_duration_seconds`
+  - `autosdk_server_tool_call_duration_seconds`
+  - `autosdk_server_command_duration_seconds`
 
 Required end state:
 
 - dashboard coverage for lane health, ingest lag, retries, DLQ growth, and tool-call latency
+- dashboard coverage now also includes command-plane latency and saturation baselines
 - replay tooling remains observable and safe under failure and load
+- current limitation: queue depth is only sampled in `AUTO_EVENT_RUNTIME=redis-streams`; inline mode remains zero by design
+- current limitation: this slice does not yet expose per-partition lease ownership or explicit command-timeout-rate alerts beyond the raw metrics
+- current limitation: the current file-backed and in-memory event-plane stores own pagination now, but they still scan in-memory snapshot slices linearly
 
 ## Continuity Protocol
 
@@ -407,6 +462,6 @@ A phase is done only if all are true:
 
 Start Phase 7:
 
-1. add metrics for wakeup publish fallback, lease loss, dead-letter replay, and replay outcomes
-2. decide whether `events.accepted` should remain an audit mirror or gain a dedicated downstream consumer
-3. add time-range filtering before event-plane record volume grows further
+1. add alert-oriented rollups for command timeout rate and partition skew or starvation on top of the raw metrics
+2. optimize event-plane store queries further if linear snapshot scans become a bottleneck
+3. keep any future downstream use of `events.accepted` scoped to analytics or integration export rather than workflow control flow

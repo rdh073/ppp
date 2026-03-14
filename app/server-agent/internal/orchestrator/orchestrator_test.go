@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
@@ -34,6 +36,25 @@ type errorNodeHandler struct {
 
 func (h *errorNodeHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
 	return workflow.NodeOutput{}, h.err
+}
+
+type blockingTerminalHandler struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *blockingTerminalHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	<-h.release
+	return workflow.NodeOutput{
+		Done: true,
+		Artifacts: map[string]string{
+			"goal_reached": "true",
+		},
+	}, nil
 }
 
 func seededDefStore() *workflow.MemoryDefStore {
@@ -342,6 +363,89 @@ func TestProcessEvent_DuplicateEventDropped(t *testing.T) {
 	// Second identical event must be dropped.
 	if err := orch.ProcessEvent(ctx, ev); !errors.Is(err, domain.ErrEventDropped) {
 		t.Fatalf("expected dropped error for duplicate event, got: %v", err)
+	}
+}
+
+func TestProcessAcceptedEvent_RecordsIngestLagMetric(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	metrics := telemetry.NewRegistry()
+	orch := newOrch(newFakeRunner(workflow.NodeStatusSuccess), tasks, states)
+	orch.SetOperationalMetrics(metrics)
+
+	event := domain.Event{
+		ID:         "ev-ingest-lag",
+		Kind:       domain.EventKindAccessibilityDisabled,
+		DeviceID:   "dev-lag",
+		SeqNo:      9,
+		OccurredAt: time.Now().Add(-2 * time.Second),
+	}
+
+	if err := orch.ProcessAcceptedEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessAcceptedEvent: %v", err)
+	}
+
+	body := metrics.RenderPrometheus()
+	if !strings.Contains(body, `autosdk_server_event_ingest_lag_seconds_count{source="device"} 1`) {
+		t.Fatalf("expected ingest lag metric, got:\n%s", body)
+	}
+}
+
+func TestProcessAcceptedEvent_TracksActiveDeviceLaneGauge(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	metrics := telemetry.NewRegistry()
+
+	task := &domain.Task{
+		ID:             "task-lane-metric",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-lane-metric",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	handler := &blockingTerminalHandler{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	runner := workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
+		domain.NodeKindObserve: handler,
+	}, seededDefStore(), "default")
+	orch := newOrch(runner, tasks, states)
+	orch.SetOperationalMetrics(metrics)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- orch.ProcessAcceptedEvent(context.Background(), domain.Event{
+			ID:         "ev-lane-metric",
+			Kind:       domain.EventKindAgentOnline,
+			DeviceID:   "dev-lane-metric",
+			OccurredAt: time.Now(),
+		})
+	}()
+
+	select {
+	case <-handler.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for workflow handler entry")
+	}
+	if got := metrics.Snapshot().DeviceLaneActive; got != 1 {
+		t.Fatalf("expected active device lane gauge 1, got %d", got)
+	}
+
+	close(handler.release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ProcessAcceptedEvent: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ProcessAcceptedEvent completion")
+	}
+	if got := metrics.Snapshot().DeviceLaneActive; got != 0 {
+		t.Fatalf("expected active device lane gauge 0 after completion, got %d", got)
 	}
 }
 

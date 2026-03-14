@@ -10,20 +10,25 @@ import (
 // It is safe for concurrent use.
 type inflightTracker struct {
 	mu      sync.Mutex
-	pending map[string]chan domain.CommandResult
+	pending map[string]inflightEntry
+}
+
+type inflightEntry struct {
+	command domain.Command
+	ch      chan domain.CommandResult
 }
 
 func newInflightTracker() *inflightTracker {
-	return &inflightTracker{pending: make(map[string]chan domain.CommandResult)}
+	return &inflightTracker{pending: make(map[string]inflightEntry)}
 }
 
 // register creates a buffered channel for the given command ID and returns it.
 // The channel is buffered so DeliverResponse never blocks even if the caller
 // has already timed out and discarded the channel.
-func (t *inflightTracker) register(id string) <-chan domain.CommandResult {
+func (t *inflightTracker) register(cmd domain.Command) <-chan domain.CommandResult {
 	ch := make(chan domain.CommandResult, 1)
 	t.mu.Lock()
-	t.pending[id] = ch
+	t.pending[cmd.ID] = inflightEntry{command: cmd, ch: ch}
 	t.mu.Unlock()
 	return ch
 }
@@ -31,31 +36,33 @@ func (t *inflightTracker) register(id string) <-chan domain.CommandResult {
 // deliver sends the result to the registered channel and removes the entry.
 // It is a no-op if the channel was already closed or never registered
 // (handles duplicate at-least-once delivery safely).
-func (t *inflightTracker) deliver(result domain.CommandResult) {
+func (t *inflightTracker) deliver(result domain.CommandResult) (domain.Command, bool) {
 	t.mu.Lock()
-	ch, ok := t.pending[result.CommandID]
+	entry, ok := t.pending[result.CommandID]
 	if ok {
 		delete(t.pending, result.CommandID)
 	}
 	t.mu.Unlock()
 
 	if ok {
-		ch <- result
-		close(ch)
+		entry.ch <- result
+		close(entry.ch)
 	}
+	return entry.command, ok
 }
 
 // cancel closes and removes the channel for the given command ID without sending a result.
 // Used for timeout / task cancellation paths.
-func (t *inflightTracker) cancel(id string) {
+func (t *inflightTracker) cancel(id string) (domain.Command, bool) {
 	t.mu.Lock()
-	ch, ok := t.pending[id]
+	entry, ok := t.pending[id]
 	if ok {
 		delete(t.pending, id)
 	}
 	t.mu.Unlock()
 
 	if ok {
-		close(ch)
+		close(entry.ch)
 	}
+	return entry.command, ok
 }

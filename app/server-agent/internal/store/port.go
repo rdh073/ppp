@@ -29,6 +29,8 @@ type WorkflowStateStore interface {
 type EventPlaneStore interface {
 	Accept(ctx context.Context, event domain.Event) (domain.EventAcceptance, error)
 	RecordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error
+	QueryAccepted(ctx context.Context, query AcceptedEventListQuery) (AcceptedEventPage, error)
+	QueryDeadLetters(ctx context.Context, query DeadLetterListQuery) (DeadLetterPage, error)
 	ListAccepted(ctx context.Context) ([]domain.AcceptedEventRecord, error)
 	ListDeadLetters(ctx context.Context) ([]domain.DeadLetterRecord, error)
 }

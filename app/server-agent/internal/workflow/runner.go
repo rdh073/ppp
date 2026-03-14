@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 )
 
 // NodeStatus is the outcome of a node execution.
@@ -53,19 +54,39 @@ type Runner struct {
 	handlers    map[domain.NodeKind]NodeHandler
 	defs        DefStore
 	defaultName string
+	metrics     *telemetry.Registry
 }
 
-func NewRunner(handlers map[domain.NodeKind]NodeHandler, defs DefStore, defaultName string) *Runner {
+func NewRunner(
+	handlers map[domain.NodeKind]NodeHandler,
+	defs DefStore,
+	defaultName string,
+	metrics ...*telemetry.Registry,
+) *Runner {
+	var registry *telemetry.Registry
+	if len(metrics) > 0 {
+		registry = metrics[0]
+	}
 	return &Runner{
 		handlers:    handlers,
 		defs:        defs,
 		defaultName: defaultName,
+		metrics:     registry,
 	}
 }
 
 // Run executes the current node, merges artifacts, resolves the next node via
 // the workflow def, and returns the updated state.
 func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.WorkflowState, done bool, emitted []domain.Event, err error) {
+	startedAt := time.Now()
+	outcome := telemetry.WorkflowNodeOutcomeError
+	defer func() {
+		if r.metrics == nil {
+			return
+		}
+		r.metrics.ObserveWorkflowNode(string(input.State.CurrentNode), outcome, time.Since(startedAt))
+	}()
+
 	h, ok := r.handlers[input.State.CurrentNode]
 	if !ok {
 		return nil, false, nil, fmt.Errorf("no handler for node kind %q", input.State.CurrentNode)
@@ -90,6 +111,7 @@ func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.Wor
 	// Terminal short-circuit.
 	if out.Done {
 		state.CurrentNode = domain.NodeKindTerminal
+		outcome = telemetry.WorkflowNodeOutcomeDone
 		return state, true, out.EmittedEvents, nil
 	}
 
@@ -97,6 +119,7 @@ func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.Wor
 	if out.Status == NodeStatusPending {
 		state.WaitingFor = out.WaitingFor
 		// CurrentNode stays; we'll re-run it when the event arrives.
+		outcome = telemetry.WorkflowNodeOutcomePending
 		return state, false, out.EmittedEvents, nil
 	}
 
@@ -125,6 +148,12 @@ func (r *Runner) Run(ctx context.Context, input NodeInput) (newState *domain.Wor
 	}
 
 	state.CurrentNode = next
+	switch out.Status {
+	case NodeStatusFailure:
+		outcome = telemetry.WorkflowNodeOutcomeFailure
+	default:
+		outcome = telemetry.WorkflowNodeOutcomeSuccess
+	}
 	return state, false, out.EmittedEvents, nil
 }
 

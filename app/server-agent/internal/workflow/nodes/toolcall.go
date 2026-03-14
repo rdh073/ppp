@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
@@ -172,11 +173,16 @@ func (r StaticToolRegistry) Invoke(ctx context.Context, toolName string, params 
 // the ToolRegistry, stores the result as tool_result.
 // Routing (->Decide on success, ->Resync on failure) is handled by the Runner via the def.
 type ToolCallNode struct {
-	tools ToolRegistry
+	tools   ToolRegistry
+	metrics *telemetry.Registry
 }
 
-func NewToolCallNode(tools ToolRegistry) *ToolCallNode {
-	return &ToolCallNode{tools: tools}
+func NewToolCallNode(tools ToolRegistry, metrics ...*telemetry.Registry) *ToolCallNode {
+	var registry *telemetry.Registry
+	if len(metrics) > 0 {
+		registry = metrics[0]
+	}
+	return &ToolCallNode{tools: tools, metrics: registry}
 }
 
 func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workflow.NodeOutput, error) {
@@ -185,6 +191,14 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 		// Nothing queued - report success; def will route to Decide.
 		return workflow.NodeOutput{Status: workflow.NodeStatusSuccess}, nil
 	}
+	startedAt := time.Now()
+	outcome := telemetry.ToolCallOutcomeFailure
+	defer func() {
+		if n.metrics == nil {
+			return
+		}
+		n.metrics.ObserveToolCall(toolName, outcome, time.Since(startedAt))
+	}()
 	optional := input.State.Artifacts["pending_tool_optional"] == "true"
 
 	rawParams := json.RawMessage(input.State.Artifacts["pending_tool_params"])
@@ -194,6 +208,7 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 
 	manifest, ok := n.tools.Manifest(toolName)
 	if !ok {
+		outcome = telemetry.ToolCallOutcomeUnsupported
 		return toolFailure(input, toolName, fmt.Errorf("%w: %s", ErrToolUnsupported, toolName), optional), nil
 	}
 
@@ -206,10 +221,12 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 
 	result, err := n.tools.Invoke(invokeCtx, toolName, rawParams)
 	if err != nil {
+		outcome = classifyToolOutcome(err)
 		return toolFailure(input, toolName, err, optional), nil
 	}
 
 	zero := intPtr(0)
+	outcome = telemetry.ToolCallOutcomeSuccess
 	return workflow.NodeOutput{
 		Status: workflow.NodeStatusSuccess,
 		Artifacts: map[string]string{
@@ -220,6 +237,29 @@ func (n *ToolCallNode) Run(ctx context.Context, input workflow.NodeInput) (workf
 		DeleteArtifacts: []string{"pending_tool", "pending_tool_params", "pending_tool_optional", "tool_error"},
 		SetErrorCount:   zero,
 	}, nil
+}
+
+func classifyToolOutcome(err error) telemetry.ToolCallOutcome {
+	switch {
+	case err == nil:
+		return telemetry.ToolCallOutcomeSuccess
+	case errors.Is(err, context.DeadlineExceeded):
+		return telemetry.ToolCallOutcomeTimeout
+	case errors.Is(err, context.Canceled):
+		return telemetry.ToolCallOutcomeCanceled
+	case errors.Is(err, ErrToolUnsupported):
+		return telemetry.ToolCallOutcomeUnsupported
+	case errors.Is(err, ErrToolDisabled):
+		return telemetry.ToolCallOutcomeDisabled
+	case errors.Is(err, ErrToolInvalidParams):
+		return telemetry.ToolCallOutcomeInvalidParams
+	case errors.Is(err, ErrToolInvalidResult):
+		return telemetry.ToolCallOutcomeInvalidResult
+	case errors.Is(err, ErrToolRetryable):
+		return telemetry.ToolCallOutcomeRetryable
+	default:
+		return telemetry.ToolCallOutcomeFailure
+	}
 }
 
 func toolFailure(input workflow.NodeInput, toolName string, err error, optional bool) workflow.NodeOutput {

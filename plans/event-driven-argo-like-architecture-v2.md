@@ -340,21 +340,21 @@ It is a logical component, not a separate service in phase 1.
 
 Named channels or streams:
 
-- `events.accepted`: accepted external and internal events
-- `workflow.wakeup`: workflow create, resume, or wake triggers emitted by sensors
-- `events.deadletter`: malformed, exhausted, or unrecoverable events
+- `events.accepted`: append-only audit mirror of accepted external and internal events
+- `workflow.wakeup`: workflow create, resume, or wake triggers; this is the execution stream consumed by workers
+- `events.deadletter`: malformed, exhausted, or unrecoverable events kept for operator inspection and replay
 
 Publisher and subscriber rules:
 
 - `Event Plane` publishes `events.accepted` only after durable acceptance
-- `Sensor Engine` subscribes to `events.accepted` and publishes `workflow.wakeup`
+- current implementation publishes `workflow.wakeup` directly after durable acceptance or accepted-event replay; it does not consume `events.accepted` to drive workflow execution
 - `Workflow Engine` subscribes to `workflow.wakeup`
-- recovery subscribers consume from `events.accepted`
-- dead-letter consumers consume from `events.deadletter`
+- `events.accepted` is consumed by operators or future export or analytics integrations, not by the control-flow runtime
+- dead-letter operators consume `events.deadletter` through inspection and replay tooling
 
 Implementation phases:
 
-- phase 1: in-process publish/subscribe after durable inbox append
+- phase 1: in-process event acceptance and wakeup dispatch after durable inbox append
 - phase 2+: Redis Streams consumer groups back the named channels
 
 ### 8.3 Sensor
@@ -525,7 +525,7 @@ Exactly-once across network boundaries is not required and should not be pretend
 
 ### 10.2 Durable Inbox
 
-Accepted inbound events are appended to a durable inbox before they are published to `events.accepted`.
+Accepted inbound events are appended to a durable inbox before they are published to the audit stream `events.accepted`.
 
 Benefits:
 
@@ -727,7 +727,6 @@ sequenceDiagram
   participant G as Gateway
   participant E as Event Plane
   participant B as Event Bus
-  participant S as Sensor Engine
   participant W as Workflow Engine
   participant C as Command Plane
 
@@ -735,8 +734,7 @@ sequenceDiagram
   G->>E: validate, gate, assign identity
   E->>E: dedup + watermark + inbox append
   E->>B: publish events.accepted
-  B->>S: accepted-event subscription
-  S->>B: publish workflow.wakeup
+  E->>B: publish workflow.wakeup
   B->>W: workflow-wakeup subscription
   W->>W: load checkpoint and execute node
   W->>C: emit command outbox record
@@ -754,7 +752,6 @@ sequenceDiagram
   participant G as Gateway
   participant E as Event Plane
   participant B as Event Bus
-  participant S as Sensor Engine
   participant W as Workflow Engine
   participant T as Tool Runtime
 
@@ -762,14 +759,12 @@ sequenceDiagram
   G->>E: validate + registration gate
   E->>E: dedup + watermark + inbox append
   E->>B: publish events.accepted
-  B->>S: accepted-event subscription
-  S->>B: publish workflow.wakeup
+  E->>B: publish workflow.wakeup
   B->>W: workflow-wakeup subscription
   W->>T: invoke pending_tool with params
   T-->>E: internal tool.result event
   E->>B: publish events.accepted
-  B->>S: accepted-event subscription
-  S->>B: publish workflow.wakeup
+  E->>B: publish workflow.wakeup
   B->>W: continue workflow with tool_result
 ```
 
@@ -781,7 +776,6 @@ sequenceDiagram
   participant G as Gateway
   participant E as Event Plane
   participant B as Event Bus
-  participant S as Sensor Engine
   participant R as Recovery Adapter
   participant W as Workflow Engine
 
@@ -789,12 +783,11 @@ sequenceDiagram
   G->>E: validate + registration gate
   E->>E: dedup + watermark + inbox append
   E->>B: publish events.accepted
-  B->>R: recovery subscription
+  E->>R: invoke recovery path
   R->>R: resolve adbSerial and verify android_id
   R-->>E: recovery result event
   E->>B: publish events.accepted
-  B->>S: accepted-event subscription
-  S->>B: publish workflow.wakeup
+  E->>B: publish workflow.wakeup
   B->>W: workflow-wakeup subscription
 ```
 
@@ -1016,7 +1009,7 @@ Current implementation status:
 
 - implemented in the current codebase for the current phase scope
 - ingress accepted events can run through `AUTO_EVENT_RUNTIME=redis-streams`
-- accepted ingress events publish to `events.accepted`
+- accepted ingress events publish to `events.accepted` as an audit mirror
 - wakeups publish to partitioned Redis Streams named `workflow.wakeup.pNN`
 - one worker goroutine per partition consumes with Redis consumer groups
 - partition ownership is coordinated across processes through Redis lease keys `workflow.wakeup.pNN.owner`
@@ -1025,12 +1018,15 @@ Current implementation status:
 - accepted events and dead letters have explicit operator-facing inspection and replay routes under `/events/*`
 - accepted-event replay uses the current runtime mode instead of re-accepting duplicates
 - dead-letter replay routes ingestion failures back through notification ingestion and orchestrator failures back through accepted-event replay
+- `events.accepted` is intentionally not a second workflow trigger queue; worker execution is driven only by `workflow.wakeup.pNN`
 - node steps may emit more than one internal event; the orchestrator accepts and drains or publishes them in slice order
 - emitted internal events are constrained to the current `deviceId` lane; mismatches fail closed
 - in `redis-streams` mode, ordered wakeup publication may fall back inline only before any wakeup in that emitted batch has been published; later failures fail closed to avoid reordering
 - `AUTO_EVENT_RUNTIME=inline` remains the explicit development mode
-- `/events/accepted` and `/events/deadletters` now return paginated envelopes with exact-match filters
-- current limitation: event-plane list APIs do not yet support time-range filtering or cursor pagination
+- `/events/accepted` and `/events/deadletters` now return paginated envelopes with exact-match filters plus inclusive `from` and `to` record-time filtering
+- event-plane list APIs now support opaque cursor pagination through `cursor` and `nextCursor`
+- event-plane pagination and filtering now execute through the `EventPlaneStore` contract
+- current limitation: the current file-backed and in-memory stores still scan in-memory snapshot slices linearly while serving paged queries
 
 ### 16.9 Phase 7: Operational Hardening
 
@@ -1049,6 +1045,44 @@ Workspace state at phase end:
 - operators can trace a task from accepted event to workflow node to device command to final outcome
 - dead letters are inspectable and replayable
 - repeated provider or device failures degrade predictably instead of creating hidden stuck state
+
+Current implementation status:
+
+- implemented in the current codebase for the current Phase 7 slice
+- `/events/accepted` and `/events/deadletters` support pagination metadata plus exact-match filtering
+- list endpoints support inclusive `from` and `to` RFC3339 time filters on the event-plane record timestamp
+  - accepted events filter on `acceptedAt`
+  - dead letters filter on `recordedAt`
+- list endpoints support opaque `cursor` pagination with `nextCursor` responses; cursor tokens anchor on record timestamp plus record id for the current sort order
+- event-plane list queries are now delegated to the `EventPlaneStore` contract instead of being paginated in the use-case layer
+- `/metrics` exposes Prometheus text metrics for:
+  - wakeup publish fallback by path: `ingress`, `accepted_replay`, `emitted_batch`
+  - Redis partition lease loss after ownership
+  - operator replay by path and outcome across `accepted`, `dead_letter_ingestion`, and `dead_letter_accepted_event`
+  - workflow wakeup queue depth as `lag + pending` sampled from `XINFO GROUPS` for the configured consumer group
+  - workflow wakeup per-partition depth gauges for skew and hot-lane visibility
+  - active device-lane saturation gauge from `orchestrator.ProcessAcceptedEvent`
+  - in-flight command saturation gauge from `dispatcher.MemoryDispatcher`
+  - explicit command timeout counter from `dispatcher.MemoryDispatcher`
+  - accepted-event ingest lag histogram by `source=device|internal`
+  - workflow node duration histogram by `node` and `outcome`
+  - tool-call duration histogram by `tool` and `outcome`
+  - command duration histogram by `kind` and `outcome`
+- `events.accepted` remains an audit mirror for operators and future export or analytics use; it is not consumed by the control-flow runtime
+- current metric names are:
+  - `autosdk_server_wakeup_publish_fallback_total`
+  - `autosdk_server_redis_partition_lease_lost_total`
+  - `autosdk_server_event_replay_total`
+  - `autosdk_server_workflow_wakeup_queue_depth`
+  - `autosdk_server_workflow_wakeup_partition_depth`
+  - `autosdk_server_device_lane_active`
+  - `autosdk_server_command_inflight`
+  - `autosdk_server_command_timeout_total`
+  - `autosdk_server_event_ingest_lag_seconds`
+  - `autosdk_server_workflow_node_duration_seconds`
+  - `autosdk_server_tool_call_duration_seconds`
+  - `autosdk_server_command_duration_seconds`
+- current limitations: queue depth is sampled only in `AUTO_EVENT_RUNTIME=redis-streams`, lease-ownership or timeout-rate rollups are still pending, and the current file-backed or in-memory stores still satisfy list queries by linearly scanning snapshot-backed slices
 
 ## 17. Final Recommendation
 

@@ -11,6 +11,7 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/eventruntime"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 )
 
 type recordingProcessor struct {
@@ -122,7 +123,8 @@ func TestQueuedRuntime_FallsBackInlineWhenWakeupPublishFails(t *testing.T) {
 	events := store.NewMemoryEventPlaneStore()
 	processor := &recordingProcessor{}
 	bus := &fakeBus{wakeupErr: errors.New("redis unavailable")}
-	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog())
+	metrics := telemetry.NewRegistry()
+	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog(), metrics)
 
 	event := newEvent("dev-fallback", 3)
 	if err := runtime.ProcessEvent(context.Background(), event); err != nil {
@@ -133,6 +135,9 @@ func TestQueuedRuntime_FallsBackInlineWhenWakeupPublishFails(t *testing.T) {
 	}
 	if len(processor.events) != 1 {
 		t.Fatalf("expected inline fallback processing, got %d", len(processor.events))
+	}
+	if got := metrics.Snapshot().WakeupFallback[telemetry.WakeupFallbackIngress]; got != 1 {
+		t.Fatalf("expected ingress fallback metric 1, got %d", got)
 	}
 }
 
@@ -202,7 +207,8 @@ func TestQueuedRuntime_ReplayAcceptedEvent_FallsBackInline(t *testing.T) {
 	events := store.NewMemoryEventPlaneStore()
 	processor := &recordingProcessor{}
 	bus := &fakeBus{wakeupErr: errors.New("redis unavailable")}
-	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog())
+	metrics := telemetry.NewRegistry()
+	runtime := eventruntime.NewQueuedRuntime(events, processor, bus, newLog(), metrics)
 
 	event := newEvent("dev-queued-inline-replay", 6)
 	if err := runtime.ReplayAcceptedEvent(context.Background(), event); err != nil {
@@ -210,5 +216,8 @@ func TestQueuedRuntime_ReplayAcceptedEvent_FallsBackInline(t *testing.T) {
 	}
 	if len(processor.events) != 1 || processor.events[0].ID != event.ID {
 		t.Fatalf("expected inline replay fallback, got %#v", processor.events)
+	}
+	if got := metrics.Snapshot().WakeupFallback[telemetry.WakeupFallbackAcceptedReplay]; got != 1 {
+		t.Fatalf("expected accepted replay fallback metric 1, got %d", got)
 	}
 }

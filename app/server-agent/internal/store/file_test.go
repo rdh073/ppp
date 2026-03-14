@@ -188,6 +188,75 @@ func TestFileEventPlaneStore_PersistsAcceptedAndDeadLetters(t *testing.T) {
 	}
 }
 
+func TestFileEventPlaneStore_QueryAccepted_AcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := store.NewFileEventPlaneStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileEventPlaneStore: %v", err)
+	}
+	for idx, event := range []domain.Event{
+		{ID: "file-query-1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-file-query"},
+		{ID: "file-query-2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-file-query", SeqNo: 1},
+		{ID: "file-query-3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-file-query", SeqNo: 2},
+	} {
+		if _, err := s.Accept(ctx, event); err != nil {
+			t.Fatalf("Accept(%s): %v", event.ID, err)
+		}
+		if idx < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	reopened, err := store.NewFileEventPlaneStore(dir)
+	if err != nil {
+		t.Fatalf("reopen event plane store: %v", err)
+	}
+	page1, err := reopened.QueryAccepted(ctx, store.AcceptedEventListQuery{
+		Order: store.EventListOrderDesc,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("QueryAccepted page1: %v", err)
+	}
+	if !page1.HasMore || page1.NextCursor == "" {
+		t.Fatalf("expected next cursor, got %+v", page1)
+	}
+	if len(page1.Items) != 2 || page1.Items[0].Event.ID != "file-query-3" || page1.Items[1].Event.ID != "file-query-2" {
+		t.Fatalf("unexpected first page: %#v", page1.Items)
+	}
+
+	page2, err := reopened.QueryAccepted(ctx, store.AcceptedEventListQuery{
+		Order:  store.EventListOrderDesc,
+		Limit:  2,
+		Cursor: page1.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("QueryAccepted page2: %v", err)
+	}
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("expected terminal page, got %+v", page2)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Event.ID != "file-query-1" {
+		t.Fatalf("unexpected second page: %#v", page2.Items)
+	}
+}
+
+func TestFileEventPlaneStore_QueryAccepted_InvalidCursor(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := store.NewFileEventPlaneStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileEventPlaneStore: %v", err)
+	}
+	_, err = s.QueryAccepted(ctx, store.AcceptedEventListQuery{Cursor: "not-base64"})
+	if !errors.Is(err, store.ErrInvalidEventListQuery) {
+		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
+	}
+}
+
 func TestFileCommandOutboxStore_PersistsLifecycleAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

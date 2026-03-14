@@ -9,6 +9,7 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
@@ -55,13 +56,17 @@ func TestEventPlaneControlReplayAccepted_ReplaysStoredEvent(t *testing.T) {
 	}
 
 	replayer := &replayAcceptedRecorder{}
-	uc := usecase.NewEventPlaneControl(events, replayer, &notificationReplayRecorder{}, newLog())
+	metrics := telemetry.NewRegistry()
+	uc := usecase.NewEventPlaneControl(events, replayer, &notificationReplayRecorder{}, newLog(), metrics)
 
 	if err := uc.ReplayAccepted(context.Background(), event.ID); err != nil {
 		t.Fatalf("ReplayAccepted: %v", err)
 	}
 	if len(replayer.events) != 1 || replayer.events[0].ID != event.ID {
 		t.Fatalf("unexpected replayed events: %#v", replayer.events)
+	}
+	if got := metrics.Snapshot().Replay[telemetry.ReplayPathAccepted][telemetry.ReplayOutcomeSucceeded]; got != 1 {
+		t.Fatalf("expected accepted replay success metric 1, got %d", got)
 	}
 }
 
@@ -77,7 +82,8 @@ func TestEventPlaneControlReplayDeadLetter_IngestionRoutesToNotificationReplay(t
 	}
 
 	notifications := &notificationReplayRecorder{}
-	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, notifications, newLog())
+	metrics := telemetry.NewRegistry()
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, notifications, newLog(), metrics)
 
 	if err := uc.ReplayDeadLetter(context.Background(), record.ID); err != nil {
 		t.Fatalf("ReplayDeadLetter: %v", err)
@@ -87,6 +93,9 @@ func TestEventPlaneControlReplayDeadLetter_IngestionRoutesToNotificationReplay(t
 	}
 	if notifications.method != string(domain.EventKindAccessibilityDisabled) {
 		t.Fatalf("unexpected replay method: %q", notifications.method)
+	}
+	if got := metrics.Snapshot().Replay[telemetry.ReplayPathDeadLetterIngestion][telemetry.ReplayOutcomeSucceeded]; got != 1 {
+		t.Fatalf("expected dead-letter ingestion replay success metric 1, got %d", got)
 	}
 }
 
@@ -103,13 +112,17 @@ func TestEventPlaneControlReplayDeadLetter_OrchestratorRoutesToAcceptedReplay(t 
 	}
 
 	replayer := &replayAcceptedRecorder{}
-	uc := usecase.NewEventPlaneControl(events, replayer, &notificationReplayRecorder{}, newLog())
+	metrics := telemetry.NewRegistry()
+	uc := usecase.NewEventPlaneControl(events, replayer, &notificationReplayRecorder{}, newLog(), metrics)
 
 	if err := uc.ReplayDeadLetter(context.Background(), record.ID); err != nil {
 		t.Fatalf("ReplayDeadLetter: %v", err)
 	}
 	if len(replayer.events) != 1 || replayer.events[0].ID != "tool-result:1" {
 		t.Fatalf("unexpected accepted-event replay: %#v", replayer.events)
+	}
+	if got := metrics.Snapshot().Replay[telemetry.ReplayPathDeadLetterAccepted][telemetry.ReplayOutcomeSucceeded]; got != 1 {
+		t.Fatalf("expected dead-letter accepted replay success metric 1, got %d", got)
 	}
 }
 
@@ -191,6 +204,94 @@ func TestEventPlaneControlListAccepted_FiltersAndPaginates(t *testing.T) {
 	}
 }
 
+func TestEventPlaneControlListAccepted_FiltersByAcceptedTimeRange(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	acceptedEvents := []domain.Event{
+		{ID: "accepted-time-1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-time-range"},
+		{ID: "accepted-time-2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-time-range", SeqNo: 1},
+		{ID: "accepted-time-3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-time-range", SeqNo: 2},
+	}
+	for idx, event := range acceptedEvents {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept(%s): %v", event.ID, err)
+		}
+		if idx < len(acceptedEvents)-1 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	acceptedRecords, err := events.ListAccepted(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccepted store snapshot: %v", err)
+	}
+	if len(acceptedRecords) != 3 {
+		t.Fatalf("expected three accepted records, got %d", len(acceptedRecords))
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		From:  acceptedRecords[1].AcceptedAt,
+		To:    acceptedRecords[2].AcceptedAt,
+		Order: usecase.EventListOrderAsc,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListAccepted time range: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("expected two accepted records in range, got %d", page.Total)
+	}
+	if len(page.Items) != 2 || page.Items[0].Event.ID != "accepted-time-2" || page.Items[1].Event.ID != "accepted-time-3" {
+		t.Fatalf("unexpected accepted time-range page: %#v", page.Items)
+	}
+}
+
+func TestEventPlaneControlListAccepted_CursorPagination(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	for idx, event := range []domain.Event{
+		{ID: "accepted-cursor-1", Kind: domain.EventKindAgentOnline, DeviceID: "dev-cursor"},
+		{ID: "accepted-cursor-2", Kind: domain.EventKindScreenChanged, DeviceID: "dev-cursor", SeqNo: 1},
+		{ID: "accepted-cursor-3", Kind: domain.EventKindAccessibilityDisabled, DeviceID: "dev-cursor", SeqNo: 2},
+	} {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept(%s): %v", event.ID, err)
+		}
+		if idx < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page1, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		Order: usecase.EventListOrderDesc,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListAccepted page1: %v", err)
+	}
+	if !page1.HasMore || page1.NextCursor == "" {
+		t.Fatalf("expected next cursor on first page, got %+v", page1)
+	}
+	if len(page1.Items) != 2 || page1.Items[0].Event.ID != "accepted-cursor-3" || page1.Items[1].Event.ID != "accepted-cursor-2" {
+		t.Fatalf("unexpected first cursor page: %#v", page1.Items)
+	}
+
+	page2, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		Order:  usecase.EventListOrderDesc,
+		Limit:  2,
+		Cursor: page1.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("ListAccepted page2: %v", err)
+	}
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("expected terminal cursor page, got %+v", page2)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Event.ID != "accepted-cursor-1" {
+		t.Fatalf("unexpected second cursor page: %#v", page2.Items)
+	}
+}
+
 func TestEventPlaneControlListDeadLetters_FiltersByEventIDAndOrder(t *testing.T) {
 	events := store.NewMemoryEventPlaneStore()
 	records := []domain.DeadLetterRecord{
@@ -234,6 +335,84 @@ func TestEventPlaneControlListDeadLetters_FiltersByEventIDAndOrder(t *testing.T)
 	}
 }
 
+func TestEventPlaneControlListDeadLetters_FiltersByRecordedTimeRange(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	base := time.Now().UTC().Add(-10 * time.Minute)
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-time-a", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-time"}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-time-b", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-time"}, nil, "second", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "event-time-c", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-time"}, nil, "third", "orchestrator"),
+	}
+	records[0].RecordedAt = base
+	records[1].RecordedAt = base.Add(1 * time.Minute)
+	records[2].RecordedAt = base.Add(2 * time.Minute)
+	for _, record := range records {
+		if err := events.RecordDeadLetter(context.Background(), record); err != nil {
+			t.Fatalf("RecordDeadLetter(%s): %v", record.ID, err)
+		}
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page, err := uc.ListDeadLetters(context.Background(), usecase.DeadLetterListQuery{
+		From:  base.Add(30 * time.Second),
+		To:    base.Add(90 * time.Second),
+		Order: usecase.EventListOrderAsc,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListDeadLetters time range: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].Reason != "second" {
+		t.Fatalf("unexpected dead-letter time-range page: %#v", page.Items)
+	}
+}
+
+func TestEventPlaneControlListDeadLetters_CursorPagination(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	base := time.Now().UTC().Add(-20 * time.Minute)
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{ID: "dead-cursor-a", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-cursor"}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "dead-cursor-b", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-cursor"}, nil, "second", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{ID: "dead-cursor-c", Kind: domain.EventKindToolResult, DeviceID: "dev-dead-cursor"}, nil, "third", "orchestrator"),
+	}
+	for idx := range records {
+		records[idx].RecordedAt = base.Add(time.Duration(idx) * time.Minute)
+		if err := events.RecordDeadLetter(context.Background(), records[idx]); err != nil {
+			t.Fatalf("RecordDeadLetter(%s): %v", records[idx].ID, err)
+		}
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page1, err := uc.ListDeadLetters(context.Background(), usecase.DeadLetterListQuery{
+		Order: usecase.EventListOrderAsc,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListDeadLetters page1: %v", err)
+	}
+	if !page1.HasMore || page1.NextCursor == "" {
+		t.Fatalf("expected next cursor on first dead-letter page, got %+v", page1)
+	}
+	if len(page1.Items) != 2 || page1.Items[0].Reason != "first" || page1.Items[1].Reason != "second" {
+		t.Fatalf("unexpected first dead-letter cursor page: %#v", page1.Items)
+	}
+
+	page2, err := uc.ListDeadLetters(context.Background(), usecase.DeadLetterListQuery{
+		Order:  usecase.EventListOrderAsc,
+		Limit:  2,
+		Cursor: page1.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("ListDeadLetters page2: %v", err)
+	}
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("expected terminal dead-letter cursor page, got %+v", page2)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Reason != "third" {
+		t.Fatalf("unexpected second dead-letter cursor page: %#v", page2.Items)
+	}
+}
+
 func TestEventPlaneControlListAccepted_InvalidQuery(t *testing.T) {
 	events := store.NewMemoryEventPlaneStore()
 	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
@@ -246,5 +425,76 @@ func TestEventPlaneControlListAccepted_InvalidQuery(t *testing.T) {
 	}
 	if !errors.Is(err, usecase.ErrInvalidEventListQuery) {
 		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
+	}
+}
+
+func TestEventPlaneControlListAccepted_InvalidTimeRange(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+
+	_, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		From: time.Now().UTC(),
+		To:   time.Now().UTC().Add(-1 * time.Minute),
+	})
+	if err == nil {
+		t.Fatal("expected invalid time range error")
+	}
+	if !errors.Is(err, usecase.ErrInvalidEventListQuery) {
+		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
+	}
+}
+
+func TestEventPlaneControlListAccepted_InvalidCursor(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+
+	_, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		Cursor: "not-base64",
+	})
+	if err == nil {
+		t.Fatal("expected invalid cursor error")
+	}
+	if !errors.Is(err, usecase.ErrInvalidEventListQuery) {
+		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
+	}
+}
+
+func TestEventPlaneControlListAccepted_CursorAndOffsetInvalid(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+
+	_, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		Cursor: "eyJ2IjoxLCJvcmRlciI6ImRlc2MiLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTE0VDAwOjAwOjAwWiIsImlkIjoiZXZlbnQifQ",
+		Offset: 1,
+	})
+	if err == nil {
+		t.Fatal("expected cursor+offset invalid error")
+	}
+	if !errors.Is(err, usecase.ErrInvalidEventListQuery) {
+		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
+	}
+}
+
+func TestEventPlaneControlReplayAccepted_FailureMetrics(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	event := domain.Event{
+		ID:         "dev-accepted-fail:8",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   "dev-accepted-fail",
+		OccurredAt: time.Now().UTC(),
+	}
+	if _, err := events.Accept(context.Background(), event); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	replayer := &replayAcceptedRecorder{err: errors.New("boom")}
+	metrics := telemetry.NewRegistry()
+	uc := usecase.NewEventPlaneControl(events, replayer, &notificationReplayRecorder{}, newLog(), metrics)
+
+	if err := uc.ReplayAccepted(context.Background(), event.ID); err == nil {
+		t.Fatal("expected replay accepted to fail")
+	}
+	if got := metrics.Snapshot().Replay[telemetry.ReplayPathAccepted][telemetry.ReplayOutcomeFailed]; got != 1 {
+		t.Fatalf("expected accepted replay failure metric 1, got %d", got)
 	}
 }

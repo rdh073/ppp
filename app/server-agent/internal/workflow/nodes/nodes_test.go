@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
@@ -206,6 +208,31 @@ func TestToolCallNode_Success_Decide(t *testing.T) {
 	}
 }
 
+func TestToolCallNode_Success_RecordsToolMetric(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "metric_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"status":"ok"}`), nil
+		},
+	})
+	metrics := telemetry.NewRegistry()
+	n := nodes.NewToolCallNode(registry, metrics)
+	state := newState("t-metric", "dev-metric")
+	state.Artifacts["pending_tool"] = "metric_tool"
+
+	if _, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-metric")}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body := metrics.RenderPrometheus()
+	if !strings.Contains(body, `autosdk_server_tool_call_duration_seconds_count{tool="metric_tool",outcome="success"} 1`) {
+		t.Fatalf("expected tool success metric, got:\n%s", body)
+	}
+}
+
 func TestToolCallNode_UnsupportedTool_Resync(t *testing.T) {
 	n := nodes.NewToolCallNode(nodes.DisabledToolRegistry{})
 	state := newState("t-3", "dev-3")
@@ -321,6 +348,32 @@ func TestToolCallNode_Timeout_Resync(t *testing.T) {
 	}
 	if out.Artifacts["resync_reason"] == "" {
 		t.Error("expected resync_reason to be set on timeout")
+	}
+}
+
+func TestToolCallNode_Timeout_RecordsTimeoutMetric(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "metric_timeout_tool",
+			Timeout: 10 * time.Millisecond,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	metrics := telemetry.NewRegistry()
+	n := nodes.NewToolCallNode(registry, metrics)
+	state := newState("t-timeout-metric", "dev-timeout-metric")
+	state.Artifacts["pending_tool"] = "metric_timeout_tool"
+
+	if _, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-timeout-metric")}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body := metrics.RenderPrometheus()
+	if !strings.Contains(body, `autosdk_server_tool_call_duration_seconds_count{tool="metric_timeout_tool",outcome="timeout"} 1`) {
+		t.Fatalf("expected tool timeout metric, got:\n%s", body)
 	}
 }
 

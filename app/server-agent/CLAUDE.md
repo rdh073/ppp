@@ -126,7 +126,7 @@ Notes:
 - Startup recovery bootstraps missing workflow checkpoints for assigned non-terminal tasks and reconciles persisted terminal workflow state back into task status.
 - Bootstrapped checkpoints are tagged with artifacts `recovery_bootstrap=true` and `recovery_bootstrap_reason=startup_missing_checkpoint`.
 - `AUTO_EVENT_RUNTIME=inline` is the explicit development mode: accept event, then process it in-process immediately.
-- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` and partitioned wakeup streams `workflow.wakeup.pNN`, then worker goroutines consume them through Redis consumer groups.
+- `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` as an audit mirror and to partitioned wakeup streams `workflow.wakeup.pNN`; only the wakeup streams are consumed by worker goroutines through Redis consumer groups.
 - In `redis-streams` mode, partition ownership is coordinated with Redis lease keys `workflow.wakeup.pNN.owner`; only the current lease holder drains and processes that lane.
 - Each partition worker recovers in this order: drain its own pending entries, claim idle pending entries with `XAUTOCLAIM`, then read new entries.
 - In `redis-streams` mode, ingress accepted events and accepted-event replay fall back inline if wakeup publication fails after durable acceptance.
@@ -138,13 +138,46 @@ Notes:
   - `GET /events/deadletters`
   - `GET /events/deadletters/{deadLetterId}`
   - `POST /events/deadletters/{deadLetterId}/replay`
+- Operational counters are exposed through:
+- Operational metrics are exposed through:
+  - `GET /metrics`
 - List endpoints support:
   - `limit` (default `100`, max `500`)
   - `offset`
+  - `cursor` (opaque keyset token returned as `nextCursor`)
   - `order=asc|desc` (default `desc`)
+  - `from` and `to` RFC3339 bounds applied to the event-plane record timestamp
   - accepted filters: `deviceId`, `kind`, `source`
   - dead-letter filters: `deviceId`, `kind`, `source`, `eventId`
-- List endpoints return paginated envelopes with `items`, `total`, `offset`, `limit`, and `hasMore`.
+- List endpoints return paginated envelopes with `items`, `total`, `offset`, `limit`, `hasMore`, and optional `nextCursor`.
+- `from` and `to` are inclusive:
+  - `/events/accepted` filters on `acceptedAt`
+  - `/events/deadletters` filters on `recordedAt`
+- `nextCursor` is anchored on the last record timestamp plus record id for the current sort order.
+- event-plane list filtering and pagination now run through `store.EventPlaneStore` query methods.
+- Current Prometheus metric families are:
+  - `autosdk_server_wakeup_publish_fallback_total{path=...}`
+  - `autosdk_server_redis_partition_lease_lost_total`
+  - `autosdk_server_event_replay_total{path=...,outcome=...}`
+  - `autosdk_server_workflow_wakeup_queue_depth`
+  - `autosdk_server_workflow_wakeup_partition_depth{partition=...}`
+  - `autosdk_server_device_lane_active`
+  - `autosdk_server_command_inflight`
+  - `autosdk_server_command_timeout_total{kind=...}`
+  - `autosdk_server_event_ingest_lag_seconds{source=...}`
+  - `autosdk_server_workflow_node_duration_seconds{node=...,outcome=...}`
+  - `autosdk_server_tool_call_duration_seconds{tool=...,outcome=...}`
+  - `autosdk_server_command_duration_seconds{kind=...,outcome=...}`
+- Queue depth is sampled only in `AUTO_EVENT_RUNTIME=redis-streams` and is reported as Redis consumer-group `lag + pending` across `workflow.wakeup.pNN`.
+- Per-partition queue saturation is exposed as `autosdk_server_workflow_wakeup_partition_depth{partition="pNN"}`.
+- Active device-lane saturation is measured in `orchestrator.ProcessAcceptedEvent`.
+- In-flight command saturation is measured in `dispatcher.MemoryDispatcher`.
+- Explicit command timeouts are counted in `dispatcher.MemoryDispatcher`; timeout cleanup removes the command from inflight tracking instead of waiting indefinitely for a response.
+- Accepted-event ingest lag is measured when `orchestrator.ProcessAcceptedEvent` starts after device-lane serialization.
+- Workflow node duration is measured in `workflow.Runner`.
+- Tool-call duration is measured in `nodes.ToolCallNode`.
+- Command duration is measured from `domain.Command.IssuedAt` to dispatch failure or response delivery in `dispatcher.MemoryDispatcher`.
+- `events.accepted` is intentionally not a second workflow trigger queue. It exists as an audit or export stream alongside the durable event-plane store and `/events/accepted` APIs.
 - Accepted-event replay does not re-accept a duplicate event. It replays through the current runtime mode: inline processing for `inline`, wakeup requeue for `redis-streams`, with inline fallback if wakeup publication fails.
 - Dead-letter replay routes `source=ingestion` records back through notification ingestion and routes orchestrator/runtime dead letters back through accepted-event replay.
 - `workflow.NodeOutput.EmittedEvents` contract:
@@ -154,7 +187,7 @@ Notes:
   - `AUTO_EVENT_RUNTIME=redis-streams` publishes wakeups in slice order to the same device partition
   - if wakeup publication fails before any wakeup in the emitted batch has been published, the batch falls back inline
   - if wakeup publication fails after one or more wakeups in the batch have already been published, orchestration fails closed to avoid reordering
-- Current limitation: event-plane list APIs do not yet support time-range filtering or cursor pagination.
+- Current limitation: the current file-backed and in-memory event-plane stores own pagination now, but they still answer list queries by linearly scanning snapshot-backed slices.
 
 ## Extending
 

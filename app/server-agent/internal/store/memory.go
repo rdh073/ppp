@@ -183,6 +183,18 @@ func (s *MemoryEventPlaneStore) RecordDeadLetter(_ context.Context, record domai
 	return nil
 }
 
+func (s *MemoryEventPlaneStore) QueryAccepted(_ context.Context, query AcceptedEventListQuery) (AcceptedEventPage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return queryAcceptedRecords(s.snapshot.Accepted, query)
+}
+
+func (s *MemoryEventPlaneStore) QueryDeadLetters(_ context.Context, query DeadLetterListQuery) (DeadLetterPage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return queryDeadLetterRecords(s.snapshot.DeadLetters, query)
+}
+
 func (s *MemoryEventPlaneStore) ListAccepted(_ context.Context) ([]domain.AcceptedEventRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

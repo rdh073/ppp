@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 )
 
 type fakeAcceptedProcessor struct {
@@ -48,11 +49,13 @@ type fakeRedisStreamClient struct {
 	xreadGroupCalls []*redis.XReadGroupArgs
 	xautoClaimCalls []*redis.XAutoClaimArgs
 	xackCalls       []xackCall
+	xinfoGroupCalls []string
 
-	setNXFn      func(key string, value any, exp time.Duration) (bool, error)
-	evalIntFn    func(script string, keys []string, args ...any) (int64, error)
-	xreadGroupFn func(args *redis.XReadGroupArgs) ([]redis.XStream, error)
-	xautoClaimFn func(args *redis.XAutoClaimArgs) ([]redis.XMessage, string, error)
+	setNXFn       func(key string, value any, exp time.Duration) (bool, error)
+	evalIntFn     func(script string, keys []string, args ...any) (int64, error)
+	xinfoGroupsFn func(stream string) ([]redis.XInfoGroup, error)
+	xreadGroupFn  func(args *redis.XReadGroupArgs) ([]redis.XStream, error)
+	xautoClaimFn  func(args *redis.XAutoClaimArgs) ([]redis.XMessage, string, error)
 }
 
 func (f *fakeRedisStreamClient) Ping(context.Context) error { return nil }
@@ -61,6 +64,14 @@ func (f *fakeRedisStreamClient) XAdd(context.Context, *redis.XAddArgs) error { r
 
 func (f *fakeRedisStreamClient) XGroupCreateMkStream(context.Context, string, string, string) error {
 	return nil
+}
+
+func (f *fakeRedisStreamClient) XInfoGroups(_ context.Context, stream string) ([]redis.XInfoGroup, error) {
+	f.xinfoGroupCalls = append(f.xinfoGroupCalls, stream)
+	if f.xinfoGroupsFn != nil {
+		return f.xinfoGroupsFn(stream)
+	}
+	return nil, nil
 }
 
 func (f *fakeRedisStreamClient) XReadGroup(_ context.Context, args *redis.XReadGroupArgs) ([]redis.XStream, error) {
@@ -316,6 +327,85 @@ func TestRedisStreamsBusHandleMessage_LeavesPendingOnProcessorError(t *testing.T
 	}
 	if len(client.xackCalls) != 0 {
 		t.Fatalf("expected no ack on processor error, got %d", len(client.xackCalls))
+	}
+}
+
+func TestRedisStreamsBusMaintainPartitionLease_RecordsLeaseLost(t *testing.T) {
+	client := &fakeRedisStreamClient{
+		setNXFn: func(_ string, _ any, _ time.Duration) (bool, error) {
+			return false, nil
+		},
+		evalIntFn: func(_ string, _ []string, _ ...any) (int64, error) {
+			return 0, nil
+		},
+	}
+	metrics := telemetry.NewRegistry()
+	bus, err := newRedisStreamsBusWithClient(RedisStreamsConfig{
+		Addr:           "unused",
+		ConsumerPrefix: "worker",
+		InstanceID:     "inst-lease-lost",
+		LeaseTTL:       30 * time.Millisecond,
+	}, client, testLog(), metrics)
+	if err != nil {
+		t.Fatalf("newRedisStreamsBusWithClient: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lostLease := make(chan struct{}, 1)
+	go bus.maintainPartitionLease(ctx, 0, lostLease)
+
+	select {
+	case <-lostLease:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected lost lease signal")
+	}
+
+	if got := metrics.Snapshot().LeaseLost; got != 1 {
+		t.Fatalf("expected lease lost metric 1, got %d", got)
+	}
+}
+
+func TestRedisStreamsBusSampleWakeupQueueDepth_SumsLagAndPending(t *testing.T) {
+	client := &fakeRedisStreamClient{
+		xinfoGroupsFn: func(stream string) ([]redis.XInfoGroup, error) {
+			switch stream {
+			case "workflow.wakeup.p00":
+				return []redis.XInfoGroup{
+					{Name: "other-group", Lag: 999, Pending: 999},
+					{Name: "server-agent", Lag: 4, Pending: 2},
+				}, nil
+			case "workflow.wakeup.p01":
+				return []redis.XInfoGroup{
+					{Name: "server-agent", Lag: -1, Pending: 3},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+	metrics := telemetry.NewRegistry()
+	bus, err := newRedisStreamsBusWithClient(RedisStreamsConfig{
+		Addr:       "unused",
+		Partitions: 2,
+		Group:      "server-agent",
+	}, client, testLog(), metrics)
+	if err != nil {
+		t.Fatalf("newRedisStreamsBusWithClient: %v", err)
+	}
+
+	if err := bus.sampleWakeupQueueDepth(context.Background()); err != nil {
+		t.Fatalf("sampleWakeupQueueDepth: %v", err)
+	}
+	snap := metrics.Snapshot()
+	if got := snap.WorkflowWakeupQueueDepth; got != 9 {
+		t.Fatalf("expected queue depth 9, got %d", got)
+	}
+	if snap.WakeupPartitionDepth["p00"] != 6 || snap.WakeupPartitionDepth["p01"] != 3 {
+		t.Fatalf("unexpected per-partition depth snapshot: %#v", snap.WakeupPartitionDepth)
+	}
+	if len(client.xinfoGroupCalls) != 2 {
+		t.Fatalf("expected 2 XInfoGroups calls, got %d", len(client.xinfoGroupCalls))
 	}
 }
 
