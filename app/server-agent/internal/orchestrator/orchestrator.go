@@ -32,6 +32,8 @@ type Orchestrator struct {
 
 	// deviceLocks provides per-device serialisation without a global lock.
 	deviceLocks sync.Map // domain.DeviceID → *sync.Mutex
+
+	watchdog *DeadlineWatchdog // optional; nil-safe
 }
 
 func New(
@@ -128,6 +130,12 @@ func (o *Orchestrator) SetOperationalMetrics(metrics *telemetry.Registry) {
 	o.metrics = metrics
 }
 
+// SetDeadlineWatchdog wires a DeadlineWatchdog into the orchestrator.
+// Must be called before the orchestrator starts processing events.
+func (o *Orchestrator) SetDeadlineWatchdog(w *DeadlineWatchdog) {
+	o.watchdog = w
+}
+
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
 	state, err := o.states.Get(ctx, task.ID, e.DeviceID)
 	if err != nil {
@@ -153,6 +161,14 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 	newState.UpdatedAt = time.Now()
 	if err := o.states.Save(ctx, newState); err != nil {
 		return fmt.Errorf("checkpoint: %w", err)
+	}
+
+	if o.watchdog != nil {
+		if newState.WaitingExpect != nil {
+			o.watchdog.Track(task.ID, newState.DeviceID, newState.DeadlineAt)
+		} else {
+			o.watchdog.Untrack(task.ID)
+		}
 	}
 
 	if terminal {

@@ -82,6 +82,17 @@ func (e *Engine) ProcessEvent(
 		return e.processWaiting(ctx, state, step, event, task, def)
 	}
 
+	// Tick events are only meaningful inside processWaiting; ignore otherwise.
+	if event.Kind == domain.EventKindWorkflowTick {
+		return nil, false, nil
+	}
+
+	// Retry: trigger was already matched once; re-execute the action on the
+	// first incoming event (any kind) without re-matching the trigger.
+	if state.RetryCount > 0 && step.Action != nil {
+		return e.executeStep(ctx, state, step, task, def)
+	}
+
 	// Check whether this event activates the current step.
 	if !MatchEvent(step.Trigger, event) {
 		return nil, false, nil
@@ -112,11 +123,27 @@ func (e *Engine) executeStep(
 	}
 
 	if step.Action != nil {
-		if err := e.executeAction(ctx, state, task, step.Action); err != nil {
+		result, err := e.executeAction(ctx, state, task, step.Action)
+		if err != nil {
 			return e.handleFailure(state, step)
 		}
+		if step.Expect != nil {
+			// Pre-check: if the action's snapshotAfter already matches the
+			// expect condition, advance immediately without arming WaitingExpect.
+			if SnapshotMatchesExpect(result.Raw, *step.Expect) {
+				return e.advance(ctx, state, step.OnSuccess, def, task)
+			}
+			timeout := parseDuration(step.Timeout, defaultStepTimeout)
+			next := cloneState(state)
+			exp := *step.Expect
+			next.WaitingExpect = &exp
+			next.DeadlineAt = time.Now().Add(timeout)
+			return next, false, nil
+		}
+		return e.advance(ctx, state, step.OnSuccess, def, task)
 	}
 
+	// Action-less expect (unusual but valid: wait for an event without dispatching).
 	if step.Expect != nil {
 		timeout := parseDuration(step.Timeout, defaultStepTimeout)
 		next := cloneState(state)
@@ -138,6 +165,14 @@ func (e *Engine) processWaiting(
 	task *domain.Task,
 	def *domain.WorkflowDef,
 ) (*domain.WorkflowState, bool, error) {
+	// Synthetic tick from the DeadlineWatchdog: check deadline proactively.
+	if event.Kind == domain.EventKindWorkflowTick {
+		if !state.DeadlineAt.IsZero() && time.Now().After(state.DeadlineAt) {
+			return e.handleFailure(state, step)
+		}
+		return nil, false, nil // deadline not yet reached; ignore
+	}
+
 	// Deadline expired: treat as step failure.
 	if !state.DeadlineAt.IsZero() && time.Now().After(state.DeadlineAt) {
 		return e.handleFailure(state, step)
@@ -210,7 +245,8 @@ func (e *Engine) advance(
 		}
 
 		if step.Action != nil {
-			if err := e.executeAction(ctx, next, task, step.Action); err != nil {
+			result, err := e.executeAction(ctx, next, task, step.Action)
+			if err != nil {
 				if next.RetryCount < step.MaxRetry {
 					// Keep current step; retry will fire on the next incoming event.
 					next.RetryCount++
@@ -224,6 +260,11 @@ func (e *Engine) advance(
 			// Action succeeded.
 			next.RetryCount = 0
 			if step.Expect != nil {
+				// Pre-check: if snapshotAfter already satisfies the expect, advance immediately.
+				if SnapshotMatchesExpect(result.Raw, *step.Expect) {
+					next.CurrentStep = step.OnSuccess
+					continue
+				}
 				timeout := parseDuration(step.Timeout, defaultStepTimeout)
 				exp := *step.Expect
 				next.WaitingExpect = &exp
@@ -314,34 +355,35 @@ func (e *Engine) runToolCall(
 }
 
 // executeAction builds a device command from action, dispatches it, and waits
-// for the device response. Returns nil on success, error on failure.
+// for the device response. Returns the CommandResult (including Raw payload) on
+// success, or an empty result with a non-nil error on failure.
 func (e *Engine) executeAction(
 	ctx context.Context,
 	state *domain.WorkflowState,
 	task *domain.Task,
 	action *domain.ActionDef,
-) error {
+) (domain.CommandResult, error) {
 	cmd, err := buildCommand(action, state.DeviceID, task.ID, state.Inputs)
 	if err != nil {
-		return fmt.Errorf("build command: %w", err)
+		return domain.CommandResult{}, fmt.Errorf("build command: %w", err)
 	}
 
 	ch, err := e.disp.Dispatch(ctx, cmd)
 	if err != nil {
-		return fmt.Errorf("dispatch: %w", err)
+		return domain.CommandResult{}, fmt.Errorf("dispatch: %w", err)
 	}
 
 	select {
 	case result := <-ch:
 		if !result.Success {
 			if result.Err != nil {
-				return fmt.Errorf("device error %d: %s", result.Err.Code, result.Err.Message)
+				return domain.CommandResult{}, fmt.Errorf("device error %d: %s", result.Err.Code, result.Err.Message)
 			}
-			return fmt.Errorf("action returned failure")
+			return domain.CommandResult{}, fmt.Errorf("action returned failure")
 		}
-		return nil
+		return result, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return domain.CommandResult{}, ctx.Err()
 	}
 }
 

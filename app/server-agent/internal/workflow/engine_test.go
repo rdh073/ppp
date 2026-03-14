@@ -506,3 +506,260 @@ func (c *capturingInvoker) Invoke(_ context.Context, _ string, params json.RawMe
 	*c.capture = params
 	return c.result, nil
 }
+
+// rawDispatcher returns a success result with a preset Raw payload.
+type rawDispatcher struct{ raw json.RawMessage }
+
+func (r rawDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan domain.CommandResult, error) {
+	ch := make(chan domain.CommandResult, 1)
+	ch <- domain.CommandResult{CommandID: cmd.ID, Success: true, Raw: r.raw}
+	close(ch)
+	return ch, nil
+}
+func (r rawDispatcher) DeliverResponse(domain.CommandResult) {}
+
+// --- new tests for Fix 1: snapshot pre-check ---
+
+// TestEngine_SnapshotPreCheck_Match verifies that when the device.execute
+// response already satisfies the Expect condition, the engine advances
+// immediately without arming WaitingExpect.
+func TestEngine_SnapshotPreCheck_Match(t *testing.T) {
+	raw := json.RawMessage(`{"snapshotAfter":{"packageName":"com.example.app","activityName":"com.example.app.MainActivity","targets":[]}}`)
+	def := &domain.WorkflowDef{
+		Name:  "precheck-match",
+		Entry: "click",
+		Steps: map[string]domain.StepDef{
+			"click": {
+				Trigger: domain.EventMatch{},
+				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
+				Expect: &domain.ExpectDef{
+					Package:     "com.example.app",
+					ClassSuffix: "MainActivity",
+				},
+				Timeout:   "5s",
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, rawDispatcher{raw: raw})
+	state := freshState("t1", "dev1")
+
+	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "precheck-match", task("t1"), anyEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !terminal {
+		t.Error("expected terminal=true: snapshot already matched, should advance immediately")
+	}
+	if newState.WaitingExpect != nil {
+		t.Error("WaitingExpect should NOT be set when snapshot pre-check matches")
+	}
+	if !newState.TerminalSuccess {
+		t.Error("expected TerminalSuccess=true")
+	}
+}
+
+// TestEngine_SnapshotPreCheck_NoMatch verifies that when the snapshot does NOT
+// satisfy the Expect condition, WaitingExpect is armed as usual.
+func TestEngine_SnapshotPreCheck_NoMatch(t *testing.T) {
+	raw := json.RawMessage(`{"snapshotAfter":{"packageName":"com.other.app","activityName":"com.other.app.OtherActivity","targets":[]}}`)
+	def := &domain.WorkflowDef{
+		Name:  "precheck-nomatch",
+		Entry: "click",
+		Steps: map[string]domain.StepDef{
+			"click": {
+				Trigger: domain.EventMatch{},
+				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
+				Expect: &domain.ExpectDef{
+					Package:     "com.example.app",
+					ClassSuffix: "MainActivity",
+				},
+				Timeout:   "5s",
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, rawDispatcher{raw: raw})
+	state := freshState("t1", "dev1")
+
+	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "precheck-nomatch", task("t1"), anyEvent())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if terminal {
+		t.Error("should not be terminal: snapshot did not match, WaitingExpect should be armed")
+	}
+	if newState.WaitingExpect == nil {
+		t.Error("WaitingExpect should be set when snapshot pre-check does not match")
+	}
+}
+
+// TestEngine_TickEvent_ClearsExpiredWaiting verifies that a workflow.tick event
+// with an expired deadline triggers handleFailure inside processWaiting.
+func TestEngine_TickEvent_ClearsExpiredWaiting(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "tick-test",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+				Expect:    &domain.ExpectDef{Kind: "android.ui.observation"},
+				Timeout:   "1ms",
+				MaxRetry:  0,
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	// Arm WaitingExpect.
+	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-test", task("t1"), anyEvent())
+	if mid == nil || mid.WaitingExpect == nil {
+		t.Fatal("expected WaitingExpect to be armed")
+	}
+	mid.DeadlineAt = time.Now().Add(-1 * time.Second) // force expired
+
+	// Inject a tick event.
+	tick := domain.Event{
+		ID:         "tick-1",
+		Kind:       domain.EventKindWorkflowTick,
+		OccurredAt: time.Now(),
+	}
+	final, terminal, err := eng.ProcessEvent(context.Background(), mid, "tick-test", task("t1"), tick)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !terminal {
+		t.Error("expected terminal=true after tick fires expired deadline (MaxRetry=0)")
+	}
+	if final.TerminalSuccess {
+		t.Error("expected TerminalSuccess=false on failure path")
+	}
+}
+
+// TestEngine_TickEvent_NotExpired_Ignored verifies that a tick event with a
+// non-expired deadline is a no-op (returns nil state).
+func TestEngine_TickEvent_NotExpired_Ignored(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "tick-noop",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+				Expect:    &domain.ExpectDef{Kind: "android.ui.observation"},
+				Timeout:   "60s",
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-noop", task("t1"), anyEvent())
+	if mid == nil || mid.WaitingExpect == nil {
+		t.Fatal("expected WaitingExpect to be armed")
+	}
+	// deadline is 60s from now — not expired
+
+	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
+	noState, terminal, err := eng.ProcessEvent(context.Background(), mid, "tick-noop", task("t1"), tick)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if terminal {
+		t.Error("should not be terminal: deadline not expired")
+	}
+	if noState != nil {
+		t.Error("expected nil state: non-expired tick is a no-op")
+	}
+}
+
+// TestEngine_TickEvent_WhenNotWaiting_Ignored verifies that tick events are
+// ignored when the engine is not in WaitingExpect state.
+func TestEngine_TickEvent_WhenNotWaiting_Ignored(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "tick-nowaiting",
+		Entry: "wait_activity",
+		Steps: map[string]domain.StepDef{
+			"wait_activity": {
+				Trigger:   domain.EventMatch{Kind: "android.activity.created"},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
+	noState, terminal, err := eng.ProcessEvent(context.Background(), state, "tick-nowaiting", task("t1"), tick)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if terminal || noState != nil {
+		t.Error("tick event should be ignored when not in WaitingExpect state")
+	}
+}
+
+// TestEngine_RetryReExecute_SkipsTrigger verifies that when RetryCount > 0 and
+// the step has an action, a non-matching event still re-executes the action
+// (trigger is not re-checked during an active retry cycle).
+func TestEngine_RetryReExecute_SkipsTrigger(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "retry-reexecute",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				// Specific trigger: only matches "android.activity.created".
+				Trigger:   domain.EventMatch{Kind: domain.EventKindActivityCreated},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
+				Expect:    &domain.ExpectDef{Kind: "android.activity.created"},
+				Timeout:   "1ms",
+				MaxRetry:  2,
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	// Activate step with matching trigger.
+	activateEv := domain.Event{ID: "ev-1", Kind: domain.EventKindActivityCreated, SeqNo: 1, OccurredAt: time.Now()}
+	mid, _, _ := eng.ProcessEvent(context.Background(), state, "retry-reexecute", task("t1"), activateEv)
+	if mid == nil || mid.WaitingExpect == nil {
+		t.Fatal("expected WaitingExpect to be armed after initial activation")
+	}
+	mid.DeadlineAt = time.Now().Add(-1 * time.Second) // expire deadline
+
+	// Timeout: triggers handleFailure, RetryCount becomes 1.
+	retry1, _, _ := eng.ProcessEvent(context.Background(), mid, "retry-reexecute", task("t1"), anyEvent())
+	if retry1 == nil || retry1.RetryCount != 1 {
+		t.Fatalf("expected RetryCount=1 after first timeout, got state=%v", retry1)
+	}
+	if retry1.WaitingExpect != nil {
+		t.Error("WaitingExpect should be cleared after timeout")
+	}
+
+	// Now send a NON-matching event (kind does not match "android.activity.created").
+	// With retry re-execute, the action should fire despite the trigger mismatch.
+	nonMatch := domain.Event{ID: "ev-2", Kind: "android.screen.changed", SeqNo: 2, OccurredAt: time.Now()}
+	retry1Exec, _, err := eng.ProcessEvent(context.Background(), retry1, "retry-reexecute", task("t1"), nonMatch)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if retry1Exec == nil {
+		t.Fatal("expected non-nil state: retry should re-execute action on any event")
+	}
+	// Action dispatched (successDispatcher), expect kind-only → WaitingExpect re-armed.
+	if retry1Exec.WaitingExpect == nil {
+		t.Error("expected WaitingExpect re-armed after retry re-execute")
+	}
+}

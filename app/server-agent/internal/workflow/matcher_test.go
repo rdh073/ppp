@@ -118,6 +118,116 @@ func TestMatchEvent_TextContains(t *testing.T) {
 	}
 }
 
+// --- SnapshotMatchesExpect tests ---
+
+const snapshotRaw = `{
+	"snapshotAfter": {
+		"packageName": "com.android.settings",
+		"activityName": "com.android.settings.network.PrivateDnsSettings",
+		"targets": [
+			{"text": "Private DNS provider hostname"},
+			{"text": "Save"}
+		]
+	}
+}`
+
+// TestSnapshotMatchesExpect_KindOnly returns false because Kind is not a
+// state property derivable from a snapshot.
+func TestSnapshotMatchesExpect_KindOnly(t *testing.T) {
+	exp := domain.ExpectDef{Kind: "android.activity.created"}
+	if workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("Kind-only ExpectDef should return false (Kind is not a snapshot property)")
+	}
+}
+
+// TestSnapshotMatchesExpect_Empty returns false when no state fields are set.
+func TestSnapshotMatchesExpect_Empty(t *testing.T) {
+	if workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), domain.ExpectDef{}) {
+		t.Error("empty ExpectDef should return false")
+	}
+}
+
+// TestSnapshotMatchesExpect_PackageMatch returns true on exact package match.
+func TestSnapshotMatchesExpect_PackageMatch(t *testing.T) {
+	exp := domain.ExpectDef{Package: "com.android.settings"}
+	if !workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should match on Package")
+	}
+}
+
+// TestSnapshotMatchesExpect_PackageMismatch returns false on wrong package.
+func TestSnapshotMatchesExpect_PackageMismatch(t *testing.T) {
+	exp := domain.ExpectDef{Package: "com.other.app"}
+	if workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should not match on wrong Package")
+	}
+}
+
+// TestSnapshotMatchesExpect_ClassSuffixMatch returns true when activityName ends
+// with the expected suffix.
+func TestSnapshotMatchesExpect_ClassSuffixMatch(t *testing.T) {
+	exp := domain.ExpectDef{ClassSuffix: "PrivateDnsSettings"}
+	if !workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should match on ClassSuffix")
+	}
+}
+
+// TestSnapshotMatchesExpect_ClassSuffixMismatch returns false when suffix does not match.
+func TestSnapshotMatchesExpect_ClassSuffixMismatch(t *testing.T) {
+	exp := domain.ExpectDef{ClassSuffix: "WifiSettings"}
+	if workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should not match on wrong ClassSuffix")
+	}
+}
+
+// TestSnapshotMatchesExpect_TextContains returns true when a target text contains
+// the expected substring.
+func TestSnapshotMatchesExpect_TextContains(t *testing.T) {
+	exp := domain.ExpectDef{TextContains: "Private DNS"}
+	if !workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should match on TextContains")
+	}
+}
+
+// TestSnapshotMatchesExpect_TextContains_NotFound returns false when no target
+// contains the substring.
+func TestSnapshotMatchesExpect_TextContains_NotFound(t *testing.T) {
+	exp := domain.ExpectDef{TextContains: "Bluetooth"}
+	if workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should not match: 'Bluetooth' not in snapshot targets")
+	}
+}
+
+// TestSnapshotMatchesExpect_AllFields_Match returns true when all non-kind
+// fields match.
+func TestSnapshotMatchesExpect_AllFields_Match(t *testing.T) {
+	exp := domain.ExpectDef{
+		Kind:         "android.activity.created", // Kind is ignored by snapshot check
+		Package:      "com.android.settings",
+		ClassSuffix:  "PrivateDnsSettings",
+		TextContains: "Save",
+	}
+	if !workflow.SnapshotMatchesExpect(json.RawMessage(snapshotRaw), exp) {
+		t.Error("should match: all state fields present in snapshot")
+	}
+}
+
+// TestSnapshotMatchesExpect_InvalidJSON returns false on malformed input.
+func TestSnapshotMatchesExpect_InvalidJSON(t *testing.T) {
+	exp := domain.ExpectDef{Package: "com.android.settings"}
+	if workflow.SnapshotMatchesExpect(json.RawMessage(`not-json`), exp) {
+		t.Error("should return false on invalid JSON")
+	}
+}
+
+// TestSnapshotMatchesExpect_EmptyRaw returns false on empty raw payload.
+func TestSnapshotMatchesExpect_EmptyRaw(t *testing.T) {
+	exp := domain.ExpectDef{Package: "com.android.settings"}
+	if workflow.SnapshotMatchesExpect(nil, exp) {
+		t.Error("should return false on nil raw")
+	}
+}
+
 // TestMatchExpect_Basic verifies MatchExpect has identical semantics to MatchEvent.
 func TestMatchExpect_Basic(t *testing.T) {
 	event := makeEvent(androidKind, `{

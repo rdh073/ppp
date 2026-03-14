@@ -36,6 +36,11 @@ const (
 	EventKindNotification          EventKind = "android.notification"
 	EventKindAppForeground         EventKind = "android.app.foreground"
 	EventKindAccessibilityDisabled EventKind = "android.accessibility.disabled"
+
+	// EventKindWorkflowTick is a synthetic internal event injected by the
+	// DeadlineWatchdog when a WaitingExpect step's deadline expires.
+	// It is never persisted or replayed through the event plane store.
+	EventKindWorkflowTick EventKind = "workflow.tick"
 )
 
 // IsDeviceOriginated returns true for events sent proactively by the android-agent.

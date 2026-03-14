@@ -94,6 +94,13 @@ func main() {
 	orch := orchestrator.New(taskStore, stateStore, engine, log, eventStore)
 	orch.SetOperationalMetrics(metricsRegistry)
 
+	// --- deadline watchdog ---
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	defer serverCancel()
+	watchdog := orchestrator.NewDeadlineWatchdog(orch.ProcessAcceptedEvent, 500*time.Millisecond)
+	orch.SetDeadlineWatchdog(watchdog)
+	go watchdog.Run(serverCtx)
+
 	// --- use cases ---
 	recoveryUC := usecase.NewRuntimeRecovery(taskStore, stateStore, log)
 	recoveryReport, err := recoveryUC.Recover(context.Background())

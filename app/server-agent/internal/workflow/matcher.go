@@ -61,6 +61,52 @@ func matchFields(event domain.Event, kind domain.EventKind, pkg, classSuffix, te
 	return true
 }
 
+// SnapshotMatchesExpect checks whether the snapshotAfter embedded in raw (the
+// device.execute response payload) already satisfies exp.
+//
+// Only the state-observable fields (Package, ClassSuffix, TextContains) are
+// evaluated; Kind is an event type, not derivable from a snapshot, so a
+// Kind-only ExpectDef always returns false.
+//
+// Returns false on any parse error or when raw is empty.
+func SnapshotMatchesExpect(raw json.RawMessage, exp domain.ExpectDef) bool {
+	if exp.Package == "" && exp.ClassSuffix == "" && exp.TextContains == "" {
+		return false
+	}
+	var result struct {
+		SnapshotAfter struct {
+			PackageName  string `json:"packageName"`
+			ActivityName string `json:"activityName"`
+			Targets      []struct {
+				Text string `json:"text"`
+			} `json:"targets"`
+		} `json:"snapshotAfter"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return false
+	}
+	s := result.SnapshotAfter
+	if exp.Package != "" && s.PackageName != exp.Package {
+		return false
+	}
+	if exp.ClassSuffix != "" && !strings.HasSuffix(s.ActivityName, exp.ClassSuffix) {
+		return false
+	}
+	if exp.TextContains != "" {
+		found := false
+		for _, t := range s.Targets {
+			if strings.Contains(t.Text, exp.TextContains) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func containsText(p deviceEventPayload, substr string) bool {
 	for _, t := range p.Text {
 		if strings.Contains(t, substr) {
