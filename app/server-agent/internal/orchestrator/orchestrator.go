@@ -12,6 +12,8 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
+const maxAutoAdvanceSteps = 32
+
 // Orchestrator is the central event processor.
 // ProcessEvent is the single entry point: it loads per-device workflow state,
 // checks idempotency, runs the appropriate node, and checkpoints the result.
@@ -118,39 +120,49 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 		return nil
 	}
 
-	input := workflow.NodeInput{Event: e, State: state, Task: task}
-	newState, done, err := o.runner.Run(ctx, input)
-	if err != nil {
-		return fmt.Errorf("run node %s: %w", state.CurrentNode, err)
-	}
-
-	// Checkpoint before considering the node done.
-	newState.UpdatedAt = time.Now()
-	if err := o.states.Save(ctx, newState); err != nil {
-		return fmt.Errorf("checkpoint workflow state: %w", err)
-	}
-
-	if done {
-		reason := newState.Artifacts["terminal_reason"]
-		o.log.Info("workflow terminal",
-			"taskId", task.ID, "deviceId", e.DeviceID, "reason", reason)
-
-		status := domain.TaskStatusCompleted
-		if newState.Artifacts["goal_reached"] != "true" {
-			status = domain.TaskStatusFailed
+	current := state
+	for step := 0; step < maxAutoAdvanceSteps; step++ {
+		input := workflow.NodeInput{Event: e, State: current, Task: task}
+		newState, done, err := o.runner.Run(ctx, input)
+		if err != nil {
+			return fmt.Errorf("run node %s: %w", current.CurrentNode, err)
 		}
-		task.Status = status
-		task.UpdatedAt = time.Now()
-		_ = o.tasks.Save(ctx, task)
-	} else {
+
+		// Checkpoint before considering the node done.
+		newState.UpdatedAt = time.Now()
+		if err := o.states.Save(ctx, newState); err != nil {
+			return fmt.Errorf("checkpoint workflow state: %w", err)
+		}
+
+		if done {
+			reason := newState.Artifacts["terminal_reason"]
+			o.log.Info("workflow terminal",
+				"taskId", task.ID, "deviceId", e.DeviceID, "reason", reason)
+
+			status := domain.TaskStatusCompleted
+			if newState.Artifacts["goal_reached"] != "true" {
+				status = domain.TaskStatusFailed
+			}
+			task.Status = status
+			task.UpdatedAt = time.Now()
+			_ = o.tasks.Save(ctx, task)
+			return nil
+		}
+
 		o.log.Debug("node transition",
 			"taskId", task.ID,
-			"from", state.CurrentNode,
+			"from", current.CurrentNode,
 			"to", newState.CurrentNode,
 		)
+
+		if len(newState.WaitingFor) > 0 || !isAutoAdvanceNode(newState.CurrentNode) {
+			return nil
+		}
+
+		current = newState
 	}
 
-	return nil
+	return fmt.Errorf("workflow auto-advance exceeded %d steps for task %s", maxAutoAdvanceSteps, task.ID)
 }
 
 func (o *Orchestrator) lockFor(deviceID domain.DeviceID) *sync.Mutex {
@@ -165,4 +177,13 @@ func eventMatchesWaitList(kind domain.EventKind, waitList []domain.EventKind) bo
 		}
 	}
 	return false
+}
+
+func isAutoAdvanceNode(kind domain.NodeKind) bool {
+	switch kind {
+	case domain.NodeKindDecide, domain.NodeKindToolCall, domain.NodeKindVerify, domain.NodeKindTerminal:
+		return true
+	default:
+		return false
+	}
 }

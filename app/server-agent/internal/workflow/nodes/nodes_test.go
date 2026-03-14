@@ -150,7 +150,7 @@ func TestObserveNode_Failure_Resync(t *testing.T) {
 // --- ToolCallNode ---
 
 func TestToolCallNode_NoPendingTool_Decide(t *testing.T) {
-	n := nodes.NewToolCallNode(nodes.NoopToolRegistry{})
+	n := nodes.NewToolCallNode(nodes.DisabledToolRegistry{})
 	state := newState("t-3", "dev-3")
 
 	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-3")})
@@ -163,7 +163,23 @@ func TestToolCallNode_NoPendingTool_Decide(t *testing.T) {
 }
 
 func TestToolCallNode_Success_Decide(t *testing.T) {
-	n := nodes.NewToolCallNode(nodes.NoopToolRegistry{})
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:          "some_tool",
+			Description:   "test tool",
+			Deterministic: true,
+			Timeout:       time.Second,
+			InputSchema:   json.RawMessage(`{"type":"object"}`),
+			OutputSchema:  json.RawMessage(`{"type":"object"}`),
+		},
+		Handler: func(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
+			if string(params) != `{"key":"val"}` {
+				return nil, errors.New("unexpected params")
+			}
+			return json.RawMessage(`{"status":"ok"}`), nil
+		},
+	})
+	n := nodes.NewToolCallNode(registry)
 	state := newState("t-3", "dev-3")
 	state.Artifacts["pending_tool"] = "some_tool"
 	state.Artifacts["pending_tool_params"] = `{"key":"val"}`
@@ -187,15 +203,31 @@ func TestToolCallNode_Success_Decide(t *testing.T) {
 	}
 }
 
-// errorToolRegistry always returns an error.
-type errorToolRegistry struct{}
+func TestToolCallNode_UnsupportedTool_Resync(t *testing.T) {
+	n := nodes.NewToolCallNode(nodes.DisabledToolRegistry{})
+	state := newState("t-3", "dev-3")
+	state.Artifacts["pending_tool"] = "missing_tool"
 
-func (errorToolRegistry) Invoke(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) {
-	return nil, errors.New("tool unavailable")
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-3")})
+	if out.Status != workflow.NodeStatusFailure {
+		t.Errorf("expected NodeStatusFailure on unsupported tool, got %s", out.Status)
+	}
+	if out.Artifacts["resync_reason"] == "" {
+		t.Error("expected resync_reason to be set on unsupported tool")
+	}
 }
 
 func TestToolCallNode_Error_Resync(t *testing.T) {
-	n := nodes.NewToolCallNode(errorToolRegistry{})
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "broken_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("tool unavailable")
+		},
+	})
+	n := nodes.NewToolCallNode(registry)
 	state := newState("t-3", "dev-3")
 	state.Artifacts["pending_tool"] = "broken_tool"
 
@@ -206,6 +238,56 @@ func TestToolCallNode_Error_Resync(t *testing.T) {
 	// resync_reason should be set in Artifacts
 	if out.Artifacts["resync_reason"] == "" {
 		t.Error("expected resync_reason to be set on tool error")
+	}
+}
+
+func TestToolCallNode_InvalidResult_Resync(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "invalid_result_tool",
+			Timeout: time.Second,
+		},
+		Handler: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"status":"ok"}`), nil
+		},
+		ValidateResult: func(_ json.RawMessage) error {
+			return errors.New("missing required field")
+		},
+	})
+	n := nodes.NewToolCallNode(registry)
+	state := newState("t-3", "dev-3")
+	state.Artifacts["pending_tool"] = "invalid_result_tool"
+
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-3")})
+	if out.Status != workflow.NodeStatusFailure {
+		t.Errorf("expected NodeStatusFailure on invalid tool result, got %s", out.Status)
+	}
+	if out.Artifacts["resync_reason"] == "" {
+		t.Error("expected resync_reason to be set on invalid tool result")
+	}
+}
+
+func TestToolCallNode_Timeout_Resync(t *testing.T) {
+	registry := nodes.NewStaticToolRegistry(nodes.ToolDefinition{
+		Manifest: nodes.ToolManifest{
+			Name:    "slow_tool",
+			Timeout: 10 * time.Millisecond,
+		},
+		Handler: func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	n := nodes.NewToolCallNode(registry)
+	state := newState("t-3", "dev-3")
+	state.Artifacts["pending_tool"] = "slow_tool"
+
+	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-3")})
+	if out.Status != workflow.NodeStatusFailure {
+		t.Errorf("expected NodeStatusFailure on timeout, got %s", out.Status)
+	}
+	if out.Artifacts["resync_reason"] == "" {
+		t.Error("expected resync_reason to be set on timeout")
 	}
 }
 

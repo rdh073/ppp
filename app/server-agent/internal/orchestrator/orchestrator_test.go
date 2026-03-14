@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/store"
+	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
+	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
 
 // fakeNodeHandler returns a pre-canned NodeOutput for every Run call.
@@ -28,6 +31,7 @@ func (h *fakeNodeHandler) Run(_ context.Context, _ workflow.NodeInput) (workflow
 func seededDefStore() *workflow.MemoryDefStore {
 	mem := workflow.NewMemoryDefStore()
 	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
+	_ = mem.Put(context.Background(), workflow.LocalIdentityProfileWorkflowDef.Name, workflow.LocalIdentityProfileWorkflowDef)
 	return mem
 }
 
@@ -36,7 +40,8 @@ func newFakeRunner(status workflow.NodeStatus) *workflow.Runner {
 	handlers := map[domain.NodeKind]workflow.NodeHandler{}
 	for _, k := range []domain.NodeKind{
 		domain.NodeKindObserve, domain.NodeKindDecide, domain.NodeKindAct,
-		domain.NodeKindVerify, domain.NodeKindResync, domain.NodeKindTerminal,
+		domain.NodeKindVerify, domain.NodeKindResync, domain.NodeKindToolCall,
+		domain.NodeKindWait, domain.NodeKindTerminal,
 	} {
 		handlers[k] = h
 	}
@@ -48,11 +53,50 @@ func newTerminalRunner() *workflow.Runner {
 	handlers := map[domain.NodeKind]workflow.NodeHandler{}
 	for _, k := range []domain.NodeKind{
 		domain.NodeKindObserve, domain.NodeKindDecide, domain.NodeKindAct,
-		domain.NodeKindVerify, domain.NodeKindResync, domain.NodeKindTerminal,
+		domain.NodeKindVerify, domain.NodeKindResync, domain.NodeKindToolCall,
+		domain.NodeKindWait, domain.NodeKindTerminal,
 	} {
 		handlers[k] = h
 	}
 	return workflow.NewRunner(handlers, seededDefStore(), "default")
+}
+
+type fakeDispatcher struct {
+	result domain.CommandResult
+}
+
+func (f fakeDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan domain.CommandResult, error) {
+	ch := make(chan domain.CommandResult, 1)
+	res := f.result
+	res.CommandID = cmd.ID
+	if len(res.Raw) == 0 && cmd.Kind == domain.CommandKindObserve {
+		res.Success = true
+		res.Raw = json.RawMessage(`{"snapshot":"ready"}`)
+	}
+	ch <- res
+	close(ch)
+	return ch, nil
+}
+
+func (fakeDispatcher) DeliverResponse(domain.CommandResult) {}
+
+func newRealRunner() *workflow.Runner {
+	disp := fakeDispatcher{
+		result: domain.CommandResult{
+			Success: true,
+			Raw:     json.RawMessage(`{"snapshot":"ready"}`),
+		},
+	}
+	return workflow.NewRunner(map[domain.NodeKind]workflow.NodeHandler{
+		domain.NodeKindObserve:  nodes.NewObserveNode(disp),
+		domain.NodeKindDecide:   nodes.NewDecideNode(),
+		domain.NodeKindAct:      nodes.NewActNode(disp),
+		domain.NodeKindVerify:   nodes.NewVerifyNode(),
+		domain.NodeKindResync:   nodes.NewResyncNode(disp),
+		domain.NodeKindToolCall: nodes.NewToolCallNode(toolcatalog.NewLocalToolRegistry()),
+		domain.NodeKindWait:     nodes.NewWaitNode(),
+		domain.NodeKindTerminal: nodes.NewTerminalNode(),
+	}, seededDefStore(), workflow.DefaultWorkflowName)
 }
 
 func newOrch(runner *workflow.Runner, tasks store.TaskStore, states store.WorkflowStateStore) *orchestrator.Orchestrator {
@@ -95,9 +139,9 @@ func TestProcessEvent_BootstrapsWorkflowState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state not found: %v", err)
 	}
-	// observe success → decide (per DefaultWorkflowDef)
-	if ws.CurrentNode != domain.NodeKindDecide {
-		t.Errorf("expected Decide, got %s", ws.CurrentNode)
+	// observe success auto-advances through decide back to observe.
+	if ws.CurrentNode != domain.NodeKindObserve {
+		t.Errorf("expected Observe after internal auto-advance, got %s", ws.CurrentNode)
 	}
 }
 
@@ -192,5 +236,66 @@ func TestProcessEvent_TerminalSetsTaskCompleted(t *testing.T) {
 	}
 	if updated.Status != domain.TaskStatusFailed && updated.Status != domain.TaskStatusCompleted {
 		t.Errorf("expected terminal status, got %s", updated.Status)
+	}
+}
+
+func TestProcessEvent_LocalIdentityWorkflow_CompletesWithToolResults(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+
+	task := &domain.Task{
+		ID:             "task-local-identity",
+		Goal:           "generate local identity profile",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-local-identity",
+		WorkflowName:   workflow.LocalIdentityProfileWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrch(newRealRunner(), tasks, states)
+	event := domain.Event{
+		ID:         "ev-local-identity",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	updatedTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("get task error: %v", err)
+	}
+	if updatedTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task, got %s", updatedTask.Status)
+	}
+
+	ws, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("state not found: %v", err)
+	}
+	if ws.CurrentNode != domain.NodeKindTerminal {
+		t.Fatalf("expected terminal node, got %s", ws.CurrentNode)
+	}
+	if ws.Artifacts["goal_reached"] != "true" {
+		t.Fatalf("expected goal_reached=true, got %q", ws.Artifacts["goal_reached"])
+	}
+	for _, key := range []string{
+		"profile_full_name",
+		"profile_email",
+		"profile_password",
+		"profile_birth_date",
+	} {
+		if ws.Artifacts[key] == "" {
+			t.Fatalf("expected artifact %s to be set", key)
+		}
+	}
+	if ws.Artifacts["tool_result"] != "" || ws.Artifacts["pending_tool"] != "" {
+		t.Fatal("expected transient tool artifacts to be cleared")
 	}
 }
