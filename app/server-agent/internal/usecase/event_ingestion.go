@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,11 +17,19 @@ import (
 // the android-agent. They carry a monotonic SeqNo in their params so the
 // orchestrator's watermark and dedup logic can order and deduplicate them.
 type EventIngestionUseCase struct {
-	orch EventProcessor
+	orch        EventProcessor
+	autoEnabler AccessibilityAutoEnabler
 }
 
-func NewEventIngestion(orch EventProcessor) *EventIngestionUseCase {
-	return &EventIngestionUseCase{orch: orch}
+func NewEventIngestion(orch EventProcessor, autoEnabler ...AccessibilityAutoEnabler) *EventIngestionUseCase {
+	enabler := AccessibilityAutoEnabler(noopAccessibilityAutoEnabler{})
+	if len(autoEnabler) > 0 && autoEnabler[0] != nil {
+		enabler = autoEnabler[0]
+	}
+	return &EventIngestionUseCase{
+		orch:        orch,
+		autoEnabler: enabler,
+	}
 }
 
 // IngestNotification converts an android-agent JSON-RPC notification into a
@@ -35,6 +44,8 @@ func (u *EventIngestionUseCase) IngestNotification(
 	if !kind.IsDeviceOriginated() {
 		return fmt.Errorf("IngestNotification: unexpected method %q", method)
 	}
+
+	enableErr := u.maybeEnableAccessibility(ctx, kind, deviceID, rawParams)
 
 	// Extract optional seqNo from params (convention: {"seqNo": N, ...}).
 	var meta struct {
@@ -52,5 +63,30 @@ func (u *EventIngestionUseCase) IngestNotification(
 		Payload:    rawParams,
 	}
 
-	return u.orch.ProcessEvent(ctx, event)
+	processErr := u.orch.ProcessEvent(ctx, event)
+	return errors.Join(processErr, enableErr)
+}
+
+func (u *EventIngestionUseCase) maybeEnableAccessibility(
+	ctx context.Context,
+	kind domain.EventKind,
+	deviceID domain.DeviceID,
+	rawParams json.RawMessage,
+) error {
+	if kind != domain.EventKindAccessibilityDisabled {
+		return nil
+	}
+
+	var payload struct {
+		ADBSerial        string `json:"adbSerial"`
+		ServiceComponent string `json:"serviceComponent"`
+	}
+	_ = json.Unmarshal(rawParams, &payload)
+
+	return u.autoEnabler.Enable(
+		ctx,
+		deviceID,
+		payload.ADBSerial,
+		payload.ServiceComponent,
+	)
 }

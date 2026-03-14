@@ -10,6 +10,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
@@ -124,6 +125,18 @@ class WebSocketAgentTransport(
         val socket = webSocket ?: error("No active WebSocket for method=$method")
         val request = JsonRpcRequest(id = id, method = method, params = params)
         socket.send(json.encodeToString(request))
+    }
+
+    suspend fun sendNotification(
+        method: String,
+        params: JsonElement = JsonNull,
+    ) {
+        val socket = webSocket ?: run {
+            logWarn("sendNotification: no active WebSocket for method=$method")
+            return
+        }
+        val notification = JsonRpcNotification(method = method, params = params)
+        socket.send(json.encodeToString(notification))
     }
 
     override suspend fun sendSuccess(id: String, result: JsonElement) {

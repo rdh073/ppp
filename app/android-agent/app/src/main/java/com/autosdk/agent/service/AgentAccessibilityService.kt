@@ -26,9 +26,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "AgentAccessibilitySvc"
+private const val METHOD_ANDROID_ACCESSIBILITY_DISABLED = "android.accessibility.disabled"
 
 /** Debounce window for UI settle detection. */
 private const val SETTLE_DEBOUNCE_MS = 250L
@@ -70,6 +73,7 @@ class AgentAccessibilityService : AccessibilityService() {
      * when the UI has stopped changing after an action.
      */
     private val lastEventMs = AtomicLong(0L)
+    private val outboundEventSeqNo = AtomicLong(0L)
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -107,6 +111,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.w(TAG, "Accessibility service interrupted")
+        serviceScope.launch { notifyAccessibilityDisabled("service_interrupted") }
         val activeCoordinator = coordinator
         if (activeCoordinator != null) {
             serviceScope.launch { activeCoordinator.dispatch(AgentEvent.ServiceInterrupted) }
@@ -270,6 +275,24 @@ class AgentAccessibilityService : AccessibilityService() {
                 "reason" to if (android.os.Build.VERSION.SDK_INT < 30) "Requires API 30+" else "",
             ),
         )
+
+    private suspend fun notifyAccessibilityDisabled(reason: String) {
+        val seqNo = outboundEventSeqNo.incrementAndGet()
+        val payload =
+            buildJsonObject {
+                put("seqNo", seqNo)
+                put("reason", reason)
+            }
+
+        runCatching {
+            transport?.sendNotification(
+                method = METHOD_ANDROID_ACCESSIBILITY_DISABLED,
+                params = payload,
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to notify accessibility disabled: ${error.message}")
+        }
+    }
 
     private inner class ServiceRuntimeHooks : AgentRuntimeHooks {
         override fun clearInflightCommand() {

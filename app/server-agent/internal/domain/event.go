@@ -14,11 +14,12 @@ const (
 
 	// Device-originated lifecycle events (android-agent → server).
 	// These are sent as JSON-RPC notifications (no id) from the agent.
-	EventKindActivityCreated  EventKind = "android.activity.created"
-	EventKindActivityResumed  EventKind = "android.activity.resumed"
-	EventKindScreenChanged    EventKind = "android.screen.changed"
-	EventKindNotification     EventKind = "android.notification"
-	EventKindAppForeground    EventKind = "android.app.foreground"
+	EventKindActivityCreated       EventKind = "android.activity.created"
+	EventKindActivityResumed       EventKind = "android.activity.resumed"
+	EventKindScreenChanged         EventKind = "android.screen.changed"
+	EventKindNotification          EventKind = "android.notification"
+	EventKindAppForeground         EventKind = "android.app.foreground"
+	EventKindAccessibilityDisabled EventKind = "android.accessibility.disabled"
 )
 
 // IsDeviceOriginated returns true for events sent proactively by the android-agent.

@@ -21,8 +21,8 @@ import (
 )
 
 func main() {
-	addr         := flag.String("addr", ":3000", "HTTP listen address")
-	workflowDir  := flag.String("workflow-dir", "", "directory to watch for YAML workflow defs (optional)")
+	addr := flag.String("addr", ":3000", "HTTP listen address")
+	workflowDir := flag.String("workflow-dir", "", "directory to watch for YAML workflow defs (optional)")
 	workflowPoll := flag.Duration("workflow-poll", 5*time.Second, "polling interval for workflow-dir")
 	flag.Parse()
 
@@ -31,10 +31,10 @@ func main() {
 	}))
 
 	// --- infrastructure ---
-	reg        := registry.New()
-	taskStore  := store.NewMemoryTaskStore()
+	reg := registry.New()
+	taskStore := store.NewMemoryTaskStore()
 	stateStore := store.NewMemoryWorkflowStateStore()
-	disp       := dispatcher.NewMemoryDispatcher(reg)
+	disp := dispatcher.NewMemoryDispatcher(reg)
 
 	// --- workflow def store ---
 	var defStore workflow.DefStore
@@ -70,14 +70,19 @@ func main() {
 
 	// --- use cases ---
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
-	taskUC      := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
-	eventUC     := usecase.NewEventIngestion(orch)
+	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
+	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
+		os.Getenv("AUTO_ADB_SERVER_HOST"),
+		os.Getenv("AUTO_ADB_SERVER_PORT"),
+		os.Getenv("AUTO_AGENT_ACCESSIBILITY_COMPONENT"),
+	)
+	eventUC := usecase.NewEventIngestion(orch, autoEnabler)
 
 	// --- handlers ---
-	agentHandler    := handler.NewAgentHandler(lifecycleUC, log)
-	taskHandler     := handler.NewTaskHandler(taskUC, log)
+	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
+	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
-	agentServer     := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
+	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
 
 	// --- HTTP mux ---
 	mux := http.NewServeMux()

@@ -60,6 +60,36 @@ Endpoint: `ws://<host>/ws/agent`
 
 **Server → Agent (requests):** `device.observe`, `device.query`, `device.execute`, `device.capabilities.get`
 
+## Accessibility Auto-Enable (ADB)
+
+`server-agent` now auto-enables the Android accessibility service when it receives:
+- `android.accessibility.disabled`
+
+Implementation uses `github.com/electricbubble/gadb` (ADB server protocol), not shelling out to the `adb` binary.
+
+Required runtime assumption:
+- ADB server is running and reachable (default `localhost:5037`).
+- Typical setup: `adb start-server`
+
+Optional env vars:
+- `AUTO_ADB_SERVER_HOST` (default: `localhost`)
+- `AUTO_ADB_SERVER_PORT` (default: `5037`)
+- `AUTO_AGENT_ACCESSIBILITY_COMPONENT` (default: `com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService`)
+
+Expected event payload (params) for multi-device safety:
+
+```json
+{
+  "seqNo": 42,
+  "adbSerial": "emulator-5554",
+  "serviceComponent": "com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService"
+}
+```
+
+Notes:
+- If `adbSerial` is omitted and exactly one device is connected, that device is used.
+- If multiple devices are connected and `adbSerial` is missing, auto-enable is rejected with an explicit error.
+
 ## Extending
 
 - **New workflow node:** implement `workflow.NodeHandler`, register in `main.go` `buildNodeHandlers`.

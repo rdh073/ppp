@@ -13,6 +13,13 @@ data class JsonRpcRequest(
 )
 
 @Serializable
+data class JsonRpcNotification(
+    val jsonrpc: String = "2.0",
+    val method: String,
+    val params: JsonElement = JsonNull,
+)
+
+@Serializable
 data class JsonRpcSuccess(
     val jsonrpc: String = "2.0",
     val id: String,
