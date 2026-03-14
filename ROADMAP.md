@@ -325,6 +325,7 @@ Implemented in this slice:
 - `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted`
 - wakeups are partitioned by `deviceId` into `workflow.wakeup.pNN`
 - one worker goroutine per partition consumes from Redis consumer groups using deterministic consumer names
+- internal emitted events such as `tool.result` now publish to the same wakeup bus instead of continuing inline when publication succeeds
 - `inline` remains the explicit development fallback mode
 - if stream publication fails after durable acceptance, runtime falls back to inline processing to preserve correctness
 
@@ -335,8 +336,8 @@ Required end state:
 
 Remaining gap before Phase 6 can be called done:
 
-- internal emitted events such as `tool.result` are still accepted inline in the event plane and are not yet published onto Redis Streams
 - current worker topology is single-process partition workers, not multi-process partition ownership
+- external bus handling currently assumes one emitted internal event per node step; multi-emission steps fail closed and need a deliberate design before new nodes rely on them
 
 ### Phase 7: Operational Hardening
 

@@ -1019,8 +1019,9 @@ Current implementation status:
 - accepted ingress events publish to `events.accepted`
 - wakeups publish to partitioned Redis Streams named `workflow.wakeup.pNN`
 - one worker goroutine per partition consumes with Redis consumer groups and deterministic consumer names
+- internal emitted events such as `tool.result` also publish to the same wakeup streams when external runtime mode is enabled
 - `AUTO_EVENT_RUNTIME=inline` remains the explicit development mode
-- current limitation: internal emitted events such as `tool.result` still stay inline inside the orchestrator path and are not yet published onto Redis Streams
+- current limitation: the external bus path assumes one emitted internal event per node step and fails closed if a future node emits more than one
 
 ### 16.9 Phase 7: Operational Hardening
 

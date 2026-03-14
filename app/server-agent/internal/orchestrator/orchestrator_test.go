@@ -141,6 +141,23 @@ func newOrchWithEventStore(
 	return orchestrator.New(tasks, states, runner, log, events)
 }
 
+type fakeEmittedEventBus struct {
+	accepted  []domain.AcceptedEventRecord
+	wakeups   []domain.Event
+	acceptErr error
+	wakeupErr error
+}
+
+func (b *fakeEmittedEventBus) PublishAccepted(_ context.Context, record domain.AcceptedEventRecord) error {
+	b.accepted = append(b.accepted, record)
+	return b.acceptErr
+}
+
+func (b *fakeEmittedEventBus) PublishWakeup(_ context.Context, event domain.Event) error {
+	b.wakeups = append(b.wakeups, event)
+	return b.wakeupErr
+}
+
 // --- tests ---
 
 func TestProcessEvent_BootstrapsWorkflowState(t *testing.T) {
@@ -497,6 +514,138 @@ func TestProcessEvent_LocalIdentityWorkflow_RecordsToolResultEvents(t *testing.T
 	}
 	if toolResults != 4 {
 		t.Fatalf("expected 4 tool.result events, got %d", toolResults)
+	}
+}
+
+func TestProcessAcceptedEvent_LocalIdentityWorkflow_ExternalizesToolResults(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+	bus := &fakeEmittedEventBus{}
+
+	task := &domain.Task{
+		ID:             "task-local-identity-bus",
+		Goal:           "generate local identity profile",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-local-identity-bus",
+		WorkflowName:   workflow.LocalIdentityProfileWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newRealRunner(), tasks, states, events)
+	orch.SetEmittedEventPublisher(bus)
+
+	event := domain.Event{
+		ID:         "ev-local-identity-bus",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	if len(bus.accepted) != 1 || len(bus.wakeups) != 1 {
+		t.Fatalf("expected first tool.result to be externalized once, got accepted=%d wakeups=%d", len(bus.accepted), len(bus.wakeups))
+	}
+
+	ws, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("state not found: %v", err)
+	}
+	if ws.CurrentNode != domain.NodeKindDecide {
+		t.Fatalf("expected workflow to pause at decide awaiting externalized tool.result, got %s", ws.CurrentNode)
+	}
+	if ws.Artifacts["tool_result"] == "" {
+		t.Fatal("expected tool_result artifact to remain checkpointed until externalized event is replayed")
+	}
+
+	cursor := 0
+	for step := 0; step < 8; step++ {
+		currentTask, err := tasks.Get(context.Background(), task.ID)
+		if err != nil {
+			t.Fatalf("Get task: %v", err)
+		}
+		if currentTask.Status.IsTerminal() {
+			break
+		}
+		if cursor >= len(bus.wakeups) {
+			t.Fatalf("workflow stalled after %d steps; wakeups=%d", step, len(bus.wakeups))
+		}
+		if err := orch.ProcessAcceptedEvent(context.Background(), bus.wakeups[cursor]); err != nil {
+			t.Fatalf("ProcessAcceptedEvent error: %v", err)
+		}
+		cursor++
+	}
+
+	finalTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Get final task: %v", err)
+	}
+	if finalTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task after replaying externalized tool results, got %s", finalTask.Status)
+	}
+
+	finalState, err := states.Get(context.Background(), task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("Get final state: %v", err)
+	}
+	if finalState.CurrentNode != domain.NodeKindTerminal {
+		t.Fatalf("expected terminal state, got %s", finalState.CurrentNode)
+	}
+	if len(bus.accepted) != 4 || len(bus.wakeups) != 4 {
+		t.Fatalf("expected four externalized tool.result events, got accepted=%d wakeups=%d", len(bus.accepted), len(bus.wakeups))
+	}
+}
+
+func TestProcessAcceptedEvent_LocalIdentityWorkflow_FallsBackInlineWhenEmittedWakeupPublishFails(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	events := store.NewMemoryEventPlaneStore()
+	bus := &fakeEmittedEventBus{wakeupErr: errors.New("redis unavailable")}
+
+	task := &domain.Task{
+		ID:             "task-local-identity-bus-fallback",
+		Goal:           "generate local identity profile",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: "dev-local-identity-bus-fallback",
+		WorkflowName:   workflow.LocalIdentityProfileWorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrchWithEventStore(newRealRunner(), tasks, states, events)
+	orch.SetEmittedEventPublisher(bus)
+
+	event := domain.Event{
+		ID:         "ev-local-identity-bus-fallback",
+		Kind:       domain.EventKindAgentOnline,
+		DeviceID:   task.AssignedDevice,
+		SeqNo:      1,
+		OccurredAt: time.Now(),
+	}
+
+	if err := orch.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("ProcessEvent error: %v", err)
+	}
+
+	updatedTask, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("Get task: %v", err)
+	}
+	if updatedTask.Status != domain.TaskStatusCompleted {
+		t.Fatalf("expected completed task after inline fallback, got %s", updatedTask.Status)
+	}
+	if len(bus.accepted) != 4 {
+		t.Fatalf("expected accepted publish attempt for each tool.result, got %d", len(bus.accepted))
+	}
+	if len(bus.wakeups) != 4 {
+		t.Fatalf("expected wakeup publish attempts for each tool.result, got %d", len(bus.wakeups))
 	}
 }
 

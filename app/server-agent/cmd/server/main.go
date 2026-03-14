@@ -144,6 +144,7 @@ func main() {
 			log.Error("failed to configure redis streams runtime", "err", err)
 			os.Exit(1)
 		}
+		orch.SetEmittedEventPublisher(bus)
 		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log)
 	default:
 		log.Error("unsupported AUTO_EVENT_RUNTIME", "mode", runtimeMode)

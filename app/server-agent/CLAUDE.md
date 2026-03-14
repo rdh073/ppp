@@ -123,7 +123,8 @@ Notes:
 - `AUTO_EVENT_RUNTIME=inline` is the explicit development mode: accept event, then process it in-process immediately.
 - `AUTO_EVENT_RUNTIME=redis-streams` publishes accepted ingress events to `events.accepted` and partitioned wakeup streams `workflow.wakeup.pNN`, then worker goroutines consume them through Redis consumer groups.
 - In `redis-streams` mode, if wakeup publication fails after durable acceptance, the runtime falls back to inline processing for correctness.
-- Current limitation: internal emitted events such as `tool.result` still stay in the event-plane store and continue inline inside the orchestrator path; only ingress accepted events are externalized to Redis Streams in this phase slice.
+- Internal emitted events such as `tool.result` are externalized onto Redis Streams in `AUTO_EVENT_RUNTIME=redis-streams`; the orchestrator checkpoints state, publishes the internal event, and stops inline auto-advance until a worker replays that accepted event.
+- Current limitation: the external bus path assumes one emitted internal event per node step. If a future node emits multiple internal events in one step, the orchestrator fails closed instead of silently dropping later events.
 
 ## Extending
 

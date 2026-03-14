@@ -29,9 +29,15 @@ type Orchestrator struct {
 	runner *workflow.Runner
 	events store.EventPlaneStore
 	log    *slog.Logger
+	bus    emittedEventPublisher
 
 	// deviceLocks provides per-device serialisation without a global lock.
 	deviceLocks sync.Map // domain.DeviceID → *sync.Mutex
+}
+
+type emittedEventPublisher interface {
+	PublishAccepted(ctx context.Context, record domain.AcceptedEventRecord) error
+	PublishWakeup(ctx context.Context, event domain.Event) error
 }
 
 func New(
@@ -112,6 +118,10 @@ func (o *Orchestrator) RecordDeadLetter(ctx context.Context, record domain.DeadL
 	return o.events.RecordDeadLetter(ctx, record)
 }
 
+func (o *Orchestrator) SetEmittedEventPublisher(bus emittedEventPublisher) {
+	o.bus = bus
+}
+
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
 	state, err := o.states.Get(ctx, task.ID, e.DeviceID)
 	if err != nil {
@@ -152,9 +162,12 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 		}
 
 		if len(emittedEvents) > 0 {
-			nextEvent, err := o.acceptEmittedEvents(ctx, emittedEvents)
+			nextEvent, continueInline, err := o.acceptEmittedEvents(ctx, emittedEvents)
 			if err != nil {
 				return err
+			}
+			if !continueInline {
+				return nil
 			}
 			currentEvent = nextEvent
 		}
@@ -193,21 +206,52 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 	return fmt.Errorf("workflow auto-advance exceeded %d steps for task %s", maxAutoAdvanceSteps, task.ID)
 }
 
-func (o *Orchestrator) acceptEmittedEvents(ctx context.Context, events []domain.Event) (domain.Event, error) {
+func (o *Orchestrator) acceptEmittedEvents(ctx context.Context, events []domain.Event) (domain.Event, bool, error) {
+	if o.bus != nil && len(events) > 1 {
+		return domain.Event{}, false, fmt.Errorf("multiple emitted events are not supported with external bus")
+	}
+
 	var next domain.Event
 	for _, emitted := range events {
 		status, err := o.events.Accept(ctx, emitted)
 		if err != nil {
 			o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&emitted, nil, fmt.Sprintf("accept emitted event: %v", err), "orchestrator"))
-			return domain.Event{}, fmt.Errorf("accept emitted event %s: %w", emitted.ID, err)
+			return domain.Event{}, false, fmt.Errorf("accept emitted event %s: %w", emitted.ID, err)
 		}
 		if status != domain.EventAcceptanceAccepted {
 			o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&emitted, nil, fmt.Sprintf("unexpected emitted event status: %s", status), "orchestrator"))
-			return domain.Event{}, fmt.Errorf("unexpected emitted event status %s for %s", status, emitted.ID)
+			return domain.Event{}, false, fmt.Errorf("unexpected emitted event status %s for %s", status, emitted.ID)
+		}
+
+		if o.bus != nil {
+			record := domain.AcceptedEventRecord{
+				Event:      emitted,
+				AcceptedAt: time.Now(),
+				Source:     "internal",
+			}
+			if err := o.bus.PublishAccepted(ctx, record); err != nil {
+				o.log.Warn("publish accepted emitted event failed; continuing inline",
+					"eventId", emitted.ID,
+					"deviceId", emitted.DeviceID,
+					"err", err,
+				)
+				next = emitted
+				continue
+			}
+			if err := o.bus.PublishWakeup(ctx, emitted); err != nil {
+				o.log.Warn("publish wakeup emitted event failed; continuing inline",
+					"eventId", emitted.ID,
+					"deviceId", emitted.DeviceID,
+					"err", err,
+				)
+				next = emitted
+				continue
+			}
+			return domain.Event{}, false, nil
 		}
 		next = emitted
 	}
-	return next, nil
+	return next, true, nil
 }
 
 func (o *Orchestrator) lockFor(deviceID domain.DeviceID) *sync.Mutex {
