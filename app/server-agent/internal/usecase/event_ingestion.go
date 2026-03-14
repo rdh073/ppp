@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
@@ -18,8 +19,9 @@ import (
 // the android-agent. They carry a monotonic SeqNo in their params so the
 // orchestrator's watermark and dedup logic can order and deduplicate them.
 type EventIngestionUseCase struct {
-	orch        EventProcessor
-	autoEnabler AccessibilityAutoEnabler
+	orch         EventProcessor
+	autoEnabler  AccessibilityAutoEnabler
+	knownSerials sync.Map // domain.DeviceID → string; learned from event params
 }
 
 type deadLetterRecorder interface {
@@ -74,6 +76,19 @@ func (u *EventIngestionUseCase) IngestNotification(
 		}
 	}
 
+	// Learn the ADB serial for this device whenever it is present in params.
+	// Later events (including android.accessibility.disabled) may omit it,
+	// so we resolve it from the cache before calling the auto-enabler.
+	if meta.ADBSerial != "" {
+		u.knownSerials.Store(deviceID, meta.ADBSerial)
+	}
+	effectiveSerial := meta.ADBSerial
+	if effectiveSerial == "" {
+		if v, ok := u.knownSerials.Load(deviceID); ok {
+			effectiveSerial = v.(string)
+		}
+	}
+
 	now := time.Now()
 	event := domain.Event{
 		ID:         buildDeviceEventID(deviceID, meta.SeqNo, method, now),
@@ -97,7 +112,7 @@ func (u *EventIngestionUseCase) IngestNotification(
 		kind,
 		meta.SeqNo,
 		deviceID,
-		meta.ADBSerial,
+		effectiveSerial,
 		meta.ServiceComponent,
 	)
 }

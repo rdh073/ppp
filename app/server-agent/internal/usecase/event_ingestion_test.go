@@ -186,6 +186,76 @@ func TestIngestNotification_SeqNoZero_DoesNotTriggerSideEffect(t *testing.T) {
 	}
 }
 
+// TestIngestNotification_LearnedSerial_UsedWhenAbsent covers the multi-device gap:
+// a device sends adbSerial in an earlier event; a later accessibility.disabled event
+// omits it; the enabler must still receive the correct serial from the cache.
+func TestIngestNotification_LearnedSerial_UsedWhenAbsent(t *testing.T) {
+	orch := &recordingEventProcessor{}
+	enabler := &recordingAccessibilityEnabler{}
+	uc := usecase.NewEventIngestion(orch, enabler)
+	ctx := context.Background()
+	device := domain.DeviceID("dev-learned")
+
+	// First event: carries adbSerial → server learns it.
+	_ = uc.IngestNotification(ctx, device, string(domain.EventKindAppForeground),
+		json.RawMessage(`{"seqNo":1,"adbSerial":"emulator-5554"}`))
+
+	// Second event: accessibility disabled, no adbSerial in params.
+	err := uc.IngestNotification(ctx, device, string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":2}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(enabler.calls) != 1 {
+		t.Fatalf("expected 1 enabler call, got %d", len(enabler.calls))
+	}
+	if enabler.calls[0].adbSerial != "emulator-5554" {
+		t.Errorf("expected cached serial emulator-5554, got %q", enabler.calls[0].adbSerial)
+	}
+}
+
+// TestIngestNotification_MultiDevice_SerialPerDevice ensures the serial cache is
+// keyed per device and does not bleed across devices.
+func TestIngestNotification_MultiDevice_SerialPerDevice(t *testing.T) {
+	orch := &recordingEventProcessor{}
+	enabler := &recordingAccessibilityEnabler{}
+	uc := usecase.NewEventIngestion(orch, enabler)
+	ctx := context.Background()
+
+	devA := domain.DeviceID("dev-A")
+	devB := domain.DeviceID("dev-B")
+
+	// Device A registers its serial.
+	_ = uc.IngestNotification(ctx, devA, string(domain.EventKindAppForeground),
+		json.RawMessage(`{"seqNo":1,"adbSerial":"emulator-5554"}`))
+
+	// Device B registers its own serial.
+	_ = uc.IngestNotification(ctx, devB, string(domain.EventKindAppForeground),
+		json.RawMessage(`{"seqNo":1,"adbSerial":"emulator-5556"}`))
+
+	// Both send accessibility.disabled without serial.
+	_ = uc.IngestNotification(ctx, devA, string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":2}`))
+	_ = uc.IngestNotification(ctx, devB, string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":2}`))
+
+	if len(enabler.calls) != 2 {
+		t.Fatalf("expected 2 enabler calls, got %d", len(enabler.calls))
+	}
+
+	byDevice := map[domain.DeviceID]string{}
+	for _, c := range enabler.calls {
+		byDevice[c.deviceID] = c.adbSerial
+	}
+	if byDevice[devA] != "emulator-5554" {
+		t.Errorf("device A: expected emulator-5554, got %q", byDevice[devA])
+	}
+	if byDevice[devB] != "emulator-5556" {
+		t.Errorf("device B: expected emulator-5556, got %q", byDevice[devB])
+	}
+}
+
 func TestIngestNotification_InvalidJSON_RecordsDeadLetter(t *testing.T) {
 	orch := &recordingEventProcessor{}
 	enabler := &recordingAccessibilityEnabler{}
