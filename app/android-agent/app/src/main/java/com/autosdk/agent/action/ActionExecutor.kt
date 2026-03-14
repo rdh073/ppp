@@ -167,30 +167,59 @@ class ActionExecutor(private val service: AccessibilityService) {
     /**
      * Finds the first accessibility node matching [selector] in the live tree.
      * Caller is responsible for recycling the returned node.
+     *
+     * For TEXT / RESOURCE_ID / CONTENT_DESC selectors the search spans ALL
+     * accessibility windows so that nodes in non-focused floating windows
+     * (e.g. SubSettings in Waydroid freeform mode) are included.
      */
     fun findNode(selector: Selector): AccessibilityNodeInfo? {
-        val root = service.rootInActiveWindow ?: return null
         return when (selector.kind) {
-            SelectorKind.TEXT ->
-                root.findAccessibilityNodeInfosByText(selector.value).firstOrNull()
+            SelectorKind.TEXT, SelectorKind.RESOURCE_ID, SelectorKind.CONTENT_DESC ->
+                findInAllWindows(selector)
 
-            SelectorKind.RESOURCE_ID ->
-                root.findAccessibilityNodeInfosByViewId(selector.value).firstOrNull()
-
-            SelectorKind.CONTENT_DESC ->
-                // findAccessibilityNodeInfosByText searches both text and contentDescription.
-                root.findAccessibilityNodeInfosByText(selector.value).firstOrNull()
-
-            SelectorKind.TARGET_ID ->
-                findNodeByTargetId(root, selector.value)
-
-            SelectorKind.BOUNDS ->
-                findNodeByBounds(root, selector.value)
-
-            SelectorKind.PACKAGE_NAME ->
-                findNodeByPackageName(root, selector.value)
+            else -> {
+                val root = service.rootInActiveWindow ?: return null
+                when (selector.kind) {
+                    SelectorKind.TARGET_ID ->
+                        findNodeByTargetId(root, selector.value)
+                    SelectorKind.BOUNDS ->
+                        findNodeByBounds(root, selector.value)
+                    SelectorKind.PACKAGE_NAME ->
+                        findNodeByPackageName(root, selector.value)
+                    else -> null
+                }
+            }
         }
     }
+
+    /**
+     * Searches all accessibility windows (not just the focused one) for
+     * TEXT / RESOURCE_ID / CONTENT_DESC selectors.
+     */
+    private fun findInAllWindows(selector: Selector): AccessibilityNodeInfo? {
+        val windows = service.windows?.takeIf { it.isNotEmpty() }
+            ?: return service.rootInActiveWindow?.let { root ->
+                val node = searchTextLike(root, selector)
+                root.recycle()
+                node
+            }
+        for (window in windows) {
+            val root = window.root ?: continue
+            val node = searchTextLike(root, selector)
+            root.recycle()
+            if (node != null) return node
+        }
+        return null
+    }
+
+    private fun searchTextLike(root: AccessibilityNodeInfo, selector: Selector): AccessibilityNodeInfo? =
+        when (selector.kind) {
+            SelectorKind.TEXT, SelectorKind.CONTENT_DESC ->
+                root.findAccessibilityNodeInfosByText(selector.value).firstOrNull()
+            SelectorKind.RESOURCE_ID ->
+                root.findAccessibilityNodeInfosByViewId(selector.value).firstOrNull()
+            else -> null
+        }
 
     // ---- private helpers ----
 

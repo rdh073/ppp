@@ -82,8 +82,15 @@ func (e *Engine) ProcessEvent(
 		return e.processWaiting(ctx, state, step, event, task, def)
 	}
 
-	// Tick events are only meaningful inside processWaiting; ignore otherwise.
+	// Tick events drive two recovery paths:
+	//   1. Inside processWaiting — handled above (deadline enforcement).
+	//   2. Retry-pending steps — action failed, RetryCount > 0, no WaitingExpect.
+	//      The watchdog fires a tick so retries happen within one tick interval
+	//      instead of waiting for the next device-originated event (up to 30 s).
 	if event.Kind == domain.EventKindWorkflowTick {
+		if state.RetryCount > 0 && step.Action != nil {
+			return e.executeStep(ctx, state, step, task, def)
+		}
 		return nil, false, nil
 	}
 

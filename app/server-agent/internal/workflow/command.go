@@ -87,6 +87,11 @@ func buildCommand(
 				Value: Interpolate(action.Target.Value, inputs),
 			}
 		}
+		// open_app: agent reads package from target.value, not the top-level package field.
+		if action.Kind == domain.ActionKindOpenApp && action.Package != "" && act.Target == nil {
+			pkg := Interpolate(action.Package, inputs)
+			act.Target = &executeTarget{Kind: "package_name", Value: pkg}
+		}
 		act.InputText = Interpolate(action.InputText, inputs)
 		act.Package = Interpolate(action.Package, inputs)
 		act.Direction = action.Direction

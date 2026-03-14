@@ -763,3 +763,88 @@ func TestEngine_RetryReExecute_SkipsTrigger(t *testing.T) {
 		t.Error("expected WaitingExpect re-armed after retry re-execute")
 	}
 }
+
+// TestEngine_TickEvent_TriggersRetry_ForRetryPending verifies that a workflow.tick
+// event re-executes the action when the step is in retry state (RetryCount > 0,
+// WaitingExpect nil). This ensures retries happen within one watchdog interval
+// instead of waiting for the next device-originated event (e.g. heartbeat, 30 s).
+func TestEngine_TickEvent_TriggersRetry_ForRetryPending(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "tick-retry",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				Trigger:   domain.EventMatch{}, // empty: auto-execute
+				Action:    &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
+				MaxRetry:  2,
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, failDispatcher{}) // action always fails
+	state := freshState("t1", "dev1")
+
+	// Activate: first attempt fails in advance loop → RetryCount=1.
+	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-retry", task("t1"), anyEvent())
+	if mid == nil {
+		t.Fatal("expected non-nil state after initial activation")
+	}
+	if mid.RetryCount != 1 {
+		t.Fatalf("expected RetryCount=1 after first failure, got %d", mid.RetryCount)
+	}
+	if mid.WaitingExpect != nil {
+		t.Error("WaitingExpect should be nil for failed action (no expect)")
+	}
+
+	// Inject a tick: should trigger the retry immediately.
+	tick := domain.Event{ID: "tick-1", Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
+	mid2, _, err := eng.ProcessEvent(context.Background(), mid, "tick-retry", task("t1"), tick)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mid2 == nil {
+		t.Fatal("expected non-nil state: tick should trigger retry for retry-pending step")
+	}
+	if mid2.RetryCount != 2 {
+		t.Errorf("expected RetryCount=2 after second failure via tick, got %d", mid2.RetryCount)
+	}
+
+	// Third tick: retry budget exhausted (MaxRetry=2) → OnFailure = terminal.
+	tick2 := domain.Event{ID: "tick-2", Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
+	final, terminal, err := eng.ProcessEvent(context.Background(), mid2, "tick-retry", task("t1"), tick2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !terminal || final == nil {
+		t.Error("expected terminal after retry budget exhausted via ticks")
+	}
+}
+
+// TestEngine_TickEvent_WhenNotWaiting_NoAction_Ignored verifies that tick events
+// are still ignored for steps with no Action (pure routing or trigger-only steps).
+func TestEngine_TickEvent_WhenNotWaiting_NoAction_Ignored(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "tick-noaction",
+		Entry: "wait_activity",
+		Steps: map[string]domain.StepDef{
+			"wait_activity": {
+				Trigger:   domain.EventMatch{Kind: "android.activity.created"},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+				// No Action: tick must not fire this step.
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
+	noState, terminal, err := eng.ProcessEvent(context.Background(), state, "tick-noaction", task("t1"), tick)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if terminal || noState != nil {
+		t.Error("tick must be ignored for steps with no Action")
+	}
+}

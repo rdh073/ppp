@@ -78,7 +78,8 @@ func SnapshotMatchesExpect(raw json.RawMessage, exp domain.ExpectDef) bool {
 			PackageName  string `json:"packageName"`
 			ActivityName string `json:"activityName"`
 			Targets      []struct {
-				Text string `json:"text"`
+				Text        string `json:"text"`
+				PackageName string `json:"packageName"`
 			} `json:"targets"`
 		} `json:"snapshotAfter"`
 	}
@@ -87,7 +88,20 @@ func SnapshotMatchesExpect(raw json.RawMessage, exp domain.ExpectDef) bool {
 	}
 	s := result.SnapshotAfter
 	if exp.Package != "" && s.PackageName != exp.Package {
-		return false
+		// Fallback: some accessibility implementations (e.g. Waydroid) report the
+		// system UI overlay as the top-level packageName even when the target app
+		// is in the foreground. Check whether any target belongs to the expected
+		// package as a proxy for "this app is on screen".
+		found := false
+		for _, t := range s.Targets {
+			if t.PackageName == exp.Package {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 	}
 	if exp.ClassSuffix != "" && !strings.HasSuffix(s.ActivityName, exp.ClassSuffix) {
 		return false

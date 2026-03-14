@@ -178,6 +178,11 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 	if o.watchdog != nil {
 		if newState.WaitingExpect != nil {
 			o.watchdog.Track(task.ID, newState.DeviceID, newState.DeadlineAt)
+		} else if newState.RetryCount > 0 {
+			// Retry-pending: action failed but budget remains. Track with a short
+			// deadline so the watchdog fires a tick that re-executes the action
+			// within one tick interval instead of waiting for the next device event.
+			o.watchdog.Track(task.ID, newState.DeviceID, time.Now().Add(o.watchdog.tickInterval))
 		} else {
 			o.watchdog.Untrack(task.ID)
 		}
