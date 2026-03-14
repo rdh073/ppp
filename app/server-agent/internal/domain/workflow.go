@@ -22,10 +22,11 @@ const (
 type WorkflowState struct {
 	TaskID         TaskID
 	DeviceID       DeviceID
+	Revision       uint64 // optimistic concurrency token for checkpoint advancement
 	CurrentNode    NodeKind
-	AttemptCount   int         // consecutive attempts at the current node
-	ErrorCount     int         // consecutive errors, used for stop-condition
-	LastSnapshotID string      // most-recent snapshot ID processed
+	AttemptCount   int    // consecutive attempts at the current node
+	ErrorCount     int    // consecutive errors, used for stop-condition
+	LastSnapshotID string // most-recent snapshot ID processed
 	Artifacts      map[string]string
 	// WaitingFor lists the event kinds that must arrive before the workflow
 	// advances again. When non-nil, ProcessEvent will skip the node unless

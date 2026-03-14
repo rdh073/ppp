@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -108,8 +109,12 @@ func (o *Orchestrator) RecordDeadLetter(ctx context.Context, record domain.DeadL
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
 	state, err := o.states.Get(ctx, task.ID, e.DeviceID)
 	if err != nil {
-		// No state yet — bootstrap from Observe.
-		state = domain.NewWorkflowState(task.ID, e.DeviceID)
+		if errors.Is(err, store.ErrNotFound) {
+			// No state yet — bootstrap from Observe.
+			state = domain.NewWorkflowState(task.ID, e.DeviceID)
+		} else {
+			return fmt.Errorf("load workflow state: %w", err)
+		}
 	}
 
 	if state.CurrentNode == domain.NodeKindTerminal {

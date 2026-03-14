@@ -97,6 +97,18 @@ func main() {
 	orch := orchestrator.New(taskStore, stateStore, runner, log, eventStore)
 
 	// --- use cases ---
+	recoveryUC := usecase.NewRuntimeRecovery(taskStore, stateStore, log)
+	recoveryReport, err := recoveryUC.Recover(context.Background())
+	if err != nil {
+		log.Error("runtime recovery failed", "err", err)
+		os.Exit(1)
+	}
+	log.Info("runtime recovery complete",
+		"tasksScanned", recoveryReport.TasksScanned,
+		"statesBootstrapped", recoveryReport.StatesBootstrapped,
+		"tasksReconciled", recoveryReport.TasksReconciled,
+	)
+
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
 	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(

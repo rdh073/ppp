@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,6 +43,26 @@ func TestFileTaskStore_PersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestFileTaskStore_List(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := store.NewFileTaskStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileTaskStore: %v", err)
+	}
+	_ = s.Save(ctx, &domain.Task{ID: "task-list-a", Status: domain.TaskStatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	_ = s.Save(ctx, &domain.Task{ID: "task-list-b", Status: domain.TaskStatusRunning, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	list, err := s.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(list))
+	}
+}
+
 func TestFileWorkflowStateStore_PersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -55,6 +76,9 @@ func TestFileWorkflowStateStore_PersistsAcrossReopen(t *testing.T) {
 	if err := s.Save(ctx, ws); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	if ws.Revision != 1 {
+		t.Fatalf("expected revision 1 after save, got %d", ws.Revision)
+	}
 
 	reopened, err := store.NewFileWorkflowStateStore(dir)
 	if err != nil {
@@ -66,6 +90,54 @@ func TestFileWorkflowStateStore_PersistsAcrossReopen(t *testing.T) {
 	}
 	if got.Artifacts["hello"] != "world" {
 		t.Fatalf("expected persisted artifact, got %#v", got.Artifacts)
+	}
+	if got.Revision != 1 {
+		t.Fatalf("expected persisted revision 1, got %d", got.Revision)
+	}
+}
+
+func TestFileWorkflowStateStore_SaveConflict(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := store.NewFileWorkflowStateStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileWorkflowStateStore: %v", err)
+	}
+	seed := domain.NewWorkflowState("task-file-conflict", "dev-file-conflict")
+	if err := s.Save(ctx, seed); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	current, err := s.Get(ctx, seed.TaskID, seed.DeviceID)
+	if err != nil {
+		t.Fatalf("Get current: %v", err)
+	}
+	stale, err := s.Get(ctx, seed.TaskID, seed.DeviceID)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+
+	current.CurrentNode = domain.NodeKindDecide
+	if err := s.Save(ctx, current); err != nil {
+		t.Fatalf("save current: %v", err)
+	}
+
+	stale.CurrentNode = domain.NodeKindWait
+	err = s.Save(ctx, stale)
+	if !errors.Is(err, store.ErrCheckpointConflict) {
+		t.Fatalf("expected checkpoint conflict, got %v", err)
+	}
+
+	got, err := s.Get(ctx, seed.TaskID, seed.DeviceID)
+	if err != nil {
+		t.Fatalf("Get after conflict: %v", err)
+	}
+	if got.Revision != 2 {
+		t.Fatalf("expected revision 2 after conflict, got %d", got.Revision)
+	}
+	if got.CurrentNode != domain.NodeKindDecide {
+		t.Fatalf("expected current node decide after conflict, got %s", got.CurrentNode)
 	}
 }
 

@@ -180,6 +180,9 @@ func TestProcessEvent_BootstrapsWorkflowState(t *testing.T) {
 	if ws.CurrentNode != domain.NodeKindObserve {
 		t.Errorf("expected Observe after internal auto-advance, got %s", ws.CurrentNode)
 	}
+	if ws.Revision == 0 {
+		t.Errorf("expected checkpoint revision to advance, got %d", ws.Revision)
+	}
 }
 
 func TestProcessEvent_StaleEventDropped(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 type TaskStore interface {
 	Save(ctx context.Context, t *domain.Task) error
 	Get(ctx context.Context, id domain.TaskID) (*domain.Task, error)
+	List(ctx context.Context) ([]*domain.Task, error)
 	ListByDevice(ctx context.Context, deviceID domain.DeviceID) ([]*domain.Task, error)
 }
 

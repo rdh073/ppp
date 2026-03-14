@@ -84,13 +84,18 @@ Implemented:
 
 - production task store is file-backed
 - production workflow-state checkpoints are file-backed
+- workflow checkpoints advance with an explicit optimistic revision token
+- startup runs explicit runtime recovery before the server accepts traffic
+- recovery bootstrap seeds workflow artifacts `recovery_bootstrap` and `recovery_bootstrap_reason`
 - production command dispatch lifecycle is recorded in a durable command outbox
 - production durable data defaults under `app/server-agent/var` unless `-data-dir` is overridden
 
 Key files:
 
 - `app/server-agent/internal/store/file.go`
+- `app/server-agent/internal/store/errors.go`
 - `app/server-agent/internal/store/port.go`
+- `app/server-agent/internal/usecase/runtime_recovery.go`
 - `app/server-agent/internal/dispatcher/dispatcher.go`
 - `app/server-agent/cmd/server/main.go`
 
@@ -274,17 +279,34 @@ Validation:
 
 ### Phase 5: Durable Workflow Runtime
 
-Status: next
+Status: done
 
-Goal:
+Outcome:
 
-- make workflow execution resumable and deterministic after restart
+- workflow checkpoint advancement now uses an explicit optimistic revision token
+- missing workflow checkpoints are bootstrapped explicitly during startup recovery
+- persisted terminal workflow state reconciles non-terminal task rows during startup recovery
+- restart behavior is covered in tests instead of relying on file-backed snapshots implicitly
 
-Required end state:
+Implemented in:
 
-- workflow replay and recovery semantics are explicit, not incidental
-- optimistic concurrency exists around checkpoint advancement
-- artifact contracts are documented and tested
+- [errors.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/errors.go)
+- [port.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/port.go)
+- [memory.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/memory.go)
+- [file.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/file.go)
+- [runtime_recovery.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/usecase/runtime_recovery.go)
+- [main.go](/home/xtrzy/Workspace/ppp/app/server-agent/cmd/server/main.go)
+- [runtime_recovery_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/usecase/runtime_recovery_test.go)
+- [file_test.go](/home/xtrzy/Workspace/ppp/app/server-agent/internal/store/file_test.go)
+
+Validation:
+
+- `go test ./...` in `app/server-agent`
+
+Remaining note:
+
+- this is the durable runtime for the current single-process filesystem-backed deployment
+- distributed replay and external stream scale-out remain Phase 6+
 
 ### Phase 6: Redis Streams Scale-Out
 
@@ -353,9 +375,8 @@ A phase is done only if all are true:
 
 ## Immediate Next Action
 
-Implement Phase 5:
+Implement Phase 6:
 
-1. define replay/bootstrap strategy from durable task, workflow-state, and accepted-event storage
-2. add optimistic concurrency around workflow checkpoint writes
-3. document artifact contracts and recovery expectations per node boundary
-4. make restart recovery explicit in tests instead of relying only on file-backed snapshots
+1. externalize `events.accepted`, `workflow.wakeup`, and `events.deadletter`
+2. preserve the same per-device ordering guarantees when workers scale out
+3. keep the current in-process path only as an explicit development mode

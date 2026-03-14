@@ -968,7 +968,7 @@ Workspace state at phase end:
 - no correctness-critical event exists only in memory
 - device events, internal tool results, and recovery events all go through the same acceptance rules
 - replay after crash is possible without hidden side effects
-- production runtime uses filesystem-backed snapshots for tasks, workflow state, event inbox/dead-letter, and command outbox while richer replay/runtime semantics remain Phase 5 work
+- production runtime uses filesystem-backed snapshots for tasks, workflow state, event inbox/dead-letter, and command outbox
 
 ### 16.7 Phase 5: Durable Workflow Runtime
 
@@ -978,16 +978,21 @@ Goal:
 
 Deliverables:
 
-- persist `WorkflowRun` and checkpoint state in Postgres
 - add optimistic concurrency around checkpoint advancement
-- harden `Wait`, `Retry`, `ToolCall`, and `Resync` node transitions
-- document and test artifact contracts used across node boundaries
+- add explicit startup recovery/bootstrap from durable task and workflow-state storage
+- reconcile persisted terminal workflow state back into task status on startup
+- document and test recovery and checkpoint expectations used across node boundaries
 
 Workspace state at phase end:
 
-- every active workflow run can resume after process restart
-- no hidden artifact key exists without documentation and test coverage
-- workflow node transitions are versioned and auditable
+- every active filesystem-backed workflow checkpoint can resume after process restart
+- missing checkpoints are bootstrapped explicitly instead of being recreated implicitly on first event
+- checkpoint advancement is conflict-aware rather than last-write-wins
+
+Current implementation status:
+
+- implemented in the current codebase with file-backed stores and startup recovery wiring
+- external database-backed `WorkflowRun` history remains out of scope until scale-out needs justify it
 
 ### 16.8 Phase 6: Redis Streams Scale-Out
 

@@ -49,9 +49,19 @@ func (s *FileTaskStore) Get(_ context.Context, id domain.TaskID) (*domain.Task, 
 	defer s.mu.RUnlock()
 	task, ok := s.tasks[id]
 	if !ok {
-		return nil, fmt.Errorf("task not found: %s", id)
+		return nil, fmt.Errorf("%w: task %s", ErrNotFound, id)
 	}
 	return cloneTask(task), nil
+}
+
+func (s *FileTaskStore) List(_ context.Context) ([]*domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*domain.Task, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		out = append(out, cloneTask(task))
+	}
+	return out, nil
 }
 
 func (s *FileTaskStore) ListByDevice(_ context.Context, deviceID domain.DeviceID) ([]*domain.Task, error) {
@@ -108,8 +118,35 @@ func NewFileWorkflowStateStore(dir string) (*FileWorkflowStateStore, error) {
 func (s *FileWorkflowStateStore) Save(_ context.Context, ws *domain.WorkflowState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.states[stateKey{taskID: ws.TaskID, deviceID: ws.DeviceID}] = cloneWorkflowState(ws)
-	return s.persistLocked()
+
+	key := stateKey{taskID: ws.TaskID, deviceID: ws.DeviceID}
+	current, exists := s.states[key]
+	switch {
+	case !exists && ws.Revision != 0:
+		return fmt.Errorf("%w: task=%s device=%s expected revision 0 got %d",
+			ErrCheckpointConflict, ws.TaskID, ws.DeviceID, ws.Revision)
+	case exists && ws.Revision != current.Revision:
+		return fmt.Errorf("%w: task=%s device=%s expected revision %d got %d",
+			ErrCheckpointConflict, ws.TaskID, ws.DeviceID, current.Revision, ws.Revision)
+	}
+
+	var previous *domain.WorkflowState
+	if exists {
+		previous = cloneWorkflowState(current)
+	}
+	next := cloneWorkflowState(ws)
+	next.Revision++
+	s.states[key] = next
+	if err := s.persistLocked(); err != nil {
+		if previous != nil {
+			s.states[key] = previous
+		} else {
+			delete(s.states, key)
+		}
+		return err
+	}
+	ws.Revision = next.Revision
+	return nil
 }
 
 func (s *FileWorkflowStateStore) Get(_ context.Context, taskID domain.TaskID, deviceID domain.DeviceID) (*domain.WorkflowState, error) {
@@ -117,7 +154,7 @@ func (s *FileWorkflowStateStore) Get(_ context.Context, taskID domain.TaskID, de
 	defer s.mu.RUnlock()
 	ws, ok := s.states[stateKey{taskID: taskID, deviceID: deviceID}]
 	if !ok {
-		return nil, fmt.Errorf("workflow state not found: task=%s device=%s", taskID, deviceID)
+		return nil, fmt.Errorf("%w: workflow state task=%s device=%s", ErrNotFound, taskID, deviceID)
 	}
 	return cloneWorkflowState(ws), nil
 }
@@ -329,7 +366,7 @@ func (s *FileCommandOutboxStore) Get(_ context.Context, commandID string) (*doma
 	defer s.mu.Unlock()
 	record, ok := s.snapshot.Records[commandID]
 	if !ok {
-		return nil, fmt.Errorf("command outbox record not found: %s", commandID)
+		return nil, fmt.Errorf("%w: command outbox record %s", ErrNotFound, commandID)
 	}
 	return cloneCommandOutboxRecord(record), nil
 }

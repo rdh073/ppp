@@ -32,7 +32,7 @@ internal/
   dispatcher/         Dispatcher interface — routes device.* commands, correlates responses
   workflow/           NodeRunner, NodeInput/Output; nodes/: Observe/Decide/Act/Verify/Resync/Terminal
   orchestrator/       ProcessEvent: per-device lock + watermark + dedup + node run + checkpoint
-  usecase/            AgentLifecycle, TaskControl — thin orchestration glue
+  usecase/            AgentLifecycle, TaskControl, RuntimeRecovery — thin orchestration glue
   handler/            JSON-RPC agent handler (thin), HTTP task handler
   transport/ws/       WebSocket upgrade, read loop, JSON-RPC framing
 ```
@@ -83,6 +83,7 @@ Optional env vars:
 Runtime persistence:
 - `go run ./cmd/server -data-dir ./var`
 - Default runtime data directory is `./var` relative to `app/server-agent/`
+- On startup, `RuntimeRecovery` scans persisted tasks and workflow state before the server accepts traffic
 - The server persists:
   - tasks
   - workflow checkpoints
@@ -107,6 +108,9 @@ Notes:
 - Safety guard: before mutating accessibility settings, server verifies `settings get secure android_id` on the selected adb target matches the registered `deviceId`.
 - Model-backed tools are optional; if `AUTO_TOOL_LLM_API_URL` or `AUTO_TOOL_LLM_MODEL` is unset, the `content.generate_welcome_email` tool stays visible to workflows but returns disabled so workflow-level deterministic fallback can take over.
 - `tool.result` is durably accepted through the same event plane store as device-originated events.
+- Workflow checkpoints use a persisted optimistic `Revision` token; stale checkpoint saves fail with a store conflict instead of silently overwriting newer state.
+- Startup recovery bootstraps missing workflow checkpoints for assigned non-terminal tasks and reconciles persisted terminal workflow state back into task status.
+- Bootstrapped checkpoints are tagged with artifacts `recovery_bootstrap=true` and `recovery_bootstrap_reason=startup_missing_checkpoint`.
 
 ## Extending
 
