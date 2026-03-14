@@ -53,7 +53,7 @@ transport/ws → handler → usecase → orchestrator → {store, workflow, disp
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/healthz` | Health check |
-| `POST` | `/tasks` | Create task `{goal, deviceId?}` |
+| `POST` | `/tasks` | Create task `{goal, deviceId?, workflowName?, inputArtifacts?}` |
 | `GET` | `/tasks/{id}` | Get task |
 | `DELETE` | `/tasks/{id}` | Cancel task |
 
@@ -109,18 +109,31 @@ Tool catalog runtime:
 - built-in provider kinds currently supported:
   - `builtin`: deterministic local tools plus generic OpenAI-compatible JSON prompt execution
   - `http`: remote tool provider exposing `GET /v1/tools` and `POST /v1/tools/{name}:invoke`
+  - `openai`: explicit OpenAI chat-completions prompt tools with structured JSON output
+  - `anthropic`: native Anthropic Messages API prompt tools with structured output via forced tool use
+  - `gemini`: native Gemini `generateContent` prompt tools with JSON response schema
+  - `deepseek`: native DeepSeek chat-completions prompt tools with structured output via forced tool calls
 - shipped example remote provider path:
   - server: `cmd/tool-provider-example`
   - example catalog: `config/examples/http-provider`
   - override `AUTO_TOOL_EXAMPLE_BASE_URL` if the example provider is not listening on `http://127.0.0.1:3310`
   - default `config/tools` also ships `identity.generate_alias_email` and `example_remote.generate_alias_email` behind an optional `example-http` provider
+  - default `config/tools` also ships `content.generate_welcome_email.openai` behind an optional `openai-native` provider
+  - default `config/tools` also ships `content.generate_welcome_email.deepseek` behind an optional `deepseek-native` provider
   - the default catalog keeps that tool visible but disabled until `AUTO_TOOL_EXAMPLE_BASE_URL` is set and discovery succeeds
+  - the default catalog keeps `content.generate_welcome_email.openai` visible but disabled until `AUTO_TOOL_OPENAI_API_KEY` and `AUTO_TOOL_OPENAI_MODEL` are set
+  - the default catalog keeps `content.generate_welcome_email.deepseek` visible but disabled until `AUTO_TOOL_DEEPSEEK_API_KEY` and `AUTO_TOOL_DEEPSEEK_MODEL` are set
   - note: the example catalog is intentionally minimal and is not a drop-in replacement for `config/tools`
 - shipped real-LLM env examples:
   - `config/examples/llm-providers/openai.env.example`
   - `config/examples/llm-providers/anthropic.env.example`
   - `config/examples/llm-providers/gemini.env.example`
   - `config/examples/llm-providers/deepseek.env.example`
+  - native catalog examples:
+    - `config/examples/llm-providers/catalogs/openai`
+    - `config/examples/llm-providers/catalogs/anthropic`
+    - `config/examples/llm-providers/catalogs/gemini`
+    - `config/examples/llm-providers/catalogs/deepseek`
 
 Runtime persistence:
 - `go run ./cmd/server -data-dir ./var`
@@ -151,8 +164,16 @@ Notes:
 - Safety guard: before mutating accessibility settings, server verifies `settings get secure android_id` on the selected adb target matches the registered `deviceId`.
 - Production tool runtime now loads tools and workflow bindings from the startup catalog under `config/tools` instead of hardcoding production registry composition in `main.go`.
 - Workflows may queue `pending_tool_binding` as the preferred tool invocation contract; legacy `pending_tool` and `pending_tool_params` remain supported for compatibility.
+- Tasks may carry `inputArtifacts` on create; missing workflow-state bootstrap now seeds those artifacts into the first checkpoint and into startup-recovery bootstrap.
 - Binding-aware `ToolCallNode` maps tool results directly into workflow artifacts and still emits raw `tool.result` for audit and replay.
 - Model-backed tools are optional; if `AUTO_TOOL_LLM_API_URL` or `AUTO_TOOL_LLM_MODEL` is unset, prompt-backed tools such as `content.generate_welcome_email` stay visible to workflows but return disabled so workflow-level deterministic fallback can take over.
+- The default catalog also ships `content.generate_welcome_email.openai` behind the native `openai` provider kind; it stays visible but disabled until `AUTO_TOOL_OPENAI_API_KEY` and `AUTO_TOOL_OPENAI_MODEL` are set.
+- The default catalog also ships `content.generate_welcome_email.deepseek` behind the native `deepseek` provider kind; it stays visible but disabled until `AUTO_TOOL_DEEPSEEK_API_KEY` and `AUTO_TOOL_DEEPSEEK_MODEL` are set.
+- Shipped built-in workflow names now include:
+  - `local-identity-profile`
+  - `local-identity-welcome-email`
+  - `android-settings-private-dns`
+- The Private DNS workflow requires task input artifact `private_dns_hostname` and currently uses heuristic Settings labels plus scroll detection for UI planning.
 - `tool.result` is durably accepted through the same event plane store as device-originated events.
 - Workflow checkpoints use a persisted optimistic `Revision` token; stale checkpoint saves fail with a store conflict instead of silently overwriting newer state.
 - Startup recovery bootstraps missing workflow checkpoints for assigned non-terminal tasks and reconciles persisted terminal workflow state back into task status.
@@ -225,7 +246,7 @@ Notes:
 
 - **New workflow node:** implement `workflow.NodeHandler`, register in `main.go` `buildNodeHandlers`.
 - **New agent.* method:** add case in `transport/ws/server.go:dispatch`, add handler in `handler/agent.go`.
-- **New tool without central hardcode:** add or update `config/tools/manifests/*.yaml`, `config/tools/bindings/*.yaml`, and optional `config/tools/prompts/*`; reuse `builtin` or `http` providers where possible.
+- **New tool without central hardcode:** add or update `config/tools/manifests/*.yaml`, `config/tools/bindings/*.yaml`, and optional `config/tools/prompts/*`; reuse `builtin`, `http`, `openai`, `anthropic`, `gemini`, or `deepseek` providers where possible.
 - **Example remote provider contract:** use `cmd/tool-provider-example` plus `config/examples/http-provider` as the reference shape for `GET /v1/tools` discovery and `POST /v1/tools/{name}:invoke`.
 - **Persist to Redis:** implement `store.TaskStore` + `store.WorkflowStateStore`, swap in `main.go`.
 - **Async orchestrator:** the `Dispatcher.Dispatch()` channel is the async seam — no node logic changes.

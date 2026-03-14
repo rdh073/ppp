@@ -835,8 +835,8 @@ Current workspace status:
 - Phase 0 baseline alignment is done
 - Phase 1 tool runtime hardening is done in code: production wiring is fail-closed and manifest-backed
 - Phase 2 local tool catalog is done in code: production wiring includes manifest-backed local tools with input and output validation
-- Phase 2.5 workflow adoption is done in code: the built-in `local-identity-profile` workflow uses real deterministic `ToolCall` steps and consumes `tool_result` in downstream logic
-- Phase 3 model-backed tool integration is done in code: production wiring now loads provider-backed tools from `config/tools`, supports config-only OpenAI-compatible prompt tools and `http` providers, validates tool IO with schemas, ships a reference non-builtin HTTP provider example, and ships a deterministic fallback workflow path when the provider is unavailable
+- Phase 2.5 workflow adoption is done in code: the built-in `local-identity-profile` workflow uses real deterministic `ToolCall` steps and consumes `tool_result` in downstream logic, and the built-in `android-settings-private-dns` workflow now plans real `device.execute` Settings actions from observed UI snapshots when `private_dns_hostname` is seeded as a task input artifact
+- Phase 3 model-backed tool integration is done in code: production wiring now loads provider-backed tools from `config/tools`, supports config-only OpenAI-compatible prompt tools, native `openai`, `anthropic`, `gemini`, and `deepseek` prompt providers, and `http` providers, validates tool IO with schemas, ships a reference non-builtin HTTP provider example, ships default-catalog native OpenAI and DeepSeek manifests behind optional provider gates, and ships a deterministic fallback workflow path when the provider is unavailable
 - Phase 4 durable event plane is done in code: accepted events, dead letters, dedup/watermark state, command outbox records, and production task/workflow snapshots are file-backed in the shipped runtime
 
 ### 16.1 Phase Rules

@@ -43,9 +43,10 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Goal         string `json:"goal"`
-		DeviceID     string `json:"deviceId"`
-		WorkflowName string `json:"workflowName"`
+		Goal           string            `json:"goal"`
+		DeviceID       string            `json:"deviceId"`
+		WorkflowName   string            `json:"workflowName"`
+		InputArtifacts map[string]string `json:"inputArtifacts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Goal == "" {
 		http.Error(w, "goal is required", http.StatusBadRequest)
@@ -53,9 +54,10 @@ func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task, err := h.uc.CreateTask(r.Context(), usecase.CreateTaskRequest{
-		Goal:         body.Goal,
-		DeviceID:     domain.DeviceID(body.DeviceID),
-		WorkflowName: body.WorkflowName,
+		Goal:           body.Goal,
+		DeviceID:       domain.DeviceID(body.DeviceID),
+		WorkflowName:   body.WorkflowName,
+		InputArtifacts: body.InputArtifacts,
 	})
 	if err != nil {
 		h.log.Error("CreateTask failed", "err", err)
@@ -90,6 +92,7 @@ func taskJSON(t *domain.Task) map[string]any {
 	return map[string]any{
 		"id":             string(t.ID),
 		"goal":           t.Goal,
+		"inputArtifacts": t.InputArtifacts,
 		"status":         string(t.Status),
 		"assignedDevice": string(t.AssignedDevice),
 		"createdAt":      t.CreatedAt,

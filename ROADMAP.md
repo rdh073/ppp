@@ -86,6 +86,7 @@ Key files:
 Implemented:
 
 - production task store is file-backed
+- task create now accepts durable `inputArtifacts` that seed workflow state bootstrap
 - production workflow-state checkpoints are file-backed
 - workflow checkpoints advance with an explicit optimistic revision token
 - startup runs explicit runtime recovery before the server accepts traffic
@@ -115,7 +116,8 @@ Implemented:
 - declarative workflow tool bindings via `pending_tool_binding`
 - generic prompt-backed OpenAI-compatible JSON tool executor for config-only LLM tools
 - checked-in env examples now exist for OpenAI, Anthropic compatibility, Gemini OpenAI compatibility, and DeepSeek under `app/server-agent/config/examples/llm-providers`
-- provider kinds: `builtin` and `http`
+- native OpenAI, Anthropic, Gemini, and DeepSeek provider kinds now exist for prompt-backed tools
+- provider kinds: `builtin`, `http`, `openai`, `anthropic`, `gemini`, and `deepseek`
 - manifest timeout handling
 - manifest retry budget handling for retryable tool failures
 - input and output validation hooks
@@ -129,6 +131,8 @@ Production tools currently wired:
 3. `credential.generate_password`
 4. `identity.generate_birth_date`
 5. `content.generate_welcome_email`
+6. `content.generate_welcome_email.openai`
+7. `content.generate_welcome_email.deepseek`
 
 Key files:
 
@@ -146,9 +150,11 @@ Implemented:
 
 - built-in workflow path `local-identity-profile`
 - built-in workflow path `local-identity-welcome-email`
+- built-in workflow path `android-settings-private-dns`
 - `DecideNode` seeds deterministic `ToolCall` steps for that workflow
 - `DecideNode` consumes `tool_result` back into durable workflow artifacts
 - `DecideNode` consumes optional `tool_error` and applies deterministic fallback email content
+- `DecideNode` now also plans Android Settings actions for Private DNS using observed UI snapshots
 - orchestrator auto-advances internal nodes so `Decide -> ToolCall -> Decide -> Terminal` can complete in one event tick
 
 Key files:
@@ -248,6 +254,7 @@ Outcome:
 - model-backed tool output is schema-validated before artifact persistence
 - retry budget and trace logging exist for model-backed calls
 - shipped workflow fallback exists when the model-backed tool is disabled, times out, or fails
+- native OpenAI, Anthropic, Gemini, and DeepSeek prompt-provider catalogs are loadable under `config/examples/llm-providers/catalogs`
 
 Implemented in:
 

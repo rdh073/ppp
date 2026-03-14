@@ -46,34 +46,49 @@ func TestTaskHandler_CreateAndGet(t *testing.T) {
 
 	// POST /tasks
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"automate something"}`))
+	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"automate something","inputArtifacts":{"account.email":"ada@example.com","account.name":"Ada"}}`))
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST /tasks: expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var created map[string]any
+	var created struct {
+		ID             string            `json:"id"`
+		InputArtifacts map[string]string `json:"inputArtifacts"`
+	}
 	_ = json.NewDecoder(rec.Body).Decode(&created)
-	taskID, _ := created["id"].(string)
-	if taskID == "" {
+	if created.ID == "" {
 		t.Fatal("no id in response")
+	}
+	if created.InputArtifacts["account.email"] != "ada@example.com" || created.InputArtifacts["account.name"] != "Ada" {
+		t.Fatalf("unexpected inputArtifacts in create response: %#v", created.InputArtifacts)
 	}
 
 	// Verify persisted.
-	stored, err := tasks.Get(context.Background(), domain.TaskID(taskID))
+	stored, err := tasks.Get(context.Background(), domain.TaskID(created.ID))
 	if err != nil {
 		t.Fatalf("task not in store: %v", err)
 	}
 	if stored.Goal != "automate something" {
 		t.Errorf("goal mismatch: %q", stored.Goal)
 	}
+	if stored.InputArtifacts["account.email"] != "ada@example.com" || stored.InputArtifacts["account.name"] != "Ada" {
+		t.Fatalf("unexpected persisted inputArtifacts: %#v", stored.InputArtifacts)
+	}
 
 	// GET /tasks/{id}
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/tasks/"+taskID, nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/tasks/"+created.ID, nil)
 	h.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("GET /tasks/{id}: expected 200, got %d", rec2.Code)
+	}
+	var got struct {
+		InputArtifacts map[string]string `json:"inputArtifacts"`
+	}
+	_ = json.NewDecoder(rec2.Body).Decode(&got)
+	if got.InputArtifacts["account.email"] != "ada@example.com" || got.InputArtifacts["account.name"] != "Ada" {
+		t.Fatalf("unexpected inputArtifacts in get response: %#v", got.InputArtifacts)
 	}
 }
 

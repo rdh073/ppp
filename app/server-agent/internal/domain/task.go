@@ -22,6 +22,7 @@ func (s TaskStatus) IsTerminal() bool {
 type Task struct {
 	ID             TaskID
 	Goal           string
+	InputArtifacts map[string]string // optional seeded workflow artifacts
 	Status         TaskStatus
 	AssignedDevice DeviceID // empty until assigned
 	WorkflowName   string   // optional; empty means use server default

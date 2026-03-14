@@ -20,8 +20,13 @@ func (n *VerifyNode) Run(_ context.Context, input workflow.NodeInput) (workflow.
 
 	if pre != "" && post != "" && pre != post {
 		zero := 0
+		artifacts := map[string]string{}
+		if snapshotAfter, ok := extractSnapshotAfterRaw(post); ok {
+			artifacts["last_observe_raw"] = snapshotAfter
+		}
 		return workflow.NodeOutput{
 			Status:          workflow.NodeStatusSuccess,
+			Artifacts:       artifacts,
 			DeleteArtifacts: []string{"pre_action_snapshot"},
 			SetErrorCount:   &zero,
 		}, nil

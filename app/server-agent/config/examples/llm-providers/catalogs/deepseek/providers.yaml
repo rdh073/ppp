@@ -1,0 +1,9 @@
+providers:
+  - id: deepseek-native
+    kind: deepseek
+    optional: true
+    apiURL: https://api.deepseek.com/chat/completions
+    apiURLEnv: AUTO_TOOL_DEEPSEEK_API_URL
+    apiKeyEnv: AUTO_TOOL_DEEPSEEK_API_KEY
+    modelEnv: AUTO_TOOL_DEEPSEEK_MODEL
+    timeout: 10s

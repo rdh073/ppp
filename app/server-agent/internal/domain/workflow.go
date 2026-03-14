@@ -45,3 +45,12 @@ func NewWorkflowState(taskID TaskID, deviceID DeviceID) *WorkflowState {
 		UpdatedAt:   time.Now(),
 	}
 }
+
+// NewBootstrapWorkflowState seeds a fresh checkpoint from task-scoped inputs.
+func NewBootstrapWorkflowState(task *Task, deviceID DeviceID) *WorkflowState {
+	state := NewWorkflowState(task.ID, deviceID)
+	for k, v := range task.InputArtifacts {
+		state.Artifacts[k] = v
+	}
+	return state
+}

@@ -6,6 +6,7 @@ const (
 	DefaultWorkflowName                   = "default"
 	LocalIdentityProfileWorkflowName      = "local-identity-profile"
 	LocalIdentityWelcomeEmailWorkflowName = "local-identity-welcome-email"
+	AndroidSettingsPrivateDNSWorkflowName = "android-settings-private-dns"
 )
 
 // DefaultWorkflowDef replicates the hardcoded node routing that was previously
@@ -32,6 +33,60 @@ var LocalIdentityProfileWorkflowDef = newStandardWorkflowDef(LocalIdentityProfil
 // with one optional model-backed email generation step and a deterministic
 // fallback template.
 var LocalIdentityWelcomeEmailWorkflowDef = newStandardWorkflowDef(LocalIdentityWelcomeEmailWorkflowName)
+
+// AndroidSettingsPrivateDNSWorkflowDef is a shipped workflow path for driving
+// Android Settings to configure a Private DNS hostname.
+var AndroidSettingsPrivateDNSWorkflowDef = &domain.WorkflowDef{
+	Name:    AndroidSettingsPrivateDNSWorkflowName,
+	Version: 1,
+	Entry:   domain.NodeKindObserve,
+	Nodes: map[domain.NodeKind]domain.NodeDef{
+		domain.NodeKindObserve: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindDecide, When: "success"},
+				{To: domain.NodeKindResync, When: "failure"},
+			},
+		},
+		domain.NodeKindDecide: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindTerminal, When: "artifacts.goal_reached == 'true'"},
+				{To: domain.NodeKindTerminal, When: "errorCount >= 5"},
+				{To: domain.NodeKindWait, When: "artifacts.wait_for_events != ''"},
+				{To: domain.NodeKindAct, When: "artifacts.pending_action != ''"},
+				{To: domain.NodeKindObserve, When: ""},
+			},
+		},
+		domain.NodeKindAct: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindVerify, When: "success"},
+				{To: domain.NodeKindResync, When: "failure"},
+			},
+		},
+		domain.NodeKindVerify: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindDecide, When: "success"},
+				{To: domain.NodeKindResync, When: "failure"},
+			},
+		},
+		domain.NodeKindWait: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindDecide, When: "event.kind == 'android.activity.created'"},
+				{To: domain.NodeKindDecide, When: "event.kind == 'android.activity.resumed'"},
+				{To: domain.NodeKindDecide, When: "event.kind == 'android.screen.changed'"},
+				{To: domain.NodeKindResync, When: "failure"},
+			},
+		},
+		domain.NodeKindResync: {
+			Transitions: []domain.Transition{
+				{To: domain.NodeKindDecide, When: "success"},
+				{To: domain.NodeKindDecide, When: "failure"},
+			},
+		},
+		domain.NodeKindTerminal: {
+			Transitions: []domain.Transition{},
+		},
+	},
+}
 
 func newStandardWorkflowDef(name string) *domain.WorkflowDef {
 	return &domain.WorkflowDef{

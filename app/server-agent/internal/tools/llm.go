@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -46,6 +47,31 @@ type JSONModelClient interface {
 }
 
 type openAICompatibleJSONClient struct {
+	apiURL     string
+	apiKey     string
+	model      string
+	httpClient *http.Client
+	log        *slog.Logger
+}
+
+type anthropicMessagesJSONClient struct {
+	apiURL     string
+	apiKey     string
+	model      string
+	version    string
+	httpClient *http.Client
+	log        *slog.Logger
+}
+
+type geminiGenerateContentJSONClient struct {
+	apiURL     string
+	apiKey     string
+	model      string
+	httpClient *http.Client
+	log        *slog.Logger
+}
+
+type deepSeekChatCompletionsJSONClient struct {
 	apiURL     string
 	apiKey     string
 	model      string
@@ -103,6 +129,117 @@ type openAIChatCompletionsResponse struct {
 	} `json:"error,omitempty"`
 }
 
+type anthropicMessagesRequest struct {
+	Model       string              `json:"model"`
+	System      string              `json:"system,omitempty"`
+	MaxTokens   int                 `json:"max_tokens"`
+	Messages    []anthropicMessage  `json:"messages"`
+	Tools       []anthropicTool     `json:"tools"`
+	ToolChoice  anthropicToolChoice `json:"tool_choice"`
+	Temperature float64             `json:"temperature"`
+}
+
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type anthropicTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	InputSchema any    `json:"input_schema"`
+}
+
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+type anthropicMessagesResponse struct {
+	Content []struct {
+		Type  string          `json:"type"`
+		Text  string          `json:"text,omitempty"`
+		Input json.RawMessage `json:"input,omitempty"`
+		Name  string          `json:"name,omitempty"`
+	} `json:"content"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
+type geminiGenerateContentRequest struct {
+	SystemInstruction *geminiContent      `json:"systemInstruction,omitempty"`
+	Contents          []geminiContent     `json:"contents"`
+	GenerationConfig  geminiGenerationCfg `json:"generationConfig"`
+}
+
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiGenerationCfg struct {
+	ResponseMIMEType string  `json:"responseMimeType"`
+	ResponseSchema   any     `json:"responseSchema,omitempty"`
+	Temperature      float64 `json:"temperature"`
+}
+
+type geminiGenerateContentResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	Error *struct {
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error,omitempty"`
+}
+
+type deepSeekChatCompletionsRequest struct {
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Tools       []deepSeekTool  `json:"tools"`
+	ToolChoice  string          `json:"tool_choice"`
+	Temperature float64         `json:"temperature"`
+}
+
+type deepSeekTool struct {
+	Type     string               `json:"type"`
+	Function deepSeekToolFunction `json:"function"`
+}
+
+type deepSeekToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters"`
+	Strict      bool   `json:"strict,omitempty"`
+}
+
+type deepSeekChatCompletionsResponse struct {
+	Choices []struct {
+		Message struct {
+			ToolCalls []struct {
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
 // NewDefaultToolRegistry builds the production tool registry: deterministic
 // local tools first, then model-backed tools behind the same boundary.
 func NewDefaultToolRegistry(log *slog.Logger, cfg ModelToolConfig) nodes.ToolRegistry {
@@ -128,6 +265,56 @@ func NewOpenAICompatibleJSONClient(cfg ModelToolConfig, log *slog.Logger) JSONMo
 		return nil
 	}
 	return &openAICompatibleJSONClient{
+		apiURL: strings.TrimSpace(cfg.APIURL),
+		apiKey: strings.TrimSpace(cfg.APIKey),
+		model:  strings.TrimSpace(cfg.Model),
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		log: log,
+	}
+}
+
+func NewAnthropicMessagesJSONClient(cfg ModelToolConfig, apiVersion string, log *slog.Logger) JSONModelClient {
+	if !cfg.Enabled() {
+		return nil
+	}
+	version := strings.TrimSpace(apiVersion)
+	if version == "" {
+		version = "2023-06-01"
+	}
+	return &anthropicMessagesJSONClient{
+		apiURL:  strings.TrimSpace(cfg.APIURL),
+		apiKey:  strings.TrimSpace(cfg.APIKey),
+		model:   strings.TrimSpace(cfg.Model),
+		version: version,
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		log: log,
+	}
+}
+
+func NewGeminiGenerateContentJSONClient(cfg ModelToolConfig, log *slog.Logger) JSONModelClient {
+	if !cfg.Enabled() {
+		return nil
+	}
+	return &geminiGenerateContentJSONClient{
+		apiURL: strings.TrimSpace(cfg.APIURL),
+		apiKey: strings.TrimSpace(cfg.APIKey),
+		model:  strings.TrimSpace(cfg.Model),
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		log: log,
+	}
+}
+
+func NewDeepSeekChatCompletionsJSONClient(cfg ModelToolConfig, log *slog.Logger) JSONModelClient {
+	if !cfg.Enabled() {
+		return nil
+	}
+	return &deepSeekChatCompletionsJSONClient{
 		apiURL: strings.TrimSpace(cfg.APIURL),
 		apiKey: strings.TrimSpace(cfg.APIKey),
 		model:  strings.TrimSpace(cfg.Model),
@@ -432,6 +619,312 @@ func (c *openAICompatibleJSONClient) GenerateJSON(ctx context.Context, request J
 	return json.RawMessage(content), nil
 }
 
+func (c *geminiGenerateContentJSONClient) endpoint() string {
+	base := strings.TrimRight(strings.TrimSpace(c.apiURL), "/")
+	if strings.Contains(base, ":generateContent") {
+		return base
+	}
+	if base == "" {
+		return ""
+	}
+	return base + "/models/" + url.PathEscape(c.model) + ":generateContent"
+}
+
+func (c *anthropicMessagesJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
+	if c == nil {
+		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+	}
+
+	var schema any
+	if len(request.OutputSchema) == 0 || !json.Valid(request.OutputSchema) {
+		return nil, fmt.Errorf("invalid output schema for %s", request.ToolName)
+	}
+	if err := json.Unmarshal(request.OutputSchema, &schema); err != nil {
+		return nil, fmt.Errorf("decode output schema: %w", err)
+	}
+	temperature := 0.2
+	if request.Temperature != nil {
+		temperature = *request.Temperature
+	}
+
+	body, err := json.Marshal(anthropicMessagesRequest{
+		Model:     c.model,
+		System:    defaultSystemPrompt(request.SystemPrompt),
+		MaxTokens: 1024,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: request.Prompt},
+		},
+		Tools: []anthropicTool{
+			{
+				Name:        schemaNameForTool(request.ToolName),
+				Description: "Return the result as structured JSON matching the declared schema.",
+				InputSchema: schema,
+			},
+		},
+		ToolChoice: anthropicToolChoice{
+			Type: "tool",
+			Name: schemaNameForTool(request.ToolName),
+		},
+		Temperature: temperature,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal anthropic request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build anthropic request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("anthropic-version", c.version)
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-api-key", c.apiKey)
+	}
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("anthropic transport: %w", err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("read anthropic response: %w", err))
+	}
+
+	if c.log != nil {
+		c.log.Debug("anthropic provider response",
+			"toolName", request.ToolName,
+			"status", resp.StatusCode,
+			"elapsed", time.Since(start),
+		)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("anthropic provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("anthropic provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
+	}
+
+	var decoded anthropicMessagesResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, fmt.Errorf("decode anthropic response: %w", err)
+	}
+	content, err := extractAnthropicToolInput(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("extract anthropic content: %w", err)
+	}
+	if !json.Valid(content) {
+		return nil, fmt.Errorf("anthropic provider returned non-json content: %s", string(content))
+	}
+	return append(json.RawMessage(nil), content...), nil
+}
+
+func (c *geminiGenerateContentJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
+	if c == nil {
+		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+	}
+
+	var schema any
+	if len(request.OutputSchema) == 0 || !json.Valid(request.OutputSchema) {
+		return nil, fmt.Errorf("invalid output schema for %s", request.ToolName)
+	}
+	if err := json.Unmarshal(request.OutputSchema, &schema); err != nil {
+		return nil, fmt.Errorf("decode output schema: %w", err)
+	}
+	temperature := 0.2
+	if request.Temperature != nil {
+		temperature = *request.Temperature
+	}
+
+	body, err := json.Marshal(geminiGenerateContentRequest{
+		SystemInstruction: &geminiContent{
+			Parts: []geminiPart{{Text: defaultSystemPrompt(request.SystemPrompt)}},
+		},
+		Contents: []geminiContent{
+			{
+				Parts: []geminiPart{{Text: request.Prompt}},
+			},
+		},
+		GenerationConfig: geminiGenerationCfg{
+			ResponseMIMEType: "application/json",
+			ResponseSchema:   schema,
+			Temperature:      temperature,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal gemini request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build gemini request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+	}
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("gemini transport: %w", err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("read gemini response: %w", err))
+	}
+
+	if c.log != nil {
+		c.log.Debug("gemini provider response",
+			"toolName", request.ToolName,
+			"status", resp.StatusCode,
+			"elapsed", time.Since(start),
+		)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("gemini provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("gemini provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
+	}
+
+	var decoded geminiGenerateContentResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, fmt.Errorf("decode gemini response: %w", err)
+	}
+	content, err := extractGeminiJSON(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("extract gemini content: %w", err)
+	}
+	content = normalizeJSONPayload(content)
+	if !json.Valid([]byte(content)) {
+		return nil, fmt.Errorf("gemini provider returned non-json content: %s", content)
+	}
+	return json.RawMessage(content), nil
+}
+
+func (c *deepSeekChatCompletionsJSONClient) GenerateJSON(ctx context.Context, request JSONModelRequest) (json.RawMessage, error) {
+	if c == nil {
+		return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+	}
+
+	var schema any
+	if len(request.OutputSchema) == 0 || !json.Valid(request.OutputSchema) {
+		return nil, fmt.Errorf("invalid output schema for %s", request.ToolName)
+	}
+	if err := json.Unmarshal(request.OutputSchema, &schema); err != nil {
+		return nil, fmt.Errorf("decode output schema: %w", err)
+	}
+	temperature := 0.2
+	if request.Temperature != nil {
+		temperature = *request.Temperature
+	}
+
+	body, err := json.Marshal(deepSeekChatCompletionsRequest{
+		Model: c.model,
+		Messages: []openAIMessage{
+			{
+				Role:    "system",
+				Content: defaultSystemPrompt(request.SystemPrompt),
+			},
+			{
+				Role:    "user",
+				Content: request.Prompt,
+			},
+		},
+		Tools: []deepSeekTool{
+			{
+				Type: "function",
+				Function: deepSeekToolFunction{
+					Name:        schemaNameForTool(request.ToolName),
+					Description: "Return the result as structured JSON matching the declared schema.",
+					Parameters:  schema,
+					Strict:      true,
+				},
+			},
+		},
+		ToolChoice:  "required",
+		Temperature: temperature,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal deepseek request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build deepseek request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("deepseek transport: %w", err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("read deepseek response: %w", err))
+	}
+
+	if c.log != nil {
+		c.log.Debug("deepseek provider response",
+			"toolName", request.ToolName,
+			"status", resp.StatusCode,
+			"elapsed", time.Since(start),
+		)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		return nil, nodes.MarkToolRetryable(fmt.Errorf("deepseek provider status %d: %s", resp.StatusCode, compactProviderError(respBody)))
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("deepseek provider status %d: %s", resp.StatusCode, compactProviderError(respBody))
+	}
+
+	var decoded deepSeekChatCompletionsResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, fmt.Errorf("decode deepseek response: %w", err)
+	}
+	content, err := extractDeepSeekToolArguments(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("extract deepseek content: %w", err)
+	}
+	content = normalizeJSONPayload(content)
+	if !json.Valid([]byte(content)) {
+		return nil, fmt.Errorf("deepseek provider returned non-json content: %s", content)
+	}
+	return json.RawMessage(content), nil
+}
+
 func extractChoiceContent(response openAIChatCompletionsResponse) (string, error) {
 	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
 		return "", fmt.Errorf("%s", response.Error.Message)
@@ -467,6 +960,48 @@ func extractChoiceContent(response openAIChatCompletionsResponse) (string, error
 	}
 
 	return "", fmt.Errorf("unsupported llm content shape")
+}
+
+func extractAnthropicToolInput(response anthropicMessagesResponse) (json.RawMessage, error) {
+	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
+		return nil, fmt.Errorf("%s", response.Error.Message)
+	}
+	for _, part := range response.Content {
+		if part.Type == "tool_use" && len(part.Input) > 0 {
+			return append(json.RawMessage(nil), part.Input...), nil
+		}
+	}
+	return nil, fmt.Errorf("no tool_use content in anthropic response")
+}
+
+func extractGeminiJSON(response geminiGenerateContentResponse) (string, error) {
+	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
+		return "", fmt.Errorf("%s", response.Error.Message)
+	}
+	if len(response.Candidates) == 0 {
+		return "", fmt.Errorf("no candidates in gemini response")
+	}
+	for _, part := range response.Candidates[0].Content.Parts {
+		if strings.TrimSpace(part.Text) != "" {
+			return part.Text, nil
+		}
+	}
+	return "", fmt.Errorf("empty gemini content")
+}
+
+func extractDeepSeekToolArguments(response deepSeekChatCompletionsResponse) (string, error) {
+	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
+		return "", fmt.Errorf("%s", response.Error.Message)
+	}
+	if len(response.Choices) == 0 {
+		return "", fmt.Errorf("no choices in deepseek response")
+	}
+	for _, toolCall := range response.Choices[0].Message.ToolCalls {
+		if strings.TrimSpace(toolCall.Function.Arguments) != "" {
+			return toolCall.Function.Arguments, nil
+		}
+	}
+	return "", fmt.Errorf("no tool call arguments in deepseek response")
 }
 
 func normalizeJSONPayload(content string) string {

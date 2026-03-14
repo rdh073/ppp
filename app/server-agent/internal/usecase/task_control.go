@@ -40,9 +40,10 @@ func NewTaskControl(
 // DeviceID is optional; if empty the task is created pending assignment.
 // WorkflowName is optional; if empty the server default workflow is used.
 type CreateTaskRequest struct {
-	Goal         string
-	DeviceID     domain.DeviceID // optional
-	WorkflowName string          // optional
+	Goal           string
+	DeviceID       domain.DeviceID   // optional
+	WorkflowName   string            // optional
+	InputArtifacts map[string]string // optional
 }
 
 func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error) {
@@ -51,12 +52,13 @@ func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskReque
 	}
 
 	task := &domain.Task{
-		ID:           domain.NewTaskID(),
-		Goal:         req.Goal,
-		Status:       domain.TaskStatusPending,
-		WorkflowName: req.WorkflowName,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             domain.NewTaskID(),
+		Goal:           req.Goal,
+		InputArtifacts: req.InputArtifacts,
+		Status:         domain.TaskStatusPending,
+		WorkflowName:   req.WorkflowName,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Assign device if provided and connected.

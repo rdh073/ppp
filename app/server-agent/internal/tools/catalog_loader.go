@@ -35,13 +35,19 @@ type providerCatalogFile struct {
 }
 
 type providerConfig struct {
-	ID         string `yaml:"id"`
-	Kind       string `yaml:"kind"`
-	Optional   bool   `yaml:"optional"`
-	BaseURL    string `yaml:"baseURL"`
-	BaseURLEnv string `yaml:"baseURLEnv"`
-	APIKeyEnv  string `yaml:"apiKeyEnv"`
-	Timeout    string `yaml:"timeout"`
+	ID            string `yaml:"id"`
+	Kind          string `yaml:"kind"`
+	Optional      bool   `yaml:"optional"`
+	BaseURL       string `yaml:"baseURL"`
+	BaseURLEnv    string `yaml:"baseURLEnv"`
+	APIURL        string `yaml:"apiURL"`
+	APIURLEnv     string `yaml:"apiURLEnv"`
+	APIKeyEnv     string `yaml:"apiKeyEnv"`
+	Model         string `yaml:"model"`
+	ModelEnv      string `yaml:"modelEnv"`
+	APIVersion    string `yaml:"apiVersion"`
+	APIVersionEnv string `yaml:"apiVersionEnv"`
+	Timeout       string `yaml:"timeout"`
 }
 
 type toolManifestConfig struct {
@@ -106,6 +112,13 @@ type httpProvider struct {
 	disabledReason string
 }
 
+type promptModelProvider struct {
+	cfg            providerConfig
+	expectedTool   string
+	modelClient    JSONModelClient
+	disabledReason string
+}
+
 type remoteProviderTool struct {
 	Name          string          `json:"name"`
 	Description   string          `json:"description"`
@@ -136,7 +149,12 @@ type remoteInvokeError struct {
 	Retryable bool   `json:"retryable,omitempty"`
 }
 
-const builtinOpenAIJSONTool = "openai.chat.completions.json"
+const (
+	builtinOpenAIJSONTool           = "openai.chat.completions.json"
+	anthropicMessagesJSONTool       = "anthropic.messages.json"
+	geminiGenerateContentJSONTool   = "gemini.generate_content.json"
+	deepSeekChatCompletionsJSONTool = "deepseek.chat.completions.json"
+)
 
 func LoadCatalog(ctx context.Context, dir string, log *slog.Logger, modelCfg ModelToolConfig) (*LoadedCatalog, error) {
 	providers, err := loadProviders(ctx, dir, log, modelCfg)
@@ -236,6 +254,36 @@ func loadProviders(ctx context.Context, dir string, log *slog.Logger, modelCfg M
 				log.Warn("optional tool provider disabled", "provider", cfg.ID, "reason", provider.disabledReason)
 			}
 			providers[cfg.ID] = provider
+		case "anthropic":
+			provider, err := newPromptModelProvider(cfg, anthropicMessagesJSONTool, NewAnthropicMessagesJSONClient, "https://api.anthropic.com/v1/messages", log)
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = provider
+		case "gemini":
+			provider, err := newPromptModelProvider(cfg, geminiGenerateContentJSONTool, func(cfg ModelToolConfig, _ string, log *slog.Logger) JSONModelClient {
+				return NewGeminiGenerateContentJSONClient(cfg, log)
+			}, "https://generativelanguage.googleapis.com/v1beta", log)
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = provider
+		case "openai":
+			provider, err := newPromptModelProvider(cfg, builtinOpenAIJSONTool, func(cfg ModelToolConfig, _ string, log *slog.Logger) JSONModelClient {
+				return NewOpenAICompatibleJSONClient(cfg, log)
+			}, "https://api.openai.com/v1/chat/completions", log)
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = provider
+		case "deepseek":
+			provider, err := newPromptModelProvider(cfg, deepSeekChatCompletionsJSONTool, func(cfg ModelToolConfig, _ string, log *slog.Logger) JSONModelClient {
+				return NewDeepSeekChatCompletionsJSONClient(cfg, log)
+			}, "https://api.deepseek.com/chat/completions", log)
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = provider
 		default:
 			return nil, fmt.Errorf("unsupported provider kind %s", cfg.Kind)
 		}
@@ -270,6 +318,65 @@ func loadToolManifests(dir string) ([]catalogToolManifest, error) {
 		manifests = append(manifests, manifest)
 	}
 	return manifests, nil
+}
+
+type modelClientFactory func(ModelToolConfig, string, *slog.Logger) JSONModelClient
+
+func newPromptModelProvider(cfg providerConfig, expectedTool string, factory modelClientFactory, defaultAPIURL string, log *slog.Logger) (*promptModelProvider, error) {
+	modelCfg, disabledReason := providerModelConfig(cfg, defaultAPIURL)
+	if disabledReason != "" && !cfg.Optional {
+		return nil, fmt.Errorf("provider %s %s", cfg.ID, disabledReason)
+	}
+	provider := &promptModelProvider{
+		cfg:            cfg,
+		expectedTool:   expectedTool,
+		disabledReason: disabledReason,
+	}
+	if disabledReason == "" {
+		provider.modelClient = factory(modelCfg, resolveProviderString(cfg.APIVersion, cfg.APIVersionEnv), log)
+		if provider.modelClient == nil {
+			if !cfg.Optional {
+				return nil, fmt.Errorf("provider %s model client not configured", cfg.ID)
+			}
+			provider.disabledReason = "model client not configured"
+		}
+	}
+	if provider.disabledReason != "" && log != nil {
+		log.Warn("optional model provider disabled", "provider", cfg.ID, "reason", provider.disabledReason)
+	}
+	return provider, nil
+}
+
+func providerModelConfig(cfg providerConfig, defaultAPIURL string) (ModelToolConfig, string) {
+	apiURL := resolveProviderString(cfg.APIURL, cfg.APIURLEnv)
+	if apiURL == "" {
+		apiURL = strings.TrimSpace(defaultAPIURL)
+	}
+	model := resolveProviderString(cfg.Model, cfg.ModelEnv)
+	apiKey := strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	disabled := ""
+	switch {
+	case apiURL == "" && model == "":
+		disabled = "apiURL and model not configured"
+	case apiURL == "":
+		disabled = "apiURL not configured"
+	case model == "":
+		disabled = "model not configured"
+	}
+	return ModelToolConfig{
+		APIURL: apiURL,
+		APIKey: apiKey,
+		Model:  model,
+	}, disabled
+}
+
+func resolveProviderString(value string, envName string) string {
+	if strings.TrimSpace(envName) != "" {
+		if envValue := strings.TrimSpace(os.Getenv(envName)); envValue != "" {
+			return envValue
+		}
+	}
+	return strings.TrimSpace(value)
 }
 
 func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManifest, error) {
@@ -362,7 +469,7 @@ func loadToolBindings(dir string, toolNames map[string]struct{}) ([]nodes.ToolBi
 
 func decodeBindingFile(data []byte) ([]bindingConfig, error) {
 	var wrapper bindingCatalogFile
-	if err := yaml.Unmarshal(data, &wrapper); err == nil && len(wrapper.Bindings) > 0 {
+	if err := yaml.Unmarshal(data, &wrapper); err == nil && wrapper.Bindings != nil {
 		return wrapper.Bindings, nil
 	}
 	var single bindingConfig
@@ -548,8 +655,19 @@ func (p *builtinProvider) wrapProviderDefinition(manifest catalogToolManifest, d
 }
 
 func (p *builtinProvider) buildGenericOpenAIJSONTool(manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+	return buildPromptModelToolDefinition(manifest, builtinOpenAIJSONTool, p.modelClient, "")
+}
+
+func (p *promptModelProvider) Build(_ context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+	return buildPromptModelToolDefinition(manifest, p.expectedTool, p.modelClient, p.disabledReason)
+}
+
+func buildPromptModelToolDefinition(manifest catalogToolManifest, expectedTool string, client JSONModelClient, disabledReason string) (nodes.ToolDefinition, error) {
+	if manifest.Manifest.ProviderToolName != expectedTool {
+		return nodes.ToolDefinition{}, fmt.Errorf("unsupported prompt provider tool %s", manifest.Manifest.ProviderToolName)
+	}
 	if strings.TrimSpace(manifest.PromptTemplate) == "" {
-		return nodes.ToolDefinition{}, fmt.Errorf("prompt template required for %s", builtinOpenAIJSONTool)
+		return nodes.ToolDefinition{}, fmt.Errorf("prompt template required for %s", expectedTool)
 	}
 	validateParams, err := compileSchemaValidator(manifest.Manifest.InputSchema)
 	if err != nil {
@@ -564,8 +682,12 @@ func (p *builtinProvider) buildGenericOpenAIJSONTool(manifest catalogToolManifes
 		ValidateParams: validateParams,
 		ValidateResult: validateResult,
 		Handler: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-			if p.modelClient == nil {
-				return nil, fmt.Errorf("%w: model client not configured", nodes.ErrToolDisabled)
+			if client == nil {
+				reason := strings.TrimSpace(disabledReason)
+				if reason == "" {
+					reason = "model client not configured"
+				}
+				return nil, fmt.Errorf("%w: %s", nodes.ErrToolDisabled, reason)
 			}
 			prompt, systemPrompt, err := renderPromptTemplates(manifest, params)
 			if err != nil {
@@ -577,7 +699,7 @@ func (p *builtinProvider) buildGenericOpenAIJSONTool(manifest catalogToolManifes
 				Prompt:       prompt,
 				OutputSchema: manifest.Manifest.OutputSchema,
 			}
-			return p.modelClient.GenerateJSON(ctx, request)
+			return client.GenerateJSON(ctx, request)
 		},
 	}, nil
 }

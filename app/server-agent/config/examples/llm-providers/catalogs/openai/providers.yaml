@@ -1,0 +1,9 @@
+providers:
+  - id: openai-native
+    kind: openai
+    optional: true
+    apiURL: https://api.openai.com/v1/chat/completions
+    apiURLEnv: AUTO_TOOL_OPENAI_API_URL
+    apiKeyEnv: AUTO_TOOL_OPENAI_API_KEY
+    modelEnv: AUTO_TOOL_OPENAI_MODEL
+    timeout: 10s

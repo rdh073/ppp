@@ -18,6 +18,7 @@ func TestRuntimeRecovery_BootstrapsMissingWorkflowState(t *testing.T) {
 	task := &domain.Task{
 		ID:             "task-recovery-bootstrap",
 		Goal:           "resume later",
+		InputArtifacts: map[string]string{"account.email": "ada@example.com"},
 		Status:         domain.TaskStatusRunning,
 		AssignedDevice: "dev-bootstrap",
 		CreatedAt:      time.Now(),
@@ -48,6 +49,9 @@ func TestRuntimeRecovery_BootstrapsMissingWorkflowState(t *testing.T) {
 	}
 	if state.Artifacts["recovery_bootstrap_reason"] != "startup_missing_checkpoint" {
 		t.Fatalf("expected recovery bootstrap reason, got %#v", state.Artifacts)
+	}
+	if state.Artifacts["account.email"] != "ada@example.com" {
+		t.Fatalf("expected recovery bootstrap to seed inputArtifacts, got %#v", state.Artifacts)
 	}
 	if state.Revision != 1 {
 		t.Fatalf("expected bootstrap revision 1, got %d", state.Revision)
@@ -123,6 +127,7 @@ func TestRuntimeRecovery_FileStoresAcrossReopen(t *testing.T) {
 
 	task := &domain.Task{
 		ID:             "task-reopen",
+		InputArtifacts: map[string]string{"account.email": "ada@example.com"},
 		Status:         domain.TaskStatusRunning,
 		AssignedDevice: "dev-reopen",
 		CreatedAt:      time.Now(),
@@ -141,6 +146,14 @@ func TestRuntimeRecovery_FileStoresAcrossReopen(t *testing.T) {
 		t.Fatalf("reopen state store: %v", err)
 	}
 
+	reopenedTask, err := reopenedTasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get reopened task: %v", err)
+	}
+	if reopenedTask.InputArtifacts["account.email"] != "ada@example.com" {
+		t.Fatalf("expected persisted task inputArtifacts after reopen, got %#v", reopenedTask.InputArtifacts)
+	}
+
 	uc := usecase.NewRuntimeRecovery(reopenedTasks, reopenedStates, newLog())
 	report, err := uc.Recover(ctx)
 	if err != nil {
@@ -156,6 +169,9 @@ func TestRuntimeRecovery_FileStoresAcrossReopen(t *testing.T) {
 	}
 	if got.Artifacts["recovery_bootstrap"] != "true" {
 		t.Fatalf("expected persisted recovery bootstrap artifact, got %#v", got.Artifacts)
+	}
+	if got.Artifacts["account.email"] != "ada@example.com" {
+		t.Fatalf("expected persisted inputArtifacts in recovered state, got %#v", got.Artifacts)
 	}
 	if got.Revision != 1 {
 		t.Fatalf("expected persisted recovery revision 1, got %d", got.Revision)

@@ -145,7 +145,7 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// No state yet — bootstrap from Observe.
-			state = domain.NewWorkflowState(task.ID, e.DeviceID)
+			state = domain.NewBootstrapWorkflowState(task, e.DeviceID)
 		} else {
 			return fmt.Errorf("load workflow state: %w", err)
 		}

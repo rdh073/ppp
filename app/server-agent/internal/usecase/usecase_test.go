@@ -8,19 +8,21 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
+	"github.com/autosdk/ppp/server-agent/internal/workflow"
 )
 
 // --- shared fakes ---
 
 type noopSender struct{}
 
-func (noopSender) SendRequest(_, _ string, _ any) error    { return nil }
-func (noopSender) SendSuccess(_ string, _ any) error       { return nil }
+func (noopSender) SendRequest(_, _ string, _ any) error      { return nil }
+func (noopSender) SendSuccess(_ string, _ any) error         { return nil }
 func (noopSender) SendError(_ string, _ int, _ string) error { return nil }
-func (noopSender) Close() error                             { return nil }
+func (noopSender) Close() error                              { return nil }
 
 type recordingProcessor struct {
 	events []domain.Event
@@ -29,6 +31,15 @@ type recordingProcessor struct {
 func (r *recordingProcessor) ProcessEvent(_ context.Context, e domain.Event) error {
 	r.events = append(r.events, e)
 	return nil
+}
+
+type pendingNode struct{}
+
+func (pendingNode) Run(_ context.Context, _ workflow.NodeInput) (workflow.NodeOutput, error) {
+	return workflow.NodeOutput{
+		Status:     workflow.NodeStatusPending,
+		WaitingFor: []domain.EventKind{domain.EventKindAgentOffline},
+	}, nil
 }
 
 func newLog() *slog.Logger {
@@ -156,17 +167,28 @@ func TestCreateTask_NoDevice_Pending(t *testing.T) {
 	reg := registry.New()
 	uc, tasks := newTaskUC(reg)
 
-	task, err := uc.CreateTask(context.Background(), usecase.CreateTaskRequest{Goal: "do work"})
+	task, err := uc.CreateTask(context.Background(), usecase.CreateTaskRequest{
+		Goal:           "do work",
+		InputArtifacts: map[string]string{"account.email": "ada@example.com"},
+	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	if task.Status != domain.TaskStatusPending {
 		t.Errorf("expected Pending, got %s", task.Status)
 	}
+	if task.InputArtifacts["account.email"] != "ada@example.com" {
+		t.Fatalf("expected task inputArtifacts to be returned, got %#v", task.InputArtifacts)
+	}
+
+	task.InputArtifacts["account.email"] = "mutated@example.com"
 
 	stored, _ := tasks.Get(context.Background(), task.ID)
 	if stored.Goal != "do work" {
 		t.Errorf("goal not stored")
+	}
+	if stored.InputArtifacts["account.email"] != "ada@example.com" {
+		t.Fatalf("expected stored inputArtifacts to be isolated from caller mutation, got %#v", stored.InputArtifacts)
 	}
 }
 
@@ -190,6 +212,45 @@ func TestCreateTask_WithConnectedDevice_Running(t *testing.T) {
 	}
 	if task.AssignedDevice != "dev-5" {
 		t.Errorf("device not assigned")
+	}
+}
+
+func TestCreateTask_WithConnectedDevice_BootstrapsWorkflowStateWithInputArtifacts(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	sess := &domain.Session{ID: "sess-bootstrap", DeviceID: "dev-bootstrap", ConnectedAt: time.Now(), LastHeartbeatAt: time.Now()}
+	_ = reg.Add(sess, noopSender{})
+
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	runner := workflow.NewRunner(
+		map[domain.NodeKind]workflow.NodeHandler{
+			domain.NodeKindObserve: pendingNode{},
+		},
+		workflow.NewMemoryDefStore(),
+		workflow.DefaultWorkflowName,
+	)
+	orch := orchestrator.New(tasks, states, runner, newLog())
+	uc := usecase.NewTaskControl(tasks, states, orch, reg, newLog())
+
+	task, err := uc.CreateTask(ctx, usecase.CreateTaskRequest{
+		Goal:           "run on device",
+		DeviceID:       "dev-bootstrap",
+		InputArtifacts: map[string]string{"account.email": "ada@example.com", "ticket.id": "42"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	state, err := states.Get(ctx, task.ID, task.AssignedDevice)
+	if err != nil {
+		t.Fatalf("Get state: %v", err)
+	}
+	if state.Artifacts["account.email"] != "ada@example.com" || state.Artifacts["ticket.id"] != "42" {
+		t.Fatalf("expected bootstrapped inputArtifacts in workflow state, got %#v", state.Artifacts)
+	}
+	if state.Revision != 1 {
+		t.Fatalf("expected bootstrapped state revision 1, got %d", state.Revision)
 	}
 }
 

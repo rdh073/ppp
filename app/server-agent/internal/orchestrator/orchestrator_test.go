@@ -62,6 +62,7 @@ func seededDefStore() *workflow.MemoryDefStore {
 	_ = mem.Put(context.Background(), workflow.DefaultWorkflowDef.Name, workflow.DefaultWorkflowDef)
 	_ = mem.Put(context.Background(), workflow.LocalIdentityProfileWorkflowDef.Name, workflow.LocalIdentityProfileWorkflowDef)
 	_ = mem.Put(context.Background(), workflow.LocalIdentityWelcomeEmailWorkflowDef.Name, workflow.LocalIdentityWelcomeEmailWorkflowDef)
+	_ = mem.Put(context.Background(), workflow.AndroidSettingsPrivateDNSWorkflowDef.Name, workflow.AndroidSettingsPrivateDNSWorkflowDef)
 	return mem
 }
 

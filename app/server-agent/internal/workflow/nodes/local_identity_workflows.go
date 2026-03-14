@@ -63,6 +63,8 @@ func runWorkflowDecision(input workflowpkg.NodeInput) (workflowpkg.NodeOutput, e
 		return runLocalIdentityWorkflowDecision(input, localIdentityWorkflowOptions{})
 	case workflowpkg.LocalIdentityWelcomeEmailWorkflowName:
 		return runLocalIdentityWorkflowDecision(input, localIdentityWorkflowOptions{includeWelcomeEmail: true})
+	case workflowpkg.AndroidSettingsPrivateDNSWorkflowName:
+		return runAndroidSettingsPrivateDNSWorkflowDecision(input)
 	default:
 		return workflowpkg.NodeOutput{Status: workflowpkg.NodeStatusSuccess}, nil
 	}

@@ -1,0 +1,88 @@
+# Example workflow definition for setting Android Private DNS through the
+# Settings UI.
+#
+# This YAML matches the current server-agent WorkflowDef schema and can be
+# loaded through `-workflow-dir` or `PUT /workflows/{name}`.
+#
+# Important:
+# - This file only defines node routing and transition conditions.
+# - The current WorkflowDef schema does not have declarative action steps like
+#   `click`, `input_text`, or `scroll`.
+# - For this workflow, those actions are planned in Go code:
+#   `internal/workflow/nodes/android_settings_private_dns_workflow.go`
+# - The runtime still boots new tasks from `observe`.
+# - A task/bootstrapper must seed these artifacts:
+#   - private_dns_hostname: the hostname to enter, e.g. `dns.example.com`
+#   - private_dns_step: current UI step identifier
+#   - pending_action: JSON payload for `device.execute`
+#   - wait_for_events: comma-separated event kinds expected by WaitNode
+#   - goal_reached: `true` once final verification passes
+#   - terminal_reason: final completion or failure reason
+#
+# Current built-in planner progression:
+# 1. open Settings app
+# 2. navigate to "Network & internet"
+# 3. open "Private DNS"
+# 4. choose "Private DNS provider hostname"
+# 5. input `private_dns_hostname`
+# 6. tap "Save"
+# 7. verify the hostname is visible in the post-action snapshot
+
+name: android-settings-private-dns
+version: 1
+entry: observe
+nodes:
+  observe:
+    transitions:
+      - to: decide
+        when: success
+      - to: resync
+        when: failure
+
+  decide:
+    transitions:
+      - to: terminal
+        when: "artifacts.goal_reached == 'true'"
+      - to: terminal
+        when: "errorCount >= 5"
+      - to: wait
+        when: "artifacts.wait_for_events != ''"
+      - to: act
+        when: "artifacts.pending_action != ''"
+      - to: observe
+        when: default
+
+  act:
+    transitions:
+      - to: verify
+        when: success
+      - to: resync
+        when: failure
+
+  verify:
+    transitions:
+      - to: decide
+        when: success
+      - to: resync
+        when: failure
+
+  wait:
+    transitions:
+      - to: decide
+        when: "event.kind == 'android.activity.created'"
+      - to: decide
+        when: "event.kind == 'android.activity.resumed'"
+      - to: decide
+        when: "event.kind == 'android.screen.changed'"
+      - to: resync
+        when: failure
+
+  resync:
+    transitions:
+      - to: decide
+        when: success
+      - to: decide
+        when: failure
+
+  terminal:
+    transitions: []

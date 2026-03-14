@@ -52,6 +52,7 @@ func cloneTask(task *domain.Task) *domain.Task {
 		return nil
 	}
 	cp := *task
+	cp.InputArtifacts = cloneStringMap(task.InputArtifacts)
 	return &cp
 }
 
@@ -60,12 +61,23 @@ func cloneWorkflowState(ws *domain.WorkflowState) *domain.WorkflowState {
 		return nil
 	}
 	cp := *ws
-	cp.Artifacts = make(map[string]string, len(ws.Artifacts))
-	for k, v := range ws.Artifacts {
-		cp.Artifacts[k] = v
+	cp.Artifacts = cloneStringMap(ws.Artifacts)
+	if cp.Artifacts == nil {
+		cp.Artifacts = make(map[string]string)
 	}
 	cp.WaitingFor = append([]domain.EventKind(nil), ws.WaitingFor...)
 	return &cp
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func cloneAcceptedEventRecord(record domain.AcceptedEventRecord) domain.AcceptedEventRecord {

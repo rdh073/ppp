@@ -31,6 +31,27 @@ func newTask(id string) *domain.Task {
 	}
 }
 
+func snapshotRaw(packageName string, targets ...domain.UiTarget) string {
+	raw, _ := json.Marshal(domain.UiSnapshot{
+		ID:          "snap-test",
+		DeviceID:    "dev-test",
+		PackageName: packageName,
+		CapturedAt:  time.Now(),
+		Targets:     targets,
+	})
+	return string(raw)
+}
+
+func executeRaw(snapshotBefore string, snapshotAfter string) string {
+	before := json.RawMessage(snapshotBefore)
+	after := json.RawMessage(snapshotAfter)
+	raw, _ := json.Marshal(map[string]json.RawMessage{
+		"snapshotBefore": before,
+		"snapshotAfter":  after,
+	})
+	return string(raw)
+}
+
 // fakeDispatcher implements dispatcher.Dispatcher for tests.
 type fakeDispatcher struct {
 	result domain.CommandResult
@@ -56,8 +77,8 @@ func (errorDispatcher) Dispatch(_ context.Context, _ domain.Command) (<-chan dom
 func (errorDispatcher) DeliverResponse(_ domain.CommandResult) {}
 
 // --- DecideNode ---
-// DecideNode is now a passthrough — it always returns success.
-// Routing is done by the Runner via the workflow def.
+// DecideNode is mostly a passthrough, but built-in workflows may seed
+// artifacts such as pending_tool_binding or pending_action.
 
 func TestDecideNode_GoalReached_Terminal(t *testing.T) {
 	n := nodes.NewDecideNode()
@@ -106,6 +127,110 @@ func TestDecideNode_Default_Observe(t *testing.T) {
 	}
 }
 
+func TestDecideNode_PrivateDNS_QueuesOpenSettings(t *testing.T) {
+	n := nodes.NewDecideNode()
+	state := newState("t-private-dns-open", "dev-private-dns")
+	state.Artifacts["private_dns_hostname"] = "dns.example.com"
+	state.Artifacts["last_observe_raw"] = snapshotRaw("com.example.app")
+	task := newTask("t-private-dns-open")
+	task.WorkflowName = workflow.AndroidSettingsPrivateDNSWorkflowName
+
+	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != workflow.NodeStatusSuccess {
+		t.Fatalf("expected success, got %s", out.Status)
+	}
+	if out.Artifacts["private_dns_step"] != "open_settings" {
+		t.Fatalf("expected open_settings step, got %q", out.Artifacts["private_dns_step"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"kind":"open_app"`) {
+		t.Fatalf("expected open_app action, got %s", out.Artifacts["pending_action"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"value":"com.android.settings"`) {
+		t.Fatalf("expected settings package target, got %s", out.Artifacts["pending_action"])
+	}
+}
+
+func TestDecideNode_PrivateDNS_QueuesHostnameInput(t *testing.T) {
+	n := nodes.NewDecideNode()
+	state := newState("t-private-dns-input", "dev-private-dns")
+	state.Artifacts["private_dns_hostname"] = "dns.example.com"
+	state.Artifacts["last_observe_raw"] = snapshotRaw("com.android.settings",
+		domain.UiTarget{TargetID: "edit-1", ResourceID: "android:id/edit", Enabled: true},
+	)
+	task := newTask("t-private-dns-input")
+	task.WorkflowName = workflow.AndroidSettingsPrivateDNSWorkflowName
+
+	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Artifacts["private_dns_step"] != "input_hostname" {
+		t.Fatalf("expected input_hostname step, got %q", out.Artifacts["private_dns_step"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"kind":"input_text"`) {
+		t.Fatalf("expected input_text action, got %s", out.Artifacts["pending_action"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"value":"android:id/edit"`) {
+		t.Fatalf("expected edit field selector, got %s", out.Artifacts["pending_action"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"inputText":"dns.example.com"`) {
+		t.Fatalf("expected hostname input payload, got %s", out.Artifacts["pending_action"])
+	}
+}
+
+func TestDecideNode_PrivateDNS_QueuesSaveWhenHostnamePresent(t *testing.T) {
+	n := nodes.NewDecideNode()
+	state := newState("t-private-dns-save", "dev-private-dns")
+	state.Artifacts["private_dns_hostname"] = "dns.example.com"
+	state.Artifacts["last_observe_raw"] = snapshotRaw("com.android.settings",
+		domain.UiTarget{TargetID: "edit-1", ResourceID: "android:id/edit", Enabled: true},
+		domain.UiTarget{TargetID: "host-text", Text: "dns.example.com", Enabled: true},
+		domain.UiTarget{TargetID: "save-button", Text: "Save", Actionable: true, Enabled: true},
+	)
+	task := newTask("t-private-dns-save")
+	task.WorkflowName = workflow.AndroidSettingsPrivateDNSWorkflowName
+
+	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Artifacts["private_dns_step"] != "save_hostname" {
+		t.Fatalf("expected save_hostname step, got %q", out.Artifacts["private_dns_step"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"kind":"click"`) {
+		t.Fatalf("expected click action, got %s", out.Artifacts["pending_action"])
+	}
+	if !strings.Contains(out.Artifacts["pending_action"], `"value":"Save"`) {
+		t.Fatalf("expected Save selector, got %s", out.Artifacts["pending_action"])
+	}
+}
+
+func TestDecideNode_PrivateDNS_MarksGoalReachedWhenHostnameVisible(t *testing.T) {
+	n := nodes.NewDecideNode()
+	state := newState("t-private-dns-done", "dev-private-dns")
+	state.Artifacts["private_dns_hostname"] = "dns.example.com"
+	state.Artifacts["last_observe_raw"] = snapshotRaw("com.android.settings",
+		domain.UiTarget{TargetID: "row-1", Text: "Private DNS", Enabled: true},
+		domain.UiTarget{TargetID: "summary-1", Text: "dns.example.com", Enabled: true},
+	)
+	task := newTask("t-private-dns-done")
+	task.WorkflowName = workflow.AndroidSettingsPrivateDNSWorkflowName
+
+	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Artifacts["goal_reached"] != "true" {
+		t.Fatalf("expected goal_reached=true, got %q", out.Artifacts["goal_reached"])
+	}
+	if out.Artifacts["terminal_reason"] != "private_dns_hostname_applied" {
+		t.Fatalf("expected terminal reason, got %q", out.Artifacts["terminal_reason"])
+	}
+}
+
 // --- ObserveNode ---
 
 func TestObserveNode_Success_Decide(t *testing.T) {
@@ -146,6 +271,26 @@ func TestObserveNode_Failure_Resync(t *testing.T) {
 	out, _ := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-2")})
 	if out.Status != workflow.NodeStatusFailure {
 		t.Errorf("expected NodeStatusFailure on failure, got %s", out.Status)
+	}
+}
+
+func TestVerifyNode_Success_PromotesSnapshotAfterToLastObserveRaw(t *testing.T) {
+	n := nodes.NewVerifyNode()
+	state := newState("t-verify", "dev-verify")
+	before := snapshotRaw("com.android.settings", domain.UiTarget{TargetID: "before", Text: "Private DNS"})
+	after := snapshotRaw("com.android.settings", domain.UiTarget{TargetID: "after", Text: "dns.example.com"})
+	state.Artifacts["pre_action_snapshot"] = before
+	state.Artifacts["last_execute_raw"] = executeRaw(before, after)
+
+	out, err := n.Run(context.Background(), workflow.NodeInput{State: state, Task: newTask("t-verify")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != workflow.NodeStatusSuccess {
+		t.Fatalf("expected success, got %s", out.Status)
+	}
+	if out.Artifacts["last_observe_raw"] != after {
+		t.Fatalf("expected last_observe_raw to be snapshotAfter, got %s", out.Artifacts["last_observe_raw"])
 	}
 }
 

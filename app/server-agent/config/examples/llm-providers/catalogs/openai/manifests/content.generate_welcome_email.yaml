@@ -1,0 +1,37 @@
+name: content.generate_welcome_email
+provider: openai-native
+providerToolName: openai.chat.completions.json
+description: Generates a short welcome email body from profile fields
+deterministic: false
+timeout: 8s
+retryBudget: 1
+modelPolicy: backend_workflow_json
+promptFile: ../../../../tools/prompts/content.generate_welcome_email.prompt.tmpl
+inputSchema:
+  type: object
+  required: [fullName]
+  properties:
+    fullName:
+      type: string
+    email:
+      type: string
+    productName:
+      type: string
+    senderName:
+      type: string
+    language:
+      enum: [id, en]
+    tone:
+      type: string
+outputSchema:
+  type: object
+  required: [subject, body, language, tone]
+  properties:
+    subject:
+      type: string
+    body:
+      type: string
+    language:
+      enum: [id, en]
+    tone:
+      type: string

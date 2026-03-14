@@ -1,6 +1,20 @@
 providers:
   - id: builtin
     kind: builtin
+  - id: openai-native
+    kind: openai
+    optional: true
+    apiURLEnv: AUTO_TOOL_OPENAI_API_URL
+    apiKeyEnv: AUTO_TOOL_OPENAI_API_KEY
+    modelEnv: AUTO_TOOL_OPENAI_MODEL
+    timeout: 10s
+  - id: deepseek-native
+    kind: deepseek
+    optional: true
+    apiURLEnv: AUTO_TOOL_DEEPSEEK_API_URL
+    apiKeyEnv: AUTO_TOOL_DEEPSEEK_API_KEY
+    modelEnv: AUTO_TOOL_DEEPSEEK_MODEL
+    timeout: 10s
   - id: example-http
     kind: http
     optional: true

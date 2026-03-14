@@ -57,7 +57,7 @@ func (u *RuntimeRecoveryUseCase) Recover(ctx context.Context) (RuntimeRecoveryRe
 				return report, fmt.Errorf("get workflow state for task %s: %w", task.ID, err)
 			}
 
-			bootstrap := domain.NewWorkflowState(task.ID, task.AssignedDevice)
+			bootstrap := domain.NewBootstrapWorkflowState(task, task.AssignedDevice)
 			bootstrap.Artifacts["recovery_bootstrap"] = "true"
 			bootstrap.Artifacts["recovery_bootstrap_reason"] = "startup_missing_checkpoint"
 			if err := u.states.Save(ctx, bootstrap); err != nil {
