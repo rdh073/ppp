@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/electricbubble/gadb"
 
@@ -74,6 +75,18 @@ func NewAdbAccessibilityAutoEnabler(
 }
 
 func (a *AdbAccessibilityAutoEnabler) Enable(
+	ctx context.Context,
+	deviceID domain.DeviceID,
+	adbSerial string,
+	serviceComponent string,
+) error {
+	return retryWithBackoff(ctx, 3, time.Second, func() error {
+		return a.enable(ctx, deviceID, adbSerial, serviceComponent)
+	})
+}
+
+// enable is the single-attempt implementation; Enable wraps it with retry.
+func (a *AdbAccessibilityAutoEnabler) enable(
 	ctx context.Context,
 	deviceID domain.DeviceID,
 	adbSerial string,
@@ -250,4 +263,30 @@ func parseADBSerialByDeviceMap(raw string) map[domain.DeviceID]string {
 		result[deviceID] = serial
 	}
 	return result
+}
+
+// retryWithBackoff calls fn up to maxAttempts times, using exponential backoff
+// starting at baseDelay. It stops early if ctx is cancelled or fn returns a
+// non-retryable error. ADB errors are always considered retryable (transient
+// ADB server restart, USB reconnect, etc.).
+func retryWithBackoff(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
+	var lastErr error
+	for i := 0; i < maxAttempts; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if i < maxAttempts-1 {
+			delay := baseDelay * (1 << uint(i)) // 1s, 2s, 4s
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+	}
+	return lastErr
 }

@@ -24,6 +24,7 @@ type AgentLifecycleUseCase struct {
 	reg          registry.AgentRegistry
 	orchestrator EventProcessor
 	assigner     *DeviceAssigner // optional; nil-safe
+	forgetDevice func(domain.DeviceID)
 	log          *slog.Logger
 }
 
@@ -39,6 +40,12 @@ func NewAgentLifecycle(
 // automatically assigned pending tasks from the queue.
 func (u *AgentLifecycleUseCase) SetAssigner(a *DeviceAssigner) {
 	u.assigner = a
+}
+
+// SetForgetDevice registers a callback invoked on Disconnect to purge any
+// cached per-device state (e.g. ADB serial) from the event ingestion layer.
+func (u *AgentLifecycleUseCase) SetForgetDevice(f func(domain.DeviceID)) {
+	u.forgetDevice = f
 }
 
 // HelloRequest carries parsed parameters from an agent.hello JSON-RPC call.
@@ -162,6 +169,10 @@ func (u *AgentLifecycleUseCase) Heartbeat(_ context.Context, deviceID domain.Dev
 func (u *AgentLifecycleUseCase) Disconnect(ctx context.Context, deviceID domain.DeviceID, sessionID domain.SessionID) {
 	u.reg.Remove(sessionID)
 	u.log.Info("agent.disconnect", "deviceId", deviceID, "sessionId", sessionID)
+
+	if u.forgetDevice != nil {
+		u.forgetDevice(deviceID)
+	}
 
 	// Re-queue any running tasks before emitting the offline event so that
 	// another device can pick them up as soon as it connects.

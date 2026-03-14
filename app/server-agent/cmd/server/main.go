@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
@@ -243,6 +246,7 @@ func main() {
 		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
 	)
 	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
+	lifecycleUC.SetForgetDevice(eventUC.ForgetDevice)
 	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log, metricsRegistry)
 
 	// --- handlers ---
@@ -273,11 +277,62 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// --- periodic data pruning (file store: prevent unbounded growth) ---
+	// Accepted events older than 7 days and terminal command outbox records
+	// older than 24 hours are deleted hourly. Cursor state (watermark, dedup)
+	// is never pruned so deduplication remains correct across restarts.
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-serverCtx.Done():
+				return
+			case <-t.C:
+				if n, err := eventStore.PruneAccepted(context.Background(), 7*24*time.Hour); err != nil {
+					log.Warn("prune accepted events failed", "err", err)
+				} else if n > 0 {
+					log.Info("pruned accepted events", "removed", n)
+				}
+				if n, err := eventStore.PruneDeadLetters(context.Background(), 7*24*time.Hour); err != nil {
+					log.Warn("prune dead letters failed", "err", err)
+				} else if n > 0 {
+					log.Info("pruned dead letters", "removed", n)
+				}
+				if n, err := commandOutbox.PruneCommandOutbox(context.Background(), 24*time.Hour); err != nil {
+					log.Warn("prune command outbox failed", "err", err)
+				} else if n > 0 {
+					log.Info("pruned command outbox", "removed", n)
+				}
+			}
+		}
+	}()
+
+	srv := &http.Server{Addr: *addr, Handler: mux}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		select {
+		case sig := <-sigCh:
+			log.Info("shutdown signal received", "signal", sig)
+			serverCancel() // cancels watchdog and other ctx-aware goroutines
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer shutdownCancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				log.Error("http server shutdown error", "err", err)
+			}
+		case <-serverCtx.Done():
+		}
+	}()
+
 	log.Info("server-agent starting", "addr", *addr)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server failed", "err", err)
+		serverCancel()
 		os.Exit(1)
 	}
+	log.Info("server-agent stopped")
 }
 
 func stringEnv(key, fallback string) string {

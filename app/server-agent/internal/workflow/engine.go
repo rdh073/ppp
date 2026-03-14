@@ -168,6 +168,16 @@ func (e *Engine) processWaiting(
 	// Synthetic tick from the DeadlineWatchdog: check deadline proactively.
 	if event.Kind == domain.EventKindWorkflowTick {
 		if !state.DeadlineAt.IsZero() && time.Now().After(state.DeadlineAt) {
+			// If retry budget remains and there is an action, re-execute immediately
+			// rather than deferring to the next device event. This ensures the retry
+			// fires within one watchdog interval even when no device event is pending.
+			if state.RetryCount < step.MaxRetry && step.Action != nil {
+				next := cloneState(state)
+				next.WaitingExpect = nil
+				next.DeadlineAt = time.Time{}
+				next.RetryCount++
+				return e.executeStep(ctx, next, step, task, def)
+			}
 			return e.handleFailure(state, step)
 		}
 		return nil, false, nil // deadline not yet reached; ignore

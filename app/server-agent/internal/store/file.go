@@ -403,6 +403,75 @@ func (s *FileCommandOutboxStore) persistLocked() error {
 	return writeJSONFileAtomically(s.path, snapshot)
 }
 
+// PruneAccepted deletes accepted-event records whose AcceptedAt is older than
+// maxAge. Cursor state (watermark, dedup IDs) is preserved so deduplication
+// continues to work correctly after pruning.
+// Returns the number of records removed.
+func (s *FileEventPlaneStore) PruneAccepted(_ context.Context, maxAge time.Duration) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	kept := s.snapshot.Accepted[:0]
+	removed := 0
+	for _, r := range s.snapshot.Accepted {
+		if r.AcceptedAt.After(cutoff) {
+			kept = append(kept, r)
+		} else {
+			removed++
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	s.snapshot.Accepted = kept
+	return removed, s.persistLocked()
+}
+
+// PruneDeadLetters deletes dead-letter records whose RecordedAt is older than maxAge.
+// Returns the number of records removed.
+func (s *FileEventPlaneStore) PruneDeadLetters(_ context.Context, maxAge time.Duration) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	kept := s.snapshot.DeadLetters[:0]
+	removed := 0
+	for _, r := range s.snapshot.DeadLetters {
+		if r.RecordedAt.After(cutoff) {
+			kept = append(kept, r)
+		} else {
+			removed++
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	s.snapshot.DeadLetters = kept
+	return removed, s.persistLocked()
+}
+
+// PruneCommandOutbox deletes command outbox records whose UpdatedAt is older than
+// maxAge. Only terminal records (responded, dispatch_failed) are pruned; in-flight
+// records are always preserved.
+// Returns the number of records removed.
+func (s *FileCommandOutboxStore) PruneCommandOutbox(_ context.Context, maxAge time.Duration) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for id, r := range s.snapshot.Records {
+		terminal := r.Status == domain.CommandOutboxStatusResponded ||
+			r.Status == domain.CommandOutboxStatusDispatchFailed
+		if terminal && r.UpdatedAt.Before(cutoff) {
+			delete(s.snapshot.Records, id)
+			removed++
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	return removed, s.persistLocked()
+}
+
 func stateCompositeKey(taskID domain.TaskID, deviceID domain.DeviceID) string {
 	return string(taskID) + "::" + string(deviceID)
 }

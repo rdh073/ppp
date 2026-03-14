@@ -90,13 +90,15 @@ func (u *EventIngestionUseCase) IngestNotification(
 	}
 
 	now := time.Now()
+	payloadCopy := make(json.RawMessage, len(rawParams))
+	copy(payloadCopy, rawParams)
 	event := domain.Event{
 		ID:         buildDeviceEventID(deviceID, meta.SeqNo, method, now),
 		Kind:       kind,
 		DeviceID:   deviceID,
 		SeqNo:      meta.SeqNo,
 		OccurredAt: now,
-		Payload:    rawParams,
+		Payload:    payloadCopy,
 	}
 
 	processErr := u.orch.ProcessEvent(ctx, event)
@@ -140,6 +142,12 @@ func (u *EventIngestionUseCase) maybeEnableAccessibility(
 		adbSerial,
 		serviceComponent,
 	)
+}
+
+// ForgetDevice removes any cached ADB serial for deviceID.
+// Call this when a device disconnects to prevent stale serial reuse.
+func (u *EventIngestionUseCase) ForgetDevice(deviceID domain.DeviceID) {
+	u.knownSerials.Delete(deviceID)
 }
 
 func (u *EventIngestionUseCase) recordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) {
