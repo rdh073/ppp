@@ -9,4 +9,7 @@ type AgentRegistry interface {
 	Remove(id domain.SessionID)
 	GetBySession(id domain.SessionID) (*domain.Session, Sender, bool)
 	GetByDevice(id domain.DeviceID) (*domain.Session, Sender, bool)
+	// ListAll returns all currently connected sessions. Used by the assignment engine
+	// to find idle devices. The returned slice is a snapshot; callers must not mutate it.
+	ListAll() []*domain.Session
 }

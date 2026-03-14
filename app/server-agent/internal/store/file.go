@@ -415,3 +415,101 @@ func parseStateCompositeKey(composite string) (domain.TaskID, domain.DeviceID, e
 	}
 	return "", "", fmt.Errorf("invalid composite key")
 }
+
+
+// FileTaskQueue is a durable FIFO TaskQueue backed by a JSON file.
+// It persists queue state across restarts. Enqueue is idempotent.
+type FileTaskQueue struct {
+	mu   sync.Mutex
+	path string
+	ids  []domain.TaskID
+	set  map[domain.TaskID]struct{}
+}
+
+const taskQueueFilename = "task_queue.json"
+
+func NewFileTaskQueue(dir string) (*FileTaskQueue, error) {
+	if err := ensureDir(dir); err != nil {
+		return nil, err
+	}
+	q := &FileTaskQueue{
+		path: filepath.Join(dir, taskQueueFilename),
+		set:  make(map[domain.TaskID]struct{}),
+	}
+	if err := loadJSONFile(q.path, &q.ids); err != nil {
+		return nil, fmt.Errorf("load task queue: %w", err)
+	}
+	for _, id := range q.ids {
+		q.set[id] = struct{}{}
+	}
+	return q, nil
+}
+
+func (q *FileTaskQueue) Enqueue(_ context.Context, taskID domain.TaskID) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, exists := q.set[taskID]; exists {
+		return nil
+	}
+	q.ids = append(q.ids, taskID)
+	q.set[taskID] = struct{}{}
+	return q.persistLocked()
+}
+
+func (q *FileTaskQueue) Dequeue(_ context.Context) (domain.TaskID, bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.ids) > 0 {
+		id := q.ids[0]
+		q.ids = q.ids[1:]
+		if _, ok := q.set[id]; ok {
+			delete(q.set, id)
+			if err := q.persistLocked(); err != nil {
+				return "", false, err
+			}
+			return id, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (q *FileTaskQueue) Remove(_ context.Context, taskID domain.TaskID) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, ok := q.set[taskID]; !ok {
+		return nil // idempotent
+	}
+	delete(q.set, taskID)
+	// Compact: rebuild slice without the removed id.
+	filtered := q.ids[:0]
+	for _, id := range q.ids {
+		if id != taskID {
+			filtered = append(filtered, id)
+		}
+	}
+	q.ids = filtered
+	return q.persistLocked()
+}
+
+func (q *FileTaskQueue) Snapshot(_ context.Context) ([]domain.TaskID, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []domain.TaskID
+	for _, id := range q.ids {
+		if _, ok := q.set[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+func (q *FileTaskQueue) persistLocked() error {
+	// Write only the canonical set (skip tombstones).
+	active := make([]domain.TaskID, 0, len(q.set))
+	for _, id := range q.ids {
+		if _, ok := q.set[id]; ok {
+			active = append(active, id)
+		}
+	}
+	return writeJSONFileAtomically(q.path, active)
+}

@@ -78,3 +78,13 @@ func (r *Registry) GetByDevice(id domain.DeviceID) (*domain.Session, Sender, boo
 	}
 	return e.session, e.conn, true
 }
+
+func (r *Registry) ListAll() []*domain.Session {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*domain.Session, 0, len(r.bySession))
+	for _, e := range r.bySession {
+		out = append(out, e.session)
+	}
+	return out
+}

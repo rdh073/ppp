@@ -35,6 +35,21 @@ type EventPlaneStore interface {
 	ListDeadLetters(ctx context.Context) ([]domain.DeadLetterRecord, error)
 }
 
+// TaskQueue is a durable FIFO for pending tasks waiting to be assigned to a device.
+// All implementations must be safe for concurrent use.
+// Enqueue is idempotent: enqueueing an already-present ID is a no-op.
+// Remove is idempotent: removing a non-member ID is a no-op.
+type TaskQueue interface {
+	// Enqueue adds taskID at the back of the queue. No-op if already present.
+	Enqueue(ctx context.Context, taskID domain.TaskID) error
+	// Dequeue removes and returns the front task ID. Returns false when the queue is empty.
+	Dequeue(ctx context.Context) (domain.TaskID, bool, error)
+	// Remove removes a specific task from the queue (e.g. when the task is cancelled).
+	Remove(ctx context.Context, taskID domain.TaskID) error
+	// Snapshot returns an ordered copy of the queue contents, front to back.
+	Snapshot(ctx context.Context) ([]domain.TaskID, error)
+}
+
 // CommandOutboxStore records outbound device commands and their delivery state.
 type CommandOutboxStore interface {
 	SaveIssued(ctx context.Context, cmd domain.Command) error

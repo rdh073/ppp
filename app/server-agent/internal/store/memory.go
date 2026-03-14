@@ -330,3 +330,62 @@ func eventSource(event domain.Event) string {
 	}
 	return "internal"
 }
+
+
+// MemoryTaskQueue is a thread-safe in-memory TaskQueue (FIFO with dedup).
+// Intended for tests and single-process development; state is lost on restart.
+type MemoryTaskQueue struct {
+	mu    sync.Mutex
+	queue []domain.TaskID
+	set   map[domain.TaskID]struct{}
+}
+
+func NewMemoryTaskQueue() *MemoryTaskQueue {
+	return &MemoryTaskQueue{set: make(map[domain.TaskID]struct{})}
+}
+
+func (q *MemoryTaskQueue) Enqueue(_ context.Context, taskID domain.TaskID) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, exists := q.set[taskID]; exists {
+		return nil // idempotent
+	}
+	q.queue = append(q.queue, taskID)
+	q.set[taskID] = struct{}{}
+	return nil
+}
+
+func (q *MemoryTaskQueue) Dequeue(_ context.Context) (domain.TaskID, bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.queue) > 0 {
+		id := q.queue[0]
+		q.queue = q.queue[1:]
+		if _, ok := q.set[id]; ok {
+			delete(q.set, id)
+			return id, true, nil
+		}
+		// item was Remove()d while in the queue slice; skip tombstone
+	}
+	return "", false, nil
+}
+
+func (q *MemoryTaskQueue) Remove(_ context.Context, taskID domain.TaskID) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.set, taskID)
+	// slice entry becomes a tombstone; Dequeue skips items absent from set
+	return nil
+}
+
+func (q *MemoryTaskQueue) Snapshot(_ context.Context) ([]domain.TaskID, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []domain.TaskID
+	for _, id := range q.queue {
+		if _, ok := q.set[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}

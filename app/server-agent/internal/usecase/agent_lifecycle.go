@@ -23,6 +23,7 @@ type EventProcessor interface {
 type AgentLifecycleUseCase struct {
 	reg          registry.AgentRegistry
 	orchestrator EventProcessor
+	assigner     *DeviceAssigner // optional; nil-safe
 	log          *slog.Logger
 }
 
@@ -32,6 +33,12 @@ func NewAgentLifecycle(
 	log *slog.Logger,
 ) *AgentLifecycleUseCase {
 	return &AgentLifecycleUseCase{reg: reg, orchestrator: orch, log: log}
+}
+
+// SetAssigner wires the DeviceAssigner so that newly connected devices are
+// automatically assigned pending tasks from the queue.
+func (u *AgentLifecycleUseCase) SetAssigner(a *DeviceAssigner) {
+	u.assigner = a
 }
 
 // HelloRequest carries parsed parameters from an agent.hello JSON-RPC call.
@@ -85,6 +92,13 @@ func (u *AgentLifecycleUseCase) Hello(ctx context.Context, req HelloRequest, con
 		// Non-fatal: session is registered, agent is functional.
 	}
 
+	// Assign next pending task to this device if it is idle.
+	if u.assigner != nil {
+		if err := u.assigner.TryAssignPendingToDevice(ctx, req.DeviceID); err != nil {
+			u.log.Warn("device assigner on hello failed", "deviceId", req.DeviceID, "err", err)
+		}
+	}
+
 	return HelloResponse{SessionID: sessionID}, nil
 }
 
@@ -129,6 +143,12 @@ func (u *AgentLifecycleUseCase) Resume(ctx context.Context, req ResumeRequest, c
 		u.log.Warn("orchestrator.ProcessEvent on resume failed", "err", err)
 	}
 
+	if u.assigner != nil {
+		if err := u.assigner.TryAssignPendingToDevice(ctx, req.DeviceID); err != nil {
+			u.log.Warn("device assigner on resume failed", "deviceId", req.DeviceID, "err", err)
+		}
+	}
+
 	return ResumeResponse{SessionID: req.SessionID}, nil
 }
 
@@ -142,6 +162,14 @@ func (u *AgentLifecycleUseCase) Heartbeat(_ context.Context, deviceID domain.Dev
 func (u *AgentLifecycleUseCase) Disconnect(ctx context.Context, deviceID domain.DeviceID, sessionID domain.SessionID) {
 	u.reg.Remove(sessionID)
 	u.log.Info("agent.disconnect", "deviceId", deviceID, "sessionId", sessionID)
+
+	// Re-queue any running tasks before emitting the offline event so that
+	// another device can pick them up as soon as it connects.
+	if u.assigner != nil {
+		if err := u.assigner.OnDeviceOffline(ctx, deviceID); err != nil {
+			u.log.Warn("device assigner on disconnect failed", "deviceId", deviceID, "err", err)
+		}
+	}
 
 	now := time.Now()
 	event := domain.Event{

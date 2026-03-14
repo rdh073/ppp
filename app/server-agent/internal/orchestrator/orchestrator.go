@@ -34,6 +34,10 @@ type Orchestrator struct {
 	deviceLocks sync.Map // domain.DeviceID → *sync.Mutex
 
 	watchdog *DeadlineWatchdog // optional; nil-safe
+
+	// onTaskTerminal is called asynchronously after a task reaches a terminal state.
+	// Injected by main.go via SetOnTaskTerminal to avoid an import cycle.
+	onTaskTerminal func(ctx context.Context, task *domain.Task)
 }
 
 func New(
@@ -136,6 +140,14 @@ func (o *Orchestrator) SetDeadlineWatchdog(w *DeadlineWatchdog) {
 	o.watchdog = w
 }
 
+// SetOnTaskTerminal registers a callback that is invoked asynchronously whenever
+// a task reaches a terminal state. Used by the assignment engine to free up the
+// device slot and assign the next queued task. Must be called before the server
+// starts accepting traffic.
+func (o *Orchestrator) SetOnTaskTerminal(f func(ctx context.Context, task *domain.Task)) {
+	o.onTaskTerminal = f
+}
+
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
 	state, err := o.states.Get(ctx, task.ID, e.DeviceID)
 	if err != nil {
@@ -186,6 +198,11 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 			"deviceId", e.DeviceID,
 			"success", newState.TerminalSuccess,
 		)
+		if o.onTaskTerminal != nil {
+			// Run async so the terminal callback (e.g. device re-assignment)
+			// does not block or deadlock the current orchestrator lane.
+			go o.onTaskTerminal(context.Background(), task)
+		}
 	}
 
 	return nil

@@ -39,16 +39,58 @@ func main() {
 	// --- infrastructure ---
 	reg := registry.New()
 	metricsRegistry := telemetry.NewRegistry()
-	taskStore, err := store.NewFileTaskStore(*dataDir)
-	if err != nil {
-		log.Error("failed to open task store", "dir", *dataDir, "err", err)
-		os.Exit(1)
+
+	stateStoreMode := stringEnv("AUTO_STATE_STORE", "file")
+	var taskStore store.TaskStore
+	var stateStore store.WorkflowStateStore
+	var taskQueue store.TaskQueue
+	switch stateStoreMode {
+	case "redis":
+		redisDB, err := intEnv("AUTO_REDIS_DB", 0)
+		if err != nil {
+			log.Error("invalid AUTO_REDIS_DB", "err", err)
+			os.Exit(1)
+		}
+		stateTTL, err := durationEnv("AUTO_STATE_TTL", store.DefaultStateTTL)
+		if err != nil {
+			log.Error("invalid AUTO_STATE_TTL", "err", err)
+			os.Exit(1)
+		}
+		redisClient := store.NewRedisClient(
+			stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
+			os.Getenv("AUTO_REDIS_PASSWORD"),
+			redisDB,
+		)
+		if err := redisClient.Ping(context.Background()).Err(); err != nil {
+			log.Error("redis ping failed", "err", err)
+			os.Exit(1)
+		}
+		taskStore = store.NewRedisTaskStore(redisClient, stateTTL)
+		stateStore = store.NewRedisWorkflowStateStore(redisClient, stateTTL)
+		taskQueue = store.NewRedisTaskQueue(redisClient)
+		log.Info("state store: redis", "addr", stringEnv("AUTO_REDIS_ADDR", "localhost:6379"), "ttl", stateTTL)
+	default: // "file"
+		fileTaskStore, err := store.NewFileTaskStore(*dataDir)
+		if err != nil {
+			log.Error("failed to open task store", "dir", *dataDir, "err", err)
+			os.Exit(1)
+		}
+		fileStateStore, err := store.NewFileWorkflowStateStore(*dataDir)
+		if err != nil {
+			log.Error("failed to open workflow state store", "dir", *dataDir, "err", err)
+			os.Exit(1)
+		}
+		fileQueue, err := store.NewFileTaskQueue(*dataDir)
+		if err != nil {
+			log.Error("failed to open task queue", "dir", *dataDir, "err", err)
+			os.Exit(1)
+		}
+		taskStore = fileTaskStore
+		stateStore = fileStateStore
+		taskQueue = fileQueue
+		log.Info("state store: file", "dir", *dataDir)
 	}
-	stateStore, err := store.NewFileWorkflowStateStore(*dataDir)
-	if err != nil {
-		log.Error("failed to open workflow state store", "dir", *dataDir, "err", err)
-		os.Exit(1)
-	}
+
 	eventStore, err := store.NewFileEventPlaneStore(*dataDir)
 	if err != nil {
 		log.Error("failed to open event plane store", "dir", *dataDir, "err", err)
@@ -103,6 +145,7 @@ func main() {
 
 	// --- use cases ---
 	recoveryUC := usecase.NewRuntimeRecovery(taskStore, stateStore, log)
+	recoveryUC.SetQueue(taskQueue)
 	recoveryReport, err := recoveryUC.Recover(context.Background())
 	if err != nil {
 		log.Error("runtime recovery failed", "err", err)
@@ -112,6 +155,7 @@ func main() {
 		"tasksScanned", recoveryReport.TasksScanned,
 		"statesBootstrapped", recoveryReport.StatesBootstrapped,
 		"tasksReconciled", recoveryReport.TasksReconciled,
+		"tasksRequeued", recoveryReport.TasksRequeued,
 	)
 
 	runtimeMode := strings.TrimSpace(os.Getenv("AUTO_EVENT_RUNTIME"))
@@ -182,8 +226,16 @@ func main() {
 	}
 	log.Info("event runtime ready", "mode", runtimeMode)
 
+	// --- device assigner (routes pending tasks ↔ idle devices) ---
+	assigner := usecase.NewDeviceAssigner(taskStore, taskQueue, reg, runtime, log)
+
 	lifecycleUC := usecase.NewAgentLifecycle(reg, runtime, log)
+	lifecycleUC.SetAssigner(assigner)
+
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, runtime, reg, log)
+	taskUC.SetAssigner(assigner)
+
+	orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
 	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
 		os.Getenv("AUTO_ADB_SERVER_HOST"),
 		os.Getenv("AUTO_ADB_SERVER_PORT"),

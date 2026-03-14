@@ -17,6 +17,7 @@ type TaskControlUseCase struct {
 	states       store.WorkflowStateStore
 	orchestrator EventProcessor
 	registry     registry.AgentRegistry
+	assigner     *DeviceAssigner // optional; nil-safe
 	log          *slog.Logger
 }
 
@@ -34,6 +35,12 @@ func NewTaskControl(
 		registry:     reg,
 		log:          log,
 	}
+}
+
+// SetAssigner wires the DeviceAssigner so that tasks created without an explicit
+// deviceId are automatically routed to an idle device or queued.
+func (u *TaskControlUseCase) SetAssigner(a *DeviceAssigner) {
+	u.assigner = a
 }
 
 // CreateTaskRequest specifies the task to create and which device to assign.
@@ -61,7 +68,7 @@ func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskReque
 		UpdatedAt:      time.Now(),
 	}
 
-	// Assign device if provided and connected.
+	// Assign device if provided explicitly.
 	if req.DeviceID != "" {
 		if _, _, ok := u.registry.GetByDevice(req.DeviceID); ok {
 			task.AssignedDevice = req.DeviceID
@@ -77,17 +84,25 @@ func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskReque
 
 	u.log.Info("task created", "taskId", task.ID, "deviceId", task.AssignedDevice)
 
-	// Bootstrap the workflow if a device is already assigned.
 	if task.AssignedDevice != "" {
+		// Explicit assignment: bootstrap the workflow immediately.
 		now := time.Now()
 		event := domain.Event{
 			ID:         fmt.Sprintf("%s:taskstart:%d", task.AssignedDevice, now.UnixNano()),
-			Kind:       domain.EventKindAgentOnline, // triggers orchestrator to run Observe node
+			Kind:       domain.EventKindAgentOnline,
 			DeviceID:   task.AssignedDevice,
 			OccurredAt: now,
 		}
 		if err := u.orchestrator.ProcessEvent(ctx, event); err != nil {
 			u.log.Warn("bootstrap workflow failed", "taskId", task.ID, "err", err)
+		}
+		return task, nil
+	}
+
+	// No deviceId given: let the assigner route to an idle device or queue.
+	if u.assigner != nil {
+		if err := u.assigner.TryAssignTaskToIdleDevice(ctx, task); err != nil {
+			u.log.Warn("auto-assign failed; task remains pending", "taskId", task.ID, "err", err)
 		}
 	}
 
@@ -104,7 +119,16 @@ func (u *TaskControlUseCase) CancelTask(ctx context.Context, taskID domain.TaskI
 	}
 	task.Status = domain.TaskStatusCancelled
 	task.UpdatedAt = time.Now()
-	return u.tasks.Save(ctx, task)
+	if err := u.tasks.Save(ctx, task); err != nil {
+		return err
+	}
+	// Remove from pending queue so it is not assigned to a device later.
+	if u.assigner != nil {
+		if err := u.assigner.RemoveFromQueue(ctx, taskID); err != nil {
+			u.log.Warn("remove cancelled task from queue failed", "taskId", taskID, "err", err)
+		}
+	}
+	return nil
 }
 
 func (u *TaskControlUseCase) GetTask(ctx context.Context, taskID domain.TaskID) (*domain.Task, error) {

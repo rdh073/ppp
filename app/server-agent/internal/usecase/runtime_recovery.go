@@ -16,6 +16,7 @@ import (
 type RuntimeRecoveryUseCase struct {
 	tasks  store.TaskStore
 	states store.WorkflowStateStore
+	queue  store.TaskQueue // optional; nil = no queue recovery
 	log    *slog.Logger
 }
 
@@ -23,6 +24,7 @@ type RuntimeRecoveryReport struct {
 	TasksScanned       int
 	StatesBootstrapped int
 	TasksReconciled    int
+	TasksRequeued      int
 }
 
 func NewRuntimeRecovery(
@@ -35,6 +37,12 @@ func NewRuntimeRecovery(
 		states: states,
 		log:    log,
 	}
+}
+
+// SetQueue wires the TaskQueue so that pending and paused tasks are re-enqueued
+// on startup recovery, ready to be picked up when devices reconnect.
+func (u *RuntimeRecoveryUseCase) SetQueue(q store.TaskQueue) {
+	u.queue = q
 }
 
 func (u *RuntimeRecoveryUseCase) Recover(ctx context.Context) (RuntimeRecoveryReport, error) {
@@ -95,6 +103,26 @@ func (u *RuntimeRecoveryUseCase) Recover(ctx context.Context) (RuntimeRecoveryRe
 			"deviceId", task.AssignedDevice,
 			"status", task.Status,
 		)
+	}
+
+	// Re-enqueue tasks that have no device assignment so they are picked up
+	// when a device connects. This covers both fresh pending tasks (created
+	// before any device was available) and paused tasks (device went offline
+	// before the previous run called OnDeviceOffline, e.g. a hard crash).
+	if u.queue != nil {
+		for _, task := range tasks {
+			needsQueue := (task.Status == domain.TaskStatusPending || task.Status == domain.TaskStatusPaused) &&
+				task.AssignedDevice == ""
+			if !needsQueue {
+				continue
+			}
+			if err := u.queue.Enqueue(ctx, task.ID); err != nil {
+				u.log.Warn("re-enqueue task failed", "taskId", task.ID, "err", err)
+				continue
+			}
+			report.TasksRequeued++
+			u.log.Info("re-enqueued task on startup", "taskId", task.ID, "status", task.Status)
+		}
 	}
 
 	return report, nil

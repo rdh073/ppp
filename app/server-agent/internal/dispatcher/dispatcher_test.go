@@ -39,6 +39,7 @@ func (r *fakeRegistry) GetBySession(_ domain.SessionID) (*domain.Session, regist
 func (r *fakeRegistry) GetByDevice(_ domain.DeviceID) (*domain.Session, registry.Sender, bool) {
 	return &domain.Session{}, r.sender, true
 }
+func (r *fakeRegistry) ListAll() []*domain.Session { return nil }
 
 type failingSender struct{ err error }
 
