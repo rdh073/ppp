@@ -1,1 +1,20 @@
+# Serena
 .serena
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+*.apk
+*.aab
+*.keystore
+
+# Go
+app/server-agent/bin/
+*.exe
+
+# OS
+.DS_Store
+Thumbs.db
