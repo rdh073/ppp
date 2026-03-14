@@ -1,3 +1,0 @@
-com.autosdk.agent:xml/accessibility_service_config = 0x7f020000
-com.autosdk.agent:string/app_name = 0x7f010001
-com.autosdk.agent:string/accessibility_service_description = 0x7f010000
