@@ -1029,7 +1029,8 @@ Current implementation status:
 - emitted internal events are constrained to the current `deviceId` lane; mismatches fail closed
 - in `redis-streams` mode, ordered wakeup publication may fall back inline only before any wakeup in that emitted batch has been published; later failures fail closed to avoid reordering
 - `AUTO_EVENT_RUNTIME=inline` remains the explicit development mode
-- current limitation: `/events/*` currently lists all records without pagination or filtering
+- `/events/accepted` and `/events/deadletters` now return paginated envelopes with exact-match filters
+- current limitation: event-plane list APIs do not yet support time-range filtering or cursor pagination
 
 ### 16.9 Phase 7: Operational Hardening
 

@@ -3,10 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
@@ -56,10 +59,14 @@ func (h *EventPlaneHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventPlaneHandler) listAccepted(w http.ResponseWriter, r *http.Request) {
-	records, err := h.uc.ListAccepted(r.Context())
+	query, err := parseAcceptedEventListQuery(r)
 	if err != nil {
-		h.log.Error("list accepted events failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	records, err := h.uc.ListAccepted(r.Context(), query)
+	if err != nil {
+		writeUseCaseError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, records)
@@ -86,10 +93,14 @@ func (h *EventPlaneHandler) replayAccepted(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *EventPlaneHandler) listDeadLetters(w http.ResponseWriter, r *http.Request) {
-	records, err := h.uc.ListDeadLetters(r.Context())
+	query, err := parseDeadLetterListQuery(r)
 	if err != nil {
-		h.log.Error("list dead letters failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	records, err := h.uc.ListDeadLetters(r.Context(), query)
+	if err != nil {
+		writeUseCaseError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, records)
@@ -125,9 +136,66 @@ func writeUseCaseError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, usecase.ErrInvalidEventListQuery):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	case strings.Contains(err.Error(), "not replayable"), strings.Contains(err.Error(), "has no event kind"):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func parseAcceptedEventListQuery(r *http.Request) (usecase.AcceptedEventListQuery, error) {
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		return usecase.AcceptedEventListQuery{}, err
+	}
+	return usecase.AcceptedEventListQuery{
+		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
+		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
+		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
+		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
+		Limit:    limit,
+		Offset:   offset,
+	}, nil
+}
+
+func parseDeadLetterListQuery(r *http.Request) (usecase.DeadLetterListQuery, error) {
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		return usecase.DeadLetterListQuery{}, err
+	}
+	return usecase.DeadLetterListQuery{
+		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
+		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
+		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
+		EventID:  strings.TrimSpace(r.URL.Query().Get("eventId")),
+		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
+		Limit:    limit,
+		Offset:   offset,
+	}, nil
+}
+
+func parseLimitOffset(r *http.Request) (int, int, error) {
+	limit, err := parseIntQueryParam(r, "limit")
+	if err != nil {
+		return 0, 0, err
+	}
+	offset, err := parseIntQueryParam(r, "offset")
+	if err != nil {
+		return 0, 0, err
+	}
+	return limit, offset, nil
+}
+
+func parseIntQueryParam(r *http.Request, key string) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	return value, nil
 }

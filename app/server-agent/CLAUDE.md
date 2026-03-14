@@ -138,6 +138,13 @@ Notes:
   - `GET /events/deadletters`
   - `GET /events/deadletters/{deadLetterId}`
   - `POST /events/deadletters/{deadLetterId}/replay`
+- List endpoints support:
+  - `limit` (default `100`, max `500`)
+  - `offset`
+  - `order=asc|desc` (default `desc`)
+  - accepted filters: `deviceId`, `kind`, `source`
+  - dead-letter filters: `deviceId`, `kind`, `source`, `eventId`
+- List endpoints return paginated envelopes with `items`, `total`, `offset`, `limit`, and `hasMore`.
 - Accepted-event replay does not re-accept a duplicate event. It replays through the current runtime mode: inline processing for `inline`, wakeup requeue for `redis-streams`, with inline fallback if wakeup publication fails.
 - Dead-letter replay routes `source=ingestion` records back through notification ingestion and routes orchestrator/runtime dead letters back through accepted-event replay.
 - `workflow.NodeOutput.EmittedEvents` contract:
@@ -147,7 +154,7 @@ Notes:
   - `AUTO_EVENT_RUNTIME=redis-streams` publishes wakeups in slice order to the same device partition
   - if wakeup publication fails before any wakeup in the emitted batch has been published, the batch falls back inline
   - if wakeup publication fails after one or more wakeups in the batch have already been published, orchestration fails closed to avoid reordering
-- Current limitation: `/events/accepted` and `/events/deadletters` currently return the full record list without pagination or filtering.
+- Current limitation: event-plane list APIs do not yet support time-range filtering or cursor pagination.
 
 ## Extending
 

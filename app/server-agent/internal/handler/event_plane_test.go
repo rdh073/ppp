@@ -56,30 +56,62 @@ func newLog() *slog.Logger {
 
 func TestEventPlaneHandler_ListAccepted(t *testing.T) {
 	h, events, _, _ := newEventPlaneHandler(t)
-	event := domain.Event{
-		ID:         "dev-http:1",
-		Kind:       domain.EventKindAgentOnline,
-		DeviceID:   "dev-http",
-		SeqNo:      1,
-		OccurredAt: time.Now().UTC(),
-	}
-	if _, err := events.Accept(context.Background(), event); err != nil {
-		t.Fatalf("Accept: %v", err)
+	now := time.Now().UTC()
+	for _, event := range []domain.Event{
+		{
+			ID:         "dev-http:1",
+			Kind:       domain.EventKindScreenChanged,
+			DeviceID:   "dev-http",
+			SeqNo:      1,
+			OccurredAt: now.Add(-2 * time.Minute),
+		},
+		{
+			ID:         "dev-http:2",
+			Kind:       domain.EventKindAccessibilityDisabled,
+			DeviceID:   "dev-http",
+			SeqNo:      2,
+			OccurredAt: now.Add(-1 * time.Minute),
+		},
+		{
+			ID:         "dev-http-other",
+			Kind:       domain.EventKindAgentOnline,
+			DeviceID:   "other-device",
+			OccurredAt: now,
+		},
+	} {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/events/accepted", nil)
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?deviceId=dev-http&source=device&limit=1", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /events/accepted: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var payload []domain.AcceptedEventRecord
+	var payload usecase.AcceptedEventPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(payload) != 1 || payload[0].Event.ID != event.ID {
+	if payload.Total != 2 || payload.Limit != 1 || payload.Offset != 0 || !payload.HasMore {
+		t.Fatalf("unexpected pagination metadata: %#v", payload)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].Event.ID != "dev-http:2" {
 		t.Fatalf("unexpected accepted payload: %#v", payload)
+	}
+}
+
+func TestEventPlaneHandler_ListAccepted_InvalidLimit_400(t *testing.T) {
+	h, _, _, _ := newEventPlaneHandler(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?limit=bad", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET /events/accepted with invalid limit: expected 400, got %d", rec.Code)
 	}
 }
 
@@ -103,5 +135,41 @@ func TestEventPlaneHandler_ReplayDeadLetter(t *testing.T) {
 	}
 	if notifications.deviceID != "dev-http-dead" || notifications.method != string(domain.EventKindAccessibilityDisabled) {
 		t.Fatalf("unexpected replay target: device=%q method=%q", notifications.deviceID, notifications.method)
+	}
+}
+
+func TestEventPlaneHandler_ListDeadLetters_FilterBySource(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{
+			ID:       "event-a",
+			Kind:     domain.EventKindToolResult,
+			DeviceID: "dev-http-deadletters",
+		}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{
+			ID:       "event-b",
+			Kind:     domain.EventKindAccessibilityDisabled,
+			DeviceID: "dev-http-deadletters",
+		}, nil, "second", "ingestion"),
+	}
+	for _, record := range records {
+		if err := events.RecordDeadLetter(context.Background(), record); err != nil {
+			t.Fatalf("RecordDeadLetter: %v", err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/deadletters?source=orchestrator&limit=10&order=asc", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /events/deadletters: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload usecase.DeadLetterPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Reason != "first" {
+		t.Fatalf("unexpected dead-letter payload: %#v", payload)
 	}
 }

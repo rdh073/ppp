@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,5 +128,123 @@ func TestEventPlaneControlReplayDeadLetter_UnexpectedMethodIsNotReplayable(t *te
 
 	if err := uc.ReplayDeadLetter(context.Background(), record.ID); err == nil {
 		t.Fatal("expected replay dead letter to fail for non-device ingestion source")
+	}
+}
+
+func TestEventPlaneControlListAccepted_FiltersAndPaginates(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	now := time.Now().UTC()
+	acceptedEvents := []domain.Event{
+		{
+			ID:         "accepted-internal-1",
+			Kind:       domain.EventKindAgentOnline,
+			DeviceID:   "dev-list",
+			OccurredAt: now.Add(-4 * time.Minute),
+		},
+		{
+			ID:         "accepted-device-1",
+			Kind:       domain.EventKindScreenChanged,
+			DeviceID:   "dev-list",
+			SeqNo:      1,
+			OccurredAt: now.Add(-3 * time.Minute),
+		},
+		{
+			ID:         "accepted-other-device",
+			Kind:       domain.EventKindAccessibilityDisabled,
+			DeviceID:   "dev-other",
+			SeqNo:      1,
+			OccurredAt: now.Add(-2 * time.Minute),
+		},
+		{
+			ID:         "accepted-device-2",
+			Kind:       domain.EventKindAccessibilityDisabled,
+			DeviceID:   "dev-list",
+			SeqNo:      2,
+			OccurredAt: now.Add(-1 * time.Minute),
+		},
+	}
+	for _, event := range acceptedEvents {
+		if _, err := events.Accept(context.Background(), event); err != nil {
+			t.Fatalf("Accept(%s): %v", event.ID, err)
+		}
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		DeviceID: "dev-list",
+		Source:   "device",
+		Order:    usecase.EventListOrderDesc,
+		Limit:    1,
+		Offset:   1,
+	})
+	if err != nil {
+		t.Fatalf("ListAccepted: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("expected two filtered device events, got %d", page.Total)
+	}
+	if len(page.Items) != 1 || page.Items[0].Event.ID != "accepted-device-1" {
+		t.Fatalf("unexpected page items: %#v", page.Items)
+	}
+	if page.Offset != 1 || page.Limit != 1 || page.HasMore {
+		t.Fatalf("unexpected page window: %+v", page)
+	}
+}
+
+func TestEventPlaneControlListDeadLetters_FiltersByEventIDAndOrder(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	records := []domain.DeadLetterRecord{
+		domain.NewDeadLetterRecord(&domain.Event{
+			ID:       "event-a",
+			Kind:     domain.EventKindToolResult,
+			DeviceID: "dev-dead-list",
+		}, nil, "first", "orchestrator"),
+		domain.NewDeadLetterRecord(&domain.Event{
+			ID:       "event-b",
+			Kind:     domain.EventKindAccessibilityDisabled,
+			DeviceID: "dev-dead-list",
+		}, nil, "second", "ingestion"),
+		domain.NewDeadLetterRecord(&domain.Event{
+			ID:       "event-a",
+			Kind:     domain.EventKindToolResult,
+			DeviceID: "dev-dead-list",
+		}, nil, "third", "orchestrator"),
+	}
+	for _, record := range records {
+		if err := events.RecordDeadLetter(context.Background(), record); err != nil {
+			t.Fatalf("RecordDeadLetter(%s): %v", record.ID, err)
+		}
+	}
+
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+	page, err := uc.ListDeadLetters(context.Background(), usecase.DeadLetterListQuery{
+		EventID: "event-a",
+		Source:  "orchestrator",
+		Order:   usecase.EventListOrderAsc,
+		Limit:   10,
+	})
+	if err != nil {
+		t.Fatalf("ListDeadLetters: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("expected two filtered dead letters, got %d", page.Total)
+	}
+	if len(page.Items) != 2 || page.Items[0].Reason != "first" || page.Items[1].Reason != "third" {
+		t.Fatalf("unexpected dead-letter page: %#v", page.Items)
+	}
+}
+
+func TestEventPlaneControlListAccepted_InvalidQuery(t *testing.T) {
+	events := store.NewMemoryEventPlaneStore()
+	uc := usecase.NewEventPlaneControl(events, &replayAcceptedRecorder{}, &notificationReplayRecorder{}, newLog())
+
+	_, err := uc.ListAccepted(context.Background(), usecase.AcceptedEventListQuery{
+		Limit: usecase.MaxEventListLimit + 1,
+	})
+	if err == nil {
+		t.Fatal("expected invalid query error")
+	}
+	if !errors.Is(err, usecase.ErrInvalidEventListQuery) {
+		t.Fatalf("expected ErrInvalidEventListQuery, got %v", err)
 	}
 }

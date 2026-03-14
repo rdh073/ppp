@@ -345,11 +345,19 @@ Required end state:
 
 ### Phase 7: Operational Hardening
 
-Status: planned
+Status: in progress
 
 Goal:
 
 - make the system debuggable and predictable under failure and load
+
+Implemented in this slice:
+
+- `/events/accepted` and `/events/deadletters` now support `limit`, `offset`, and `order`
+- accepted-event list supports exact-match filters: `deviceId`, `kind`, `source`
+- dead-letter list supports exact-match filters: `deviceId`, `kind`, `source`, `eventId`
+- list endpoints now return pagination metadata: `items`, `total`, `offset`, `limit`, `hasMore`
+- default list limit is `100`; max accepted limit is `500`
 
 Required end state:
 
@@ -399,6 +407,6 @@ A phase is done only if all are true:
 
 Start Phase 7:
 
-1. add pagination/filtering around `/events/accepted` and `/events/deadletters` before operator volume grows
-2. add metrics for wakeup publish fallback, lease loss, dead-letter replay, and replay outcomes
-3. decide whether `events.accepted` should remain an audit mirror or gain a dedicated downstream consumer
+1. add metrics for wakeup publish fallback, lease loss, dead-letter replay, and replay outcomes
+2. decide whether `events.accepted` should remain an audit mirror or gain a dedicated downstream consumer
+3. add time-range filtering before event-plane record volume grows further
