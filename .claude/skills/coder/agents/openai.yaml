@@ -1,0 +1,4 @@
+interface:
+  display_name: "Base Architecture"
+  short_description: "Repo architecture and design guidance"
+  default_prompt: "Use $base to review or plan a change with clean architecture, SOLID, and GoF pattern guidance."

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<incidents format="6" by="lint 8.3.2" type="incidents">
+
+    <incident
+        id="AndroidGradlePluginVersion"
+        severity="warning"
+        message="A newer version of com.android.application than 8.3.2 is available: 9.1.0">
+        <fix-replace
+            description="Change to 9.1.0"
+            family="Update versions"
+            oldString="8.3.2"
+            replacement="9.1.0"/>
+        <location
+            file="$HOME/Workspace/auto-sdk/apps/android-agent/gradle/libs.versions.toml"
+            line="2"
+            column="7"
+            startOffset="17"
+            endLine="2"
+            endColumn="14"
+            endOffset="24"/>
+    </incident>
+
+</incidents>

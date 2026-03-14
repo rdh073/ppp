@@ -1,0 +1,28 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.autosdk.agent.app-mergeDebugResources-2:/values/values.xml",
+            "map": [
+                {
+                    "source": "/home/xtrzy/Workspace/auto-sdk/apps/android-agent/app/src/main/res/values/strings.xml",
+                    "from": {
+                        "startLines": "3,2",
+                        "startColumns": "4,4",
+                        "startOffsets": "107,55",
+                        "endLines": "6,2",
+                        "endColumns": "13,51",
+                        "endOffsets": "333,102"
+                    },
+                    "to": {
+                        "startLines": "2,6",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,286",
+                        "endLines": "5,6",
+                        "endColumns": "13,51",
+                        "endOffsets": "281,333"
+                    }
+                }
+            ]
+        }
+    ]
+}

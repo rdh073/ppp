@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.autosdk.agent.state.AgentStateCoordinatorTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-03-12T09:58:03.770Z" hostname="kyubi" time="0.082">
+  <properties/>
+  <testcase name="stale resume hint is cleared and next registration falls back to hello" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.044"/>
+  <testcase name="package replaced clears inflight marker" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.001"/>
+  <testcase name="boot completed clears inflight marker" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.001"/>
+  <testcase name="missing persisted session falls back to hello" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.004"/>
+  <testcase name="connected heartbeat sends request and updates heartbeat timestamp" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.012"/>
+  <testcase name="persisted session prefers resume after socket open" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.007"/>
+  <testcase name="reconnect after accepted session uses resume path" classname="com.autosdk.agent.state.AgentStateCoordinatorTest" time="0.013"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

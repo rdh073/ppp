@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.autosdk.agent.transport.WebSocketAgentTransportTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-03-12T09:58:03.854Z" hostname="kyubi" time="0.128">
+  <properties/>
+  <testcase name="socket failure notifies failure and disconnected handlers" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.071"/>
+  <testcase name="send request writes encoded json to active socket" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.031"/>
+  <testcase name="incoming request is forwarded to runtime handler" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.005"/>
+  <testcase name="shared client bypasses device global proxy" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.005"/>
+  <testcase name="closed socket reason falls back to code when reason blank" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.002"/>
+  <testcase name="incoming failure response is forwarded to rpc failure handler" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.005"/>
+  <testcase name="incoming success response is forwarded to rpc success handler" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.004"/>
+  <testcase name="socket open does not auto register" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.001"/>
+  <testcase name="disconnect closes active socket" classname="com.autosdk.agent.transport.WebSocketAgentTransportTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

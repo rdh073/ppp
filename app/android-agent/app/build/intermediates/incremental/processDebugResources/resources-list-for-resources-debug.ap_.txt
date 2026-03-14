@@ -1,0 +1,1 @@
+/home/xtrzy/Workspace/auto-sdk/apps/android-agent/app/build/intermediates/merged_res/debug/mergeDebugResources/values_values.arsc.flat /home/xtrzy/Workspace/auto-sdk/apps/android-agent/app/build/intermediates/merged_res/debug/mergeDebugResources/xml_accessibility_service_config.xml.flat 
