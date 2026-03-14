@@ -306,6 +306,18 @@ private class FakeAgentStateStore(
     override fun clearInflightRequestId() {
         snapshot = snapshot.copy(inflightRequestId = null)
     }
+
+    override fun persistLastOutboundEventSeqNo(seqNo: Long) {
+        snapshot = snapshot.copy(lastOutboundEventSeqNo = seqNo)
+    }
+
+    override fun persistPendingAccessibilityDisabledEvent(event: PendingAccessibilityDisabledEvent) {
+        snapshot = snapshot.copy(pendingAccessibilityDisabledEvent = event)
+    }
+
+    override fun clearPendingAccessibilityDisabledEvent() {
+        snapshot = snapshot.copy(pendingAccessibilityDisabledEvent = null)
+    }
 }
 
 private class FakeTransportDriver : AgentTransportDriver {

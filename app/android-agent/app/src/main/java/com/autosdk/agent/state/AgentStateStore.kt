@@ -9,12 +9,22 @@ private const val KEY_AGENT_INSTANCE_ID = "agent_instance_id"
 private const val KEY_SESSION_ID = "session_id"
 private const val KEY_LAST_REGISTRATION_AT = "last_registration_at_epoch_ms"
 private const val KEY_INFLIGHT_REQUEST_ID = "inflight_request_id"
+private const val KEY_LAST_OUTBOUND_EVENT_SEQ_NO = "last_outbound_event_seq_no"
+private const val KEY_PENDING_ACCESSIBILITY_DISABLED_SEQ_NO = "pending_accessibility_disabled_seq_no"
+private const val KEY_PENDING_ACCESSIBILITY_DISABLED_REASON = "pending_accessibility_disabled_reason"
+
+data class PendingAccessibilityDisabledEvent(
+    val seqNo: Long,
+    val reason: String,
+)
 
 data class PersistedAgentState(
     val agentInstanceId: String,
     val sessionId: String?,
     val lastRegistrationAtEpochMs: Long?,
     val inflightRequestId: String?,
+    val lastOutboundEventSeqNo: Long = 0L,
+    val pendingAccessibilityDisabledEvent: PendingAccessibilityDisabledEvent? = null,
 )
 
 interface AgentStateStore {
@@ -30,6 +40,12 @@ interface AgentStateStore {
     fun persistInflightRequestId(requestId: String)
 
     fun clearInflightRequestId()
+
+    fun persistLastOutboundEventSeqNo(seqNo: Long)
+
+    fun persistPendingAccessibilityDisabledEvent(event: PendingAccessibilityDisabledEvent)
+
+    fun clearPendingAccessibilityDisabledEvent()
 }
 
 class SharedPreferencesAgentStateStore private constructor(
@@ -46,6 +62,8 @@ class SharedPreferencesAgentStateStore private constructor(
                     null
                 },
             inflightRequestId = prefs.getString(KEY_INFLIGHT_REQUEST_ID, null),
+            lastOutboundEventSeqNo = prefs.getLong(KEY_LAST_OUTBOUND_EVENT_SEQ_NO, 0L),
+            pendingAccessibilityDisabledEvent = readPendingAccessibilityDisabledEvent(),
         )
 
     override fun persistSession(
@@ -77,10 +95,42 @@ class SharedPreferencesAgentStateStore private constructor(
         prefs.edit().remove(KEY_INFLIGHT_REQUEST_ID).apply()
     }
 
+    override fun persistLastOutboundEventSeqNo(seqNo: Long) {
+        prefs.edit().putLong(KEY_LAST_OUTBOUND_EVENT_SEQ_NO, seqNo).apply()
+    }
+
+    override fun persistPendingAccessibilityDisabledEvent(event: PendingAccessibilityDisabledEvent) {
+        prefs.edit().apply {
+            putLong(KEY_PENDING_ACCESSIBILITY_DISABLED_SEQ_NO, event.seqNo)
+            putString(KEY_PENDING_ACCESSIBILITY_DISABLED_REASON, event.reason)
+        }.apply()
+    }
+
+    override fun clearPendingAccessibilityDisabledEvent() {
+        prefs.edit().apply {
+            remove(KEY_PENDING_ACCESSIBILITY_DISABLED_SEQ_NO)
+            remove(KEY_PENDING_ACCESSIBILITY_DISABLED_REASON)
+        }.apply()
+    }
+
     private fun getOrCreateAgentInstanceId(): String =
         prefs.getString(KEY_AGENT_INSTANCE_ID, null) ?: UUID.randomUUID().toString().also { id ->
             prefs.edit().putString(KEY_AGENT_INSTANCE_ID, id).apply()
         }
+
+    private fun readPendingAccessibilityDisabledEvent(): PendingAccessibilityDisabledEvent? {
+        if (!prefs.contains(KEY_PENDING_ACCESSIBILITY_DISABLED_SEQ_NO)) {
+            return null
+        }
+        val reason = prefs.getString(KEY_PENDING_ACCESSIBILITY_DISABLED_REASON, null)?.trim().orEmpty()
+        if (reason.isEmpty()) {
+            return null
+        }
+        return PendingAccessibilityDisabledEvent(
+            seqNo = prefs.getLong(KEY_PENDING_ACCESSIBILITY_DISABLED_SEQ_NO, 0L),
+            reason = reason,
+        )
+    }
 
     companion object {
         fun from(context: Context): SharedPreferencesAgentStateStore =

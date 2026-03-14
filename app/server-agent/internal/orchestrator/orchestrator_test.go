@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
@@ -128,8 +129,8 @@ func TestProcessEvent_StaleEventDropped(t *testing.T) {
 	ev3 := base
 	ev3.ID = "ev-3"
 	ev3.SeqNo = 3
-	if err := orch.ProcessEvent(ctx, ev3); err != nil {
-		t.Fatalf("unexpected error on stale event: %v", err)
+	if err := orch.ProcessEvent(ctx, ev3); !errors.Is(err, domain.ErrEventDropped) {
+		t.Fatalf("expected dropped error for stale event, got: %v", err)
 	}
 	// If the stale event had been processed it would create a second state entry; verify only one run occurred.
 }
@@ -153,9 +154,9 @@ func TestProcessEvent_DuplicateEventDropped(t *testing.T) {
 	ev := domain.Event{ID: "ev-same", Kind: domain.EventKindUiObservation, DeviceID: "dev-3", SeqNo: 1, OccurredAt: time.Now()}
 	_ = orch.ProcessEvent(ctx, ev)
 
-	// Second identical event must be silently dropped (no panic, no error).
-	if err := orch.ProcessEvent(ctx, ev); err != nil {
-		t.Fatalf("duplicate event returned error: %v", err)
+	// Second identical event must be dropped.
+	if err := orch.ProcessEvent(ctx, ev); !errors.Is(err, domain.ErrEventDropped) {
+		t.Fatalf("expected dropped error for duplicate event, got: %v", err)
 	}
 }
 

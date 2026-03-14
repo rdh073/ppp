@@ -13,10 +13,12 @@ import com.autosdk.agent.observation.SnapshotBuilder
 import com.autosdk.agent.state.AgentEvent
 import com.autosdk.agent.state.AgentLogger
 import com.autosdk.agent.state.AgentRuntimeHooks
+import com.autosdk.agent.state.AgentStateStore
 import com.autosdk.agent.state.AgentStateCoordinator
 import com.autosdk.agent.state.AgentStatus
 import com.autosdk.agent.state.CoroutineBackoffScheduler
 import com.autosdk.agent.state.CoroutineHeartbeatScheduler
+import com.autosdk.agent.state.PendingAccessibilityDisabledEvent
 import com.autosdk.agent.state.SharedPreferencesAgentStateStore
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +66,7 @@ class AgentAccessibilityService : AccessibilityService() {
     @Volatile private var transport: WebSocketAgentTransport? = null
     @Volatile private var runtime: AgentRuntime? = null
     @Volatile private var coordinator: AgentStateCoordinator? = null
+    @Volatile private var stateStore: AgentStateStore? = null
 
     /** Last known foreground activity class name. Updated on TYPE_WINDOW_STATE_CHANGED. */
     @Volatile private var currentActivityName: String? = null
@@ -74,6 +77,7 @@ class AgentAccessibilityService : AccessibilityService() {
      */
     private val lastEventMs = AtomicLong(0L)
     private val outboundEventSeqNo = AtomicLong(0L)
+    @Volatile private var wasTransportConnected = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -160,6 +164,9 @@ class AgentAccessibilityService : AccessibilityService() {
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         val serverUrl = resolveServerUrl()
         val capabilityProvider = { buildCapabilityList() }
+        val localStateStore = SharedPreferencesAgentStateStore.from(applicationContext)
+        stateStore = localStateStore
+        outboundEventSeqNo.set(localStateStore.read().lastOutboundEventSeqNo)
 
         Log.i(TAG, "Preparing agent runtime for $serverUrl device=$deviceId")
 
@@ -185,7 +192,7 @@ class AgentAccessibilityService : AccessibilityService() {
             AgentStateCoordinator(
                 scope = serviceScope,
                 deviceId = deviceId,
-                store = SharedPreferencesAgentStateStore.from(applicationContext),
+                store = localStateStore,
                 transportDriver = ws,
                 heartbeatScheduler = heartbeatScheduler,
                 backoffScheduler = backoffScheduler,
@@ -278,19 +285,34 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private suspend fun notifyAccessibilityDisabled(reason: String) {
         val seqNo = outboundEventSeqNo.incrementAndGet()
+        val pendingEvent = PendingAccessibilityDisabledEvent(seqNo = seqNo, reason = reason)
+        stateStore?.persistLastOutboundEventSeqNo(seqNo)
+        stateStore?.persistPendingAccessibilityDisabledEvent(pendingEvent)
+        flushPendingAccessibilityDisabledEvent()
+    }
+
+    private suspend fun flushPendingAccessibilityDisabledEvent() {
+        val store = stateStore ?: return
+        val pendingEvent = store.read().pendingAccessibilityDisabledEvent ?: return
         val payload =
             buildJsonObject {
-                put("seqNo", seqNo)
-                put("reason", reason)
+                put("seqNo", pendingEvent.seqNo)
+                put("reason", pendingEvent.reason)
             }
 
-        runCatching {
-            transport?.sendNotification(
-                method = METHOD_ANDROID_ACCESSIBILITY_DISABLED,
-                params = payload,
-            )
-        }.onFailure { error ->
-            Log.w(TAG, "Failed to notify accessibility disabled: ${error.message}")
+        val sent =
+            runCatching {
+                transport?.sendNotification(
+                    method = METHOD_ANDROID_ACCESSIBILITY_DISABLED,
+                    params = payload,
+                ) == true
+            }.getOrElse { error ->
+                Log.w(TAG, "Failed to notify accessibility disabled: ${error.message}")
+                false
+            }
+
+        if (sent) {
+            store.clearPendingAccessibilityDisabledEvent()
         }
     }
 
@@ -300,6 +322,11 @@ class AgentAccessibilityService : AccessibilityService() {
         }
 
         override fun onStatusChanged(status: AgentStatus) {
+            val isConnected = status.transport == "connected"
+            if (isConnected && !wasTransportConnected) {
+                serviceScope.launch { flushPendingAccessibilityDisabledEvent() }
+            }
+            wasTransportConnected = isConnected
             Log.d(TAG, "status ${status.toDebugString()}")
         }
     }

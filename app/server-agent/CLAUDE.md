@@ -75,6 +75,7 @@ Optional env vars:
 - `AUTO_ADB_SERVER_HOST` (default: `localhost`)
 - `AUTO_ADB_SERVER_PORT` (default: `5037`)
 - `AUTO_AGENT_ACCESSIBILITY_COMPONENT` (default: `com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService`)
+- `AUTO_ADB_SERIAL_BY_DEVICE` (optional fallback mapping; format: `deviceId1=serial1,deviceId2=serial2`)
 
 Expected event payload (params) for multi-device safety:
 
@@ -88,7 +89,10 @@ Expected event payload (params) for multi-device safety:
 
 Notes:
 - If `adbSerial` is omitted and exactly one device is connected, that device is used.
+- If `adbSerial` is omitted and `AUTO_ADB_SERIAL_BY_DEVICE` contains the deviceId mapping, the mapped serial is used.
 - If multiple devices are connected and `adbSerial` is missing, auto-enable is rejected with an explicit error.
+- `android.*` events are accepted only after successful `agent.hello` / `agent.resume` (registered connection).
+- Safety guard: before mutating accessibility settings, server verifies `settings get secure android_id` on the selected adb target matches the registered `deviceId`.
 
 ## Extending
 

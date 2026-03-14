@@ -12,11 +12,12 @@ import (
 
 type recordingEventProcessor struct {
 	events []domain.Event
+	err    error
 }
 
 func (r *recordingEventProcessor) ProcessEvent(_ context.Context, event domain.Event) error {
 	r.events = append(r.events, event)
-	return nil
+	return r.err
 }
 
 type recordingAccessibilityEnabler struct {
@@ -90,6 +91,9 @@ func TestIngestNotification_AccessibilityDisabled_TriggersEnabler(t *testing.T) 
 	if orch.events[0].SeqNo != 42 {
 		t.Fatalf("unexpected seqNo: %d", orch.events[0].SeqNo)
 	}
+	if orch.events[0].ID != "dev-1:42" {
+		t.Fatalf("unexpected event ID: %q", orch.events[0].ID)
+	}
 }
 
 func TestIngestNotification_NonAccessibilityEvent_DoesNotTriggerEnabler(t *testing.T) {
@@ -132,5 +136,46 @@ func TestIngestNotification_EnablerError_DoesNotBlockEventProcessing(t *testing.
 
 	if len(orch.events) != 1 {
 		t.Fatalf("expected event to still be processed, got %d", len(orch.events))
+	}
+}
+
+func TestIngestNotification_DroppedByOrchestrator_SkipsSideEffectAndReturnsNil(t *testing.T) {
+	orch := &recordingEventProcessor{err: domain.ErrEventDropped}
+	enabler := &recordingAccessibilityEnabler{}
+	uc := usecase.NewEventIngestion(orch, enabler)
+
+	err := uc.IngestNotification(
+		context.Background(),
+		domain.DeviceID("dev-4"),
+		string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":10,"adbSerial":"emulator-5554"}`),
+	)
+	if err != nil {
+		t.Fatalf("expected nil for dropped event, got: %v", err)
+	}
+	if len(enabler.calls) != 0 {
+		t.Fatalf("expected no enabler call for dropped event, got %d", len(enabler.calls))
+	}
+}
+
+func TestIngestNotification_SeqNoZero_DoesNotTriggerSideEffect(t *testing.T) {
+	orch := &recordingEventProcessor{}
+	enabler := &recordingAccessibilityEnabler{}
+	uc := usecase.NewEventIngestion(orch, enabler)
+
+	err := uc.IngestNotification(
+		context.Background(),
+		domain.DeviceID("dev-5"),
+		string(domain.EventKindAccessibilityDisabled),
+		json.RawMessage(`{"seqNo":0,"adbSerial":"emulator-5554"}`),
+	)
+	if err != nil {
+		t.Fatalf("IngestNotification returned error: %v", err)
+	}
+	if len(orch.events) != 1 {
+		t.Fatalf("expected one processed event, got %d", len(orch.events))
+	}
+	if len(enabler.calls) != 0 {
+		t.Fatalf("expected no enabler call for seqNo=0, got %d", len(enabler.calls))
 	}
 }

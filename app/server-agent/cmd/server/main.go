@@ -75,6 +75,7 @@ func main() {
 		os.Getenv("AUTO_ADB_SERVER_HOST"),
 		os.Getenv("AUTO_ADB_SERVER_PORT"),
 		os.Getenv("AUTO_AGENT_ACCESSIBILITY_COMPONENT"),
+		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
 	)
 	eventUC := usecase.NewEventIngestion(orch, autoEnabler)
 

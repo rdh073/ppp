@@ -131,7 +131,13 @@ func (s *AgentServer) dispatch(ctx context.Context, req inbound, conn *Conn) {
 		// the event ingestion use case. They may or may not have an id;
 		// we don't send a response for pure notifications (id == "").
 		if strings.HasPrefix(req.Method, "android.") {
-			if err := s.eventUC.IngestNotification(ctx, conn.DeviceID(), req.Method, req.Params); err != nil {
+			deviceID := conn.DeviceID()
+			if deviceID == "" {
+				s.log.Warn("dropping android event from unregistered connection",
+					"method", req.Method)
+				return
+			}
+			if err := s.eventUC.IngestNotification(ctx, deviceID, req.Method, req.Params); err != nil {
 				s.log.Warn("event ingestion failed", "method", req.Method, "err", err)
 			}
 			return

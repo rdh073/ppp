@@ -115,6 +115,45 @@ class WebSocketAgentTransportTest {
         }
 
     @Test
+    fun `send notification returns false when socket is unavailable`() =
+        runBlocking {
+            val transport = createTransport()
+            val sent =
+                transport.sendNotification(
+                    method = "android.accessibility.disabled",
+                    params =
+                        buildJsonObject {
+                            put("seqNo", 1)
+                        },
+                )
+
+            assertFalse(sent)
+        }
+
+    @Test
+    fun `send notification writes encoded json to active socket`() =
+        runBlocking {
+            val transport = createTransport()
+            val socket = FakeWebSocket()
+            transport.handleSocketOpened(socket)
+
+            val sent =
+                transport.sendNotification(
+                    method = "android.accessibility.disabled",
+                    params =
+                        buildJsonObject {
+                            put("seqNo", 5)
+                            put("reason", "service_interrupted")
+                        },
+                )
+
+            assertTrue(sent)
+            assertEquals(1, socket.sentMessages.size)
+            assertTrue(socket.sentMessages.single().contains(""""method":"android.accessibility.disabled""""))
+            assertTrue(socket.sentMessages.single().contains(""""seqNo":5"""))
+        }
+
+    @Test
     fun `socket failure notifies failure and disconnected handlers`() {
         val transport = createTransport()
         val reasons = mutableListOf<String>()

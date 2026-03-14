@@ -130,13 +130,13 @@ class WebSocketAgentTransport(
     suspend fun sendNotification(
         method: String,
         params: JsonElement = JsonNull,
-    ) {
+    ): Boolean {
         val socket = webSocket ?: run {
             logWarn("sendNotification: no active WebSocket for method=$method")
-            return
+            return false
         }
         val notification = JsonRpcNotification(method = method, params = params)
-        socket.send(json.encodeToString(notification))
+        return socket.send(json.encodeToString(notification))
     }
 
     override suspend fun sendSuccess(id: String, result: JsonElement) {

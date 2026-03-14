@@ -53,11 +53,11 @@ func (o *Orchestrator) ProcessEvent(ctx context.Context, e domain.Event) error {
 	// --- idempotency checks (no lock needed; these are read-only) ---
 	if !o.wm.Accept(e.DeviceID, e.SeqNo) {
 		o.log.Debug("dropped stale event", "deviceId", e.DeviceID, "seqNo", e.SeqNo)
-		return nil
+		return domain.ErrEventDropped
 	}
 	if e.ID != "" && o.dedup.IsDuplicate(e.DeviceID, e.ID) {
 		o.log.Debug("dropped duplicate event", "deviceId", e.DeviceID, "eventId", e.ID)
-		return nil
+		return domain.ErrEventDropped
 	}
 
 	// --- per-device serialisation ---
@@ -67,7 +67,10 @@ func (o *Orchestrator) ProcessEvent(ctx context.Context, e domain.Event) error {
 
 	// Re-check after acquiring lock (another goroutine may have advanced the watermark).
 	if !o.wm.Accept(e.DeviceID, e.SeqNo) {
-		return nil
+		return domain.ErrEventDropped
+	}
+	if e.ID != "" && o.dedup.IsDuplicate(e.DeviceID, e.ID) {
+		return domain.ErrEventDropped
 	}
 
 	tasks, err := o.tasks.ListByDevice(ctx, e.DeviceID)

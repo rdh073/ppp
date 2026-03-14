@@ -1,8 +1,15 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 type EventKind string
+
+// ErrEventDropped indicates a device-originated event was intentionally ignored
+// (e.g. stale watermark or duplicate idempotency key).
+var ErrEventDropped = errors.New("event dropped")
 
 const (
 	EventKindAgentOnline     EventKind = "agent.online"

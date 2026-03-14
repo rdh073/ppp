@@ -45,17 +45,17 @@ func (u *EventIngestionUseCase) IngestNotification(
 		return fmt.Errorf("IngestNotification: unexpected method %q", method)
 	}
 
-	enableErr := u.maybeEnableAccessibility(ctx, kind, deviceID, rawParams)
-
-	// Extract optional seqNo from params (convention: {"seqNo": N, ...}).
+	// Extract optional metadata from params (convention: {"seqNo": N, ...}).
 	var meta struct {
-		SeqNo uint64 `json:"seqNo"`
+		SeqNo            uint64 `json:"seqNo"`
+		ADBSerial        string `json:"adbSerial"`
+		ServiceComponent string `json:"serviceComponent"`
 	}
 	_ = json.Unmarshal(rawParams, &meta) // best-effort; zero seqNo is valid
 
 	now := time.Now()
 	event := domain.Event{
-		ID:         fmt.Sprintf("%s:%s:%d", deviceID, method, now.UnixNano()),
+		ID:         buildDeviceEventID(deviceID, meta.SeqNo, method, now),
 		Kind:       kind,
 		DeviceID:   deviceID,
 		SeqNo:      meta.SeqNo,
@@ -64,29 +64,56 @@ func (u *EventIngestionUseCase) IngestNotification(
 	}
 
 	processErr := u.orch.ProcessEvent(ctx, event)
-	return errors.Join(processErr, enableErr)
+	if processErr != nil {
+		if errors.Is(processErr, domain.ErrEventDropped) {
+			return nil
+		}
+		return processErr
+	}
+
+	return u.maybeEnableAccessibility(
+		ctx,
+		kind,
+		meta.SeqNo,
+		deviceID,
+		meta.ADBSerial,
+		meta.ServiceComponent,
+	)
 }
 
 func (u *EventIngestionUseCase) maybeEnableAccessibility(
 	ctx context.Context,
 	kind domain.EventKind,
+	seqNo uint64,
 	deviceID domain.DeviceID,
-	rawParams json.RawMessage,
+	adbSerial string,
+	serviceComponent string,
 ) error {
 	if kind != domain.EventKindAccessibilityDisabled {
 		return nil
 	}
-
-	var payload struct {
-		ADBSerial        string `json:"adbSerial"`
-		ServiceComponent string `json:"serviceComponent"`
+	if seqNo == 0 {
+		// No ordering/idempotency guarantees for seqNo=0 events: keep visibility
+		// by ingesting the event, but avoid side-effects.
+		return nil
 	}
-	_ = json.Unmarshal(rawParams, &payload)
 
 	return u.autoEnabler.Enable(
 		ctx,
 		deviceID,
-		payload.ADBSerial,
-		payload.ServiceComponent,
+		adbSerial,
+		serviceComponent,
 	)
+}
+
+func buildDeviceEventID(
+	deviceID domain.DeviceID,
+	seqNo uint64,
+	method string,
+	now time.Time,
+) string {
+	if seqNo > 0 {
+		return fmt.Sprintf("%s:%d", deviceID, seqNo)
+	}
+	return fmt.Sprintf("%s:%s:%d", deviceID, method, now.UnixNano())
 }

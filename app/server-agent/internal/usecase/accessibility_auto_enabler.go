@@ -31,6 +31,7 @@ func (noopAccessibilityAutoEnabler) Enable(context.Context, domain.DeviceID, str
 type AdbAccessibilityAutoEnabler struct {
 	adbHost                 string
 	adbPort                 int
+	adbSerialByDeviceID     map[domain.DeviceID]string
 	defaultServiceComponent string
 	newClient               func(host string, port int) (adbClient, error)
 }
@@ -43,6 +44,7 @@ func NewAdbAccessibilityAutoEnabler(
 	adbServerHost string,
 	adbServerPort string,
 	defaultServiceComponent string,
+	adbSerialByDevice string,
 ) *AdbAccessibilityAutoEnabler {
 	host := strings.TrimSpace(adbServerHost)
 	if host == "" {
@@ -59,9 +61,11 @@ func NewAdbAccessibilityAutoEnabler(
 	if strings.TrimSpace(defaultServiceComponent) == "" {
 		defaultServiceComponent = DefaultAccessibilityServiceComponent
 	}
+
 	return &AdbAccessibilityAutoEnabler{
 		adbHost:                 host,
 		adbPort:                 port,
+		adbSerialByDeviceID:     parseADBSerialByDeviceMap(adbSerialByDevice),
 		defaultServiceComponent: defaultServiceComponent,
 		newClient: func(host string, port int) (adbClient, error) {
 			return gadb.NewClientWith(host, port)
@@ -80,6 +84,9 @@ func (a *AdbAccessibilityAutoEnabler) Enable(
 	}
 
 	serial := strings.TrimSpace(adbSerial)
+	if serial == "" {
+		serial = strings.TrimSpace(a.adbSerialByDeviceID[deviceID])
+	}
 	component := strings.TrimSpace(serviceComponent)
 	if component == "" {
 		component = a.defaultServiceComponent
@@ -97,6 +104,9 @@ func (a *AdbAccessibilityAutoEnabler) Enable(
 
 	device, err := selectTargetDevice(devices, serial, deviceID)
 	if err != nil {
+		return err
+	}
+	if err := a.verifyDeviceIdentity(ctx, device, deviceID); err != nil {
 		return err
 	}
 
@@ -149,6 +159,32 @@ func (a *AdbAccessibilityAutoEnabler) runShell(
 	return out, nil
 }
 
+func (a *AdbAccessibilityAutoEnabler) verifyDeviceIdentity(
+	ctx context.Context,
+	device gadb.Device,
+	deviceID domain.DeviceID,
+) error {
+	out, err := a.runShell(ctx, device, "settings", "get", "secure", "android_id")
+	if err != nil {
+		return fmt.Errorf("failed to verify android_id on %s: %w", device.Serial(), err)
+	}
+
+	observed := normalizeAndroidID(out)
+	expected := normalizeAndroidID(string(deviceID))
+	if observed == "" || observed == "null" || expected == "" {
+		return fmt.Errorf("cannot verify device identity: expected=%q observed=%q serial=%q", expected, observed, device.Serial())
+	}
+	if observed != expected {
+		return fmt.Errorf(
+			"device identity mismatch: deviceID=%q serial=%q android_id=%q",
+			deviceID,
+			device.Serial(),
+			observed,
+		)
+	}
+	return nil
+}
+
 func selectTargetDevice(devices []gadb.Device, adbSerial string, deviceID domain.DeviceID) (gadb.Device, error) {
 	available := make([]string, 0, len(devices))
 	for _, d := range devices {
@@ -189,4 +225,29 @@ func containsComponent(enabled, component string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeAndroidID(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+func parseADBSerialByDeviceMap(raw string) map[domain.DeviceID]string {
+	result := make(map[domain.DeviceID]string)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		deviceID := domain.DeviceID(strings.TrimSpace(parts[0]))
+		serial := strings.TrimSpace(parts[1])
+		if deviceID == "" || serial == "" {
+			continue
+		}
+		result[deviceID] = serial
+	}
+	return result
 }

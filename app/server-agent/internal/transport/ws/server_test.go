@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +21,8 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	ws "github.com/autosdk/ppp/server-agent/internal/transport/ws"
+	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 	"github.com/autosdk/ppp/server-agent/internal/workflow/nodes"
 )
@@ -76,6 +77,36 @@ func buildTestServer(t *testing.T) *httptest.Server {
 	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
 	eventUC := usecase.NewEventIngestion(orch)
+	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
+	taskHandler := handler.NewTaskHandler(taskUC, log)
+	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws/agent", agentServer)
+	mux.Handle("/tasks", taskHandler)
+	mux.Handle("/tasks/", taskHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func buildTestServerWithProcessor(t *testing.T, proc usecase.EventProcessor) *httptest.Server {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	reg := registry.New()
+	taskStore := store.NewMemoryTaskStore()
+	stateStore := store.NewMemoryWorkflowStateStore()
+	disp := dispatcher.NewMemoryDispatcher(reg)
+	runner := terminalAfterObserve(disp)
+	orch := orchestrator.New(taskStore, stateStore, runner, log)
+	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, log)
+	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
+	eventUC := usecase.NewEventIngestion(proc)
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
@@ -256,4 +287,72 @@ func TestE2E_UnknownMethod_ErrorResponse(t *testing.T) {
 	if msg["error"] == nil {
 		t.Errorf("expected error response for unknown method, got: %v", msg)
 	}
+}
+
+type recordingProcessorWithLock struct {
+	mu     sync.Mutex
+	events []domain.Event
+}
+
+func (r *recordingProcessorWithLock) ProcessEvent(_ context.Context, e domain.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recordingProcessorWithLock) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.events)
+}
+
+func TestE2E_AndroidEventIgnoredUntilRegistration(t *testing.T) {
+	proc := &recordingProcessorWithLock{}
+	srv := buildTestServerWithProcessor(t, proc)
+	conn := dialWS(t, srv)
+
+	sendJSON(t, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "android.accessibility.disabled",
+		"params": map[string]any{
+			"seqNo": 1,
+		},
+	})
+	time.Sleep(150 * time.Millisecond)
+	if got := proc.count(); got != 0 {
+		t.Fatalf("expected no pre-registration events, got %d", got)
+	}
+
+	sendJSON(t, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "hello-reg",
+		"method":  "agent.hello",
+		"params": map[string]any{
+			"deviceId":        "dev-reg",
+			"agentInstanceId": "inst-reg",
+			"capabilities":    []string{},
+		},
+	})
+	helloResp := readJSON(t, conn)
+	if helloResp["error"] != nil {
+		t.Fatalf("agent.hello error: %v", helloResp["error"])
+	}
+
+	sendJSON(t, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "android.accessibility.disabled",
+		"params": map[string]any{
+			"seqNo": 2,
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if proc.count() == 1 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("expected one post-registration android event, got %d", proc.count())
 }
