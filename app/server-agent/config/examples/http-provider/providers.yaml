@@ -1,8 +1,6 @@
 providers:
-  - id: builtin
-    kind: builtin
   - id: example-http
     kind: http
-    optional: true
+    baseURL: http://127.0.0.1:3310
     baseURLEnv: AUTO_TOOL_EXAMPLE_BASE_URL
     timeout: 2s

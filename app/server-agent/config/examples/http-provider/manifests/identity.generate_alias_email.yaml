@@ -1,0 +1,29 @@
+name: identity.generate_alias_email
+provider: example-http
+providerToolName: identity.generate_alias_email
+description: Generates a remote alias email through the example HTTP provider
+deterministic: true
+timeout: 2s
+retryBudget: 0
+inputSchema:
+  type: object
+  required: [fullName]
+  properties:
+    fullName:
+      type: string
+    domain:
+      type: string
+    suffix:
+      type: string
+outputSchema:
+  type: object
+  required: [email, localPart, domain, source]
+  properties:
+    email:
+      type: string
+    localPart:
+      type: string
+    domain:
+      type: string
+    source:
+      type: string

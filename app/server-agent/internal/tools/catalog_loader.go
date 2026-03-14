@@ -37,6 +37,7 @@ type providerCatalogFile struct {
 type providerConfig struct {
 	ID         string `yaml:"id"`
 	Kind       string `yaml:"kind"`
+	Optional   bool   `yaml:"optional"`
 	BaseURL    string `yaml:"baseURL"`
 	BaseURLEnv string `yaml:"baseURLEnv"`
 	APIKeyEnv  string `yaml:"apiKeyEnv"`
@@ -97,11 +98,12 @@ type builtinProvider struct {
 }
 
 type httpProvider struct {
-	cfg        providerConfig
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
-	discovered map[string]remoteProviderTool
+	cfg            providerConfig
+	baseURL        string
+	apiKey         string
+	httpClient     *http.Client
+	discovered     map[string]remoteProviderTool
+	disabledReason string
 }
 
 type remoteProviderTool struct {
@@ -205,9 +207,6 @@ func loadProviders(ctx context.Context, dir string, log *slog.Logger, modelCfg M
 					baseURL = envValue
 				}
 			}
-			if baseURL == "" {
-				return nil, fmt.Errorf("provider %s baseURL required", cfg.ID)
-			}
 			timeout := 10 * time.Second
 			if strings.TrimSpace(cfg.Timeout) != "" {
 				parsed, err := time.ParseDuration(strings.TrimSpace(cfg.Timeout))
@@ -222,8 +221,19 @@ func loadProviders(ctx context.Context, dir string, log *slog.Logger, modelCfg M
 				apiKey:     strings.TrimSpace(os.Getenv(cfg.APIKeyEnv)),
 				httpClient: &http.Client{Timeout: timeout},
 			}
-			if _, err := provider.discovery(ctx); err != nil {
-				return nil, fmt.Errorf("provider %s discovery: %w", cfg.ID, err)
+			if provider.baseURL == "" {
+				if !cfg.Optional {
+					return nil, fmt.Errorf("provider %s baseURL required", cfg.ID)
+				}
+				provider.disabledReason = "baseURL not configured"
+			} else if _, err := provider.discovery(ctx); err != nil {
+				if !cfg.Optional {
+					return nil, fmt.Errorf("provider %s discovery: %w", cfg.ID, err)
+				}
+				provider.disabledReason = "discovery failed: " + err.Error()
+			}
+			if provider.disabledReason != "" && log != nil {
+				log.Warn("optional tool provider disabled", "provider", cfg.ID, "reason", provider.disabledReason)
 			}
 			providers[cfg.ID] = provider
 		default:
@@ -644,6 +654,9 @@ func templateWithJSONFuncs(name string) *template.Template {
 }
 
 func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) (nodes.ToolDefinition, error) {
+	if p.disabledReason != "" {
+		return disabledToolDefinition(manifest.Manifest, fmt.Sprintf("provider %s %s", p.cfg.ID, p.disabledReason))
+	}
 	remoteTools, err := p.discovery(ctx)
 	if err != nil {
 		return nodes.ToolDefinition{}, err
@@ -693,6 +706,28 @@ func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) 
 		ValidateResult: validateResult,
 		Handler: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
 			return p.invoke(ctx, merged.ProviderToolName, params)
+		},
+	}, nil
+}
+
+func disabledToolDefinition(manifest nodes.ToolManifest, reason string) (nodes.ToolDefinition, error) {
+	validateParams, err := compileSchemaValidator(manifest.InputSchema)
+	if err != nil {
+		return nodes.ToolDefinition{}, err
+	}
+	validateResult, err := compileSchemaValidator(manifest.OutputSchema)
+	if err != nil {
+		return nodes.ToolDefinition{}, err
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "provider unavailable"
+	}
+	return nodes.ToolDefinition{
+		Manifest:       manifest,
+		ValidateParams: validateParams,
+		ValidateResult: validateResult,
+		Handler: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			return nil, fmt.Errorf("%w: %s", nodes.ErrToolDisabled, reason)
 		},
 	}, nil
 }

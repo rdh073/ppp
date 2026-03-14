@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -60,6 +61,8 @@ func Eval(when string, status NodeStatus, artifacts map[string]string, errorCoun
 		return compareStrings(string(eventKind), op, stripQuotes(rhs))
 	}
 
+	slog.Default().Warn("workflow expr: unrecognized LHS in when expression",
+		"expr", when, "lhs", lhs, "op", op)
 	return false
 }
 

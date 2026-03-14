@@ -58,7 +58,7 @@ For this repo, v2 narrows the design to what is actually needed:
 - the v2 doc under-specified the existing `ToolCall` path even though the workspace already has `NodeKindToolCall`, `ToolRegistry`, and `tool.result` concepts
 - the plan did not distinguish device commands from server-side tool calls; `device.*` goes to `android-agent`, but `toolcall` stays inside `server-agent`
 - the plan treated all tools as one class; that is too coarse. Deterministic generators such as `identity.generate_indonesian_name`, `identity.generate_email`, `credential.generate_password`, and `identity.generate_birth_date` should stay local and schema-bounded, while LangGraph or LLM-backed tools should be used only where non-deterministic language reasoning is actually needed
-- Phases 1, 2, 2.5, and the catalog-backed Phase 3 are now implemented in code: the workspace has a fail-closed manifest-backed registry, startup-loaded tool manifests and bindings under `config/tools`, local deterministic tool implementations, config-only prompt-backed model tools, and shipped workflow paths that seed and consume `pending_tool_binding` end-to-end; the next gaps are durable event-plane persistence and scale-out hardening
+- Phases 1, 2, 2.5, and the catalog-backed Phase 3 are now implemented in code: the workspace has a fail-closed manifest-backed registry, startup-loaded tool manifests and bindings under `config/tools`, local deterministic tool implementations, config-only prompt-backed model tools, a shipped reference `http` provider example under `cmd/tool-provider-example` plus `config/examples/http-provider`, that same remote manifest carried in the default catalog behind an optional provider gate, and shipped workflow paths that seed and consume `pending_tool_binding` end-to-end; the next gaps are durable event-plane persistence and scale-out hardening
 - the roadmap lacked end-of-phase workspace state rules; without them, the repo can accumulate dead queues, placeholder adapters, and half-wired interfaces
 
 ## 3. Goals
@@ -836,7 +836,7 @@ Current workspace status:
 - Phase 1 tool runtime hardening is done in code: production wiring is fail-closed and manifest-backed
 - Phase 2 local tool catalog is done in code: production wiring includes manifest-backed local tools with input and output validation
 - Phase 2.5 workflow adoption is done in code: the built-in `local-identity-profile` workflow uses real deterministic `ToolCall` steps and consumes `tool_result` in downstream logic
-- Phase 3 model-backed tool integration is done in code: production wiring now loads provider-backed tools from `config/tools`, supports config-only OpenAI-compatible prompt tools and `http` providers, validates tool IO with schemas, and ships a deterministic fallback workflow path when the provider is unavailable
+- Phase 3 model-backed tool integration is done in code: production wiring now loads provider-backed tools from `config/tools`, supports config-only OpenAI-compatible prompt tools and `http` providers, validates tool IO with schemas, ships a reference non-builtin HTTP provider example, and ships a deterministic fallback workflow path when the provider is unavailable
 - Phase 4 durable event plane is done in code: accepted events, dead letters, dedup/watermark state, command outbox records, and production task/workflow snapshots are file-backed in the shipped runtime
 
 ### 16.1 Phase Rules
@@ -942,6 +942,8 @@ Workspace state at phase end:
 - deterministic tools remain local and do not depend on model availability
 - workflow definitions choose tool names explicitly and document fallback branches
 - the shipped `local-identity-welcome-email` workflow proves the model-backed path and the deterministic fallback path end-to-end
+- the default catalog can expose a remote `http` tool as visible-but-disabled until its provider is configured and reachable, so the runtime can ship one remote manifest without forcing startup dependency on that provider
+- the repo includes one reference `http` provider service and matching example catalog so the non-builtin provider contract is executable, not only documented
 
 ### 16.6 Phase 4: Durable Event Plane
 

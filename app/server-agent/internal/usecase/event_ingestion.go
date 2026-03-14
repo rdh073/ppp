@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
@@ -129,6 +130,8 @@ func (u *EventIngestionUseCase) maybeEnableAccessibility(
 func (u *EventIngestionUseCase) recordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) {
 	recorder, ok := u.orch.(deadLetterRecorder)
 	if !ok {
+		slog.Default().Warn("dead letter recorder not available; ingestion dead letter dropped",
+			"eventId", record.EventID, "reason", record.Reason)
 		return
 	}
 	_ = recorder.RecordDeadLetter(ctx, record)

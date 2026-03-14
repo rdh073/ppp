@@ -230,6 +230,11 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 		}
 	}
 
+	task.Status = domain.TaskStatusFailed
+	task.UpdatedAt = time.Now()
+	if saveErr := o.tasks.Save(ctx, task); saveErr != nil {
+		o.log.Error("save failed task after auto-advance exceeded", "taskId", task.ID, "err", saveErr)
+	}
 	return fmt.Errorf("workflow auto-advance exceeded %d steps for task %s", maxAutoAdvanceSteps, task.ID)
 }
 

@@ -1,0 +1,21 @@
+bindings:
+  - id: example_remote.generate_alias_email
+    tool: identity.generate_alias_email
+    constants:
+      domain: remote.autosdk.id
+      suffix: sandbox
+    paramsTemplate: |
+      {
+        "fullName": {{ json (artifact "profile_full_name") }},
+        "domain": {{ json (constant "domain") }},
+        "suffix": {{ json (constant "suffix") }}
+      }
+    successArtifacts:
+      - artifact: profile_alias_email
+        fromJsonPointer: /email
+      - artifact: profile_alias_email_local_part
+        fromJsonPointer: /localPart
+      - artifact: profile_alias_email_domain
+        fromJsonPointer: /domain
+      - artifact: profile_alias_email_source
+        fromJsonPointer: /source

@@ -36,16 +36,19 @@ func NewWaitNode() *WaitNode { return &WaitNode{} }
 
 func (n *WaitNode) Run(_ context.Context, input workflow.NodeInput) (workflow.NodeOutput, error) {
 	raw := input.State.Artifacts["wait_for_events"]
-
-	// Second call: a matching event just arrived — report success so the
-	// def's transitions can fire (e.g. "event.kind == 'android.activity.created'").
-	if raw == "" || input.State.WaitingFor == nil {
+	if raw == "" {
+		// No wait list configured — treat as immediate success.
 		return workflow.NodeOutput{Status: workflow.NodeStatusSuccess}, nil
 	}
 
-	// If the triggering event matches one of the kinds we're waiting for,
-	// we're done waiting — return success.
-	for _, k := range input.State.WaitingFor {
+	// Determine the wait list: use state (re-arm path) or parse artifact (first entry).
+	waitList := input.State.WaitingFor
+	if len(waitList) == 0 {
+		waitList = parseEventKinds(raw)
+	}
+
+	// If the triggering event matches one of the kinds we're waiting for, unblock.
+	for _, k := range waitList {
 		if k == input.Event.Kind {
 			return workflow.NodeOutput{
 				Status:          workflow.NodeStatusSuccess,
@@ -54,11 +57,10 @@ func (n *WaitNode) Run(_ context.Context, input workflow.NodeInput) (workflow.No
 		}
 	}
 
-	// Still waiting — re-arm with the same list.
-	kinds := parseEventKinds(raw)
+	// Still waiting — (re-)arm with the resolved list.
 	return workflow.NodeOutput{
 		Status:     workflow.NodeStatusPending,
-		WaitingFor: kinds,
+		WaitingFor: waitList,
 	}, nil
 }
 

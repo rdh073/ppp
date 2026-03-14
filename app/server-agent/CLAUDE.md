@@ -9,6 +9,8 @@ Go control plane for the ppp agent system. See `plans/server-agent-architecture.
 go run ./cmd/server            # default :3000
 go run ./cmd/server -addr :8080
 go run ./cmd/server -tool-dir ./config/tools
+go run ./cmd/tool-provider-example
+go run ./cmd/server -tool-dir ./config/examples/http-provider
 
 # Build binary
 go build -o bin/server-agent ./cmd/server
@@ -107,6 +109,18 @@ Tool catalog runtime:
 - built-in provider kinds currently supported:
   - `builtin`: deterministic local tools plus generic OpenAI-compatible JSON prompt execution
   - `http`: remote tool provider exposing `GET /v1/tools` and `POST /v1/tools/{name}:invoke`
+- shipped example remote provider path:
+  - server: `cmd/tool-provider-example`
+  - example catalog: `config/examples/http-provider`
+  - override `AUTO_TOOL_EXAMPLE_BASE_URL` if the example provider is not listening on `http://127.0.0.1:3310`
+  - default `config/tools` also ships `identity.generate_alias_email` and `example_remote.generate_alias_email` behind an optional `example-http` provider
+  - the default catalog keeps that tool visible but disabled until `AUTO_TOOL_EXAMPLE_BASE_URL` is set and discovery succeeds
+  - note: the example catalog is intentionally minimal and is not a drop-in replacement for `config/tools`
+- shipped real-LLM env examples:
+  - `config/examples/llm-providers/openai.env.example`
+  - `config/examples/llm-providers/anthropic.env.example`
+  - `config/examples/llm-providers/gemini.env.example`
+  - `config/examples/llm-providers/deepseek.env.example`
 
 Runtime persistence:
 - `go run ./cmd/server -data-dir ./var`
@@ -212,5 +226,6 @@ Notes:
 - **New workflow node:** implement `workflow.NodeHandler`, register in `main.go` `buildNodeHandlers`.
 - **New agent.* method:** add case in `transport/ws/server.go:dispatch`, add handler in `handler/agent.go`.
 - **New tool without central hardcode:** add or update `config/tools/manifests/*.yaml`, `config/tools/bindings/*.yaml`, and optional `config/tools/prompts/*`; reuse `builtin` or `http` providers where possible.
+- **Example remote provider contract:** use `cmd/tool-provider-example` plus `config/examples/http-provider` as the reference shape for `GET /v1/tools` discovery and `POST /v1/tools/{name}:invoke`.
 - **Persist to Redis:** implement `store.TaskStore` + `store.WorkflowStateStore`, swap in `main.go`.
 - **Async orchestrator:** the `Dispatcher.Dispatch()` channel is the async seam — no node logic changes.
