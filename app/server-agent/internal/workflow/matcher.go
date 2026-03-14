@@ -31,42 +31,31 @@ func parsePayload(event domain.Event) deviceEventPayload {
 // All non-empty fields in m must match (AND semantics).
 // Empty EventMatch{} matches any event.
 func MatchEvent(m domain.EventMatch, event domain.Event) bool {
-	if m.Kind != "" && m.Kind != event.Kind {
-		return false
-	}
-	if m.Package == "" && m.ClassSuffix == "" && m.TextContains == "" {
-		return true
-	}
-	p := parsePayload(event)
-	if m.Package != "" && p.PackageName != m.Package {
-		return false
-	}
-	if m.ClassSuffix != "" && !strings.HasSuffix(p.ClassName, m.ClassSuffix) {
-		return false
-	}
-	if m.TextContains != "" && !containsText(p, m.TextContains) {
-		return false
-	}
-	return true
+	return matchFields(event, m.Kind, m.Package, m.ClassSuffix, m.TextContains)
 }
 
 // MatchExpect reports whether event satisfies the expect condition.
 // Semantics identical to MatchEvent.
 func MatchExpect(e domain.ExpectDef, event domain.Event) bool {
-	if e.Kind != "" && e.Kind != event.Kind {
+	return matchFields(event, e.Kind, e.Package, e.ClassSuffix, e.TextContains)
+}
+
+// matchFields is the shared AND-matching kernel used by both MatchEvent and MatchExpect.
+func matchFields(event domain.Event, kind domain.EventKind, pkg, classSuffix, textContains string) bool {
+	if kind != "" && kind != event.Kind {
 		return false
 	}
-	if e.Package == "" && e.ClassSuffix == "" && e.TextContains == "" {
+	if pkg == "" && classSuffix == "" && textContains == "" {
 		return true
 	}
 	p := parsePayload(event)
-	if e.Package != "" && p.PackageName != e.Package {
+	if pkg != "" && p.PackageName != pkg {
 		return false
 	}
-	if e.ClassSuffix != "" && !strings.HasSuffix(p.ClassName, e.ClassSuffix) {
+	if classSuffix != "" && !strings.HasSuffix(p.ClassName, classSuffix) {
 		return false
 	}
-	if e.TextContains != "" && !containsText(p, e.TextContains) {
+	if textContains != "" && !containsText(p, textContains) {
 		return false
 	}
 	return true

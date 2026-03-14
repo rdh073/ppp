@@ -6,10 +6,12 @@ import (
 )
 
 // Interpolate replaces {{input.key}} placeholders in template with values
-// from inputs. Missing keys are replaced with an empty string.
-// Returns an error if a placeholder references an unknown key and
-// requireAll is true.
+// from inputs. Missing keys are left as-is. Returns template unchanged when
+// no placeholder is present (fast path).
 func Interpolate(template string, inputs map[string]string) string {
+	if !strings.Contains(template, "{{input.") {
+		return template
+	}
 	result := template
 	for k, v := range inputs {
 		result = strings.ReplaceAll(result, fmt.Sprintf("{{input.%s}}", k), v)

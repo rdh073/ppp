@@ -54,9 +54,13 @@ transport/ws → handler → usecase → orchestrator → {store, workflow, disp
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/healthz` | Health check |
+| `GET` | `/openapi.json` | OpenAPI 3.1 spec for the HTTP control-plane API |
+| `GET` | `/swagger/` | Swagger UI for `/openapi.json` |
 | `POST` | `/tasks` | Create task `{goal, deviceId?, workflowName?, inputArtifacts?}` |
 | `GET` | `/tasks/{id}` | Get task |
 | `DELETE` | `/tasks/{id}` | Cancel task |
+
+The OpenAPI document intentionally covers the HTTP endpoints only. The agent protocol at `/ws/agent` remains JSON-RPC 2.0 over WebSocket and is not represented in the Swagger surface.
 
 ## WebSocket Protocol (JSON-RPC 2.0)
 

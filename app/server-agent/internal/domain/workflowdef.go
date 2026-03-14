@@ -71,14 +71,30 @@ type EventMatch struct {
 	TextContains string    `yaml:"text_contains,omitempty"  json:"text_contains,omitempty"`
 }
 
+// IsEmpty reports whether all filtering criteria are unset.
+// An empty EventMatch matches any event; the engine auto-executes a step
+// with an empty trigger immediately when it is reached via advance().
+func (m EventMatch) IsEmpty() bool {
+	return m.Kind == "" && m.Package == "" && m.ClassSuffix == "" && m.TextContains == ""
+}
+
 // ActionDef is a typed command to be sent to the device via device.execute.
 // String values support {{input.key}} interpolation from WorkflowState.Inputs.
 type ActionDef struct {
-	Kind      ActionKind `yaml:"kind"                    json:"kind"`
-	Target    *TargetDef `yaml:"target,omitempty"        json:"target,omitempty"`
-	InputText string     `yaml:"input_text,omitempty"    json:"input_text,omitempty"` // for input_text
-	Package   string     `yaml:"package,omitempty"       json:"package,omitempty"`   // for open_app
-	Direction string     `yaml:"direction,omitempty"     json:"direction,omitempty"` // for scroll: up|down|left|right
+	Kind      ActionKind   `yaml:"kind"                    json:"kind"`
+	Target    *TargetDef   `yaml:"target,omitempty"        json:"target,omitempty"`
+	InputText string       `yaml:"input_text,omitempty"    json:"input_text,omitempty"` // for input_text
+	Package   string       `yaml:"package,omitempty"       json:"package,omitempty"`   // for open_app
+	Direction string       `yaml:"direction,omitempty"     json:"direction,omitempty"` // for scroll: up|down|left|right
+	Fields    []FieldEntry `yaml:"fields,omitempty"        json:"fields,omitempty"`    // for fill_form
+}
+
+// FieldEntry is one input field in a fill_form action.
+// Target identifies the UI element; Value is the text to type.
+// Both support {{input.key}} interpolation from WorkflowState.Inputs.
+type FieldEntry struct {
+	Target TargetDef `yaml:"target" json:"target"`
+	Value  string    `yaml:"value"  json:"value"`
 }
 
 // TargetDef identifies which UI element to interact with.
@@ -106,7 +122,8 @@ const (
 	ActionKindLongClick ActionKind = "long_click"
 	ActionKindInputText ActionKind = "input_text"
 	ActionKindScroll    ActionKind = "scroll"
-	ActionKindObserve   ActionKind = "observe" // explicit snapshot fetch, used as fallback
+	ActionKindObserve   ActionKind = "observe"    // explicit snapshot fetch, used as fallback
+	ActionKindFillForm  ActionKind = "fill_form"  // fill multiple input fields in one device round-trip
 )
 
 // TargetKind selects the accessibility attribute used to identify a UI element.

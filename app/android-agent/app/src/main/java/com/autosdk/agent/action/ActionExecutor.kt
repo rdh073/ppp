@@ -143,6 +143,25 @@ class ActionExecutor(private val service: AccessibilityService) {
                 ActionResult.Ok
             }
         }
+
+        is AutomationAction.FillForm -> run {
+            for (field in action.fields) {
+                val result = withNode(field.selector) { node ->
+                    if (!node.isEnabled) return@withNode ActionResult.Failed(
+                        "target_not_actionable", "Node is disabled: ${field.selector}"
+                    )
+                    val args = Bundle().apply {
+                        putCharSequence(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                            field.value,
+                        )
+                    }
+                    dispatchAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT, field.selector, args)
+                }
+                if (result is ActionResult.Failed) return@run result
+            }
+            ActionResult.Ok
+        }
     }
 
     /**

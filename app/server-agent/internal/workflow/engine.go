@@ -2,24 +2,14 @@ package workflow
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 )
 
 const defaultStepTimeout = 10 * time.Second
-
-// ToolInvoker is the port the engine uses to call registered tools.
-// It is satisfied by tools.ToolRegistry (outer layer); the engine never
-// imports the tools package directly.
-type ToolInvoker interface {
-	Invoke(ctx context.Context, toolName string, params json.RawMessage) (json.RawMessage, error)
-}
 
 // Engine drives a WorkflowDef step graph against incoming device events.
 // ProcessEvent is the single entry point and is safe to call from the
@@ -43,13 +33,13 @@ type ToolInvoker interface {
 // follows OnFailure.
 type Engine struct {
 	defs  DefStore
-	disp  dispatcher.Dispatcher
+	disp  ActionDispatcher
 	tools ToolInvoker // nil when no tool catalog is wired
 }
 
 // NewEngine creates an Engine. tools is optional; pass nil or omit to disable
 // tool-call steps (they will follow OnFailure or skip if Optional).
-func NewEngine(defs DefStore, disp dispatcher.Dispatcher, tools ...ToolInvoker) *Engine {
+func NewEngine(defs DefStore, disp ActionDispatcher, tools ...ToolInvoker) *Engine {
 	var inv ToolInvoker
 	if len(tools) > 0 {
 		inv = tools[0]
@@ -113,11 +103,12 @@ func (e *Engine) executeStep(
 		if err != nil && !step.ToolCall.Optional {
 			return e.handleFailure(state, step)
 		}
-		next := cloneState(state)
+		// Merge outputs into state before advance(); advance() will clone once.
+		// state is not reused by the caller after ProcessEvent returns newState.
 		for k, v := range outputs {
-			next.Inputs[k] = v
+			state.Inputs[k] = v
 		}
-		return e.advance(ctx, next, step.OnSuccess, def, task)
+		return e.advance(ctx, state, step.OnSuccess, def, task)
 	}
 
 	if step.Action != nil {
@@ -192,7 +183,7 @@ func (e *Engine) advance(
 
 	for !next.IsTerminal() {
 		step, ok := def.Steps[next.CurrentStep]
-		if !ok || !isTriggerEmpty(step.Trigger) {
+		if !ok || !step.Trigger.IsEmpty() {
 			// Needs a device event to activate — stop here.
 			break
 		}
@@ -369,11 +360,6 @@ func (e *Engine) resolveDef(ctx context.Context, name string) (*domain.WorkflowD
 
 // --- helpers ---
 
-// isTriggerEmpty reports whether m has no filtering criteria.
-// An empty trigger auto-executes when the step is reached via advance().
-func isTriggerEmpty(m domain.EventMatch) bool {
-	return m.Kind == "" && m.Package == "" && m.ClassSuffix == "" && m.TextContains == ""
-}
 
 func cloneState(s *domain.WorkflowState) *domain.WorkflowState {
 	next := *s
@@ -397,77 +383,4 @@ func parseDuration(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
-}
-
-// --- command builder ---
-
-// executeParams is the JSON body for device.execute.
-type executeParams struct {
-	Action executeAction `json:"action"`
-}
-
-type executeAction struct {
-	Kind      string         `json:"kind"`
-	Target    *executeTarget `json:"target,omitempty"`
-	InputText string         `json:"inputText,omitempty"`
-	Package   string         `json:"package,omitempty"`
-	Direction string         `json:"direction,omitempty"`
-}
-
-type executeTarget struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
-}
-
-func buildCommand(
-	action *domain.ActionDef,
-	deviceID domain.DeviceID,
-	taskID domain.TaskID,
-	inputs map[string]string,
-) (domain.Command, error) {
-	cmdKind := domain.CommandKindExecute
-	if action.Kind == domain.ActionKindObserve {
-		cmdKind = domain.CommandKindObserve
-	}
-
-	var params json.RawMessage
-	var err error
-
-	if cmdKind == domain.CommandKindObserve {
-		params = json.RawMessage(`{}`)
-	} else {
-		act := executeAction{Kind: string(action.Kind)}
-		if action.Target != nil {
-			act.Target = &executeTarget{
-				Kind:  string(action.Target.Kind),
-				Value: Interpolate(action.Target.Value, inputs),
-			}
-		}
-		act.InputText = Interpolate(action.InputText, inputs)
-		act.Package = Interpolate(action.Package, inputs)
-		act.Direction = action.Direction
-
-		params, err = json.Marshal(executeParams{Action: act})
-		if err != nil {
-			return domain.Command{}, fmt.Errorf("marshal action params: %w", err)
-		}
-	}
-
-	return domain.Command{
-		ID:       newCommandID(),
-		Kind:     cmdKind,
-		DeviceID: deviceID,
-		TaskID:   taskID,
-		Params:   params,
-		IssuedAt: time.Now(),
-	}, nil
-}
-
-// newCommandID generates a random command ID.
-func newCommandID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("cmd-%d", time.Now().UnixNano())
-	}
-	return "cmd-" + hex.EncodeToString(b)
 }

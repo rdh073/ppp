@@ -2,6 +2,9 @@ package com.autosdk.agent.action
 
 enum class ScrollDirection { FORWARD, BACKWARD }
 
+/** One field entry in a [AutomationAction.FillForm] action. */
+data class FieldFill(val selector: Selector, val value: String)
+
 /**
  * Mirrors the AutomationActionKind discriminated union in the contracts package.
  * All targeted actions carry a [Selector] rather than a raw node reference, so
@@ -24,4 +27,10 @@ sealed interface AutomationAction {
     data class OpenApp(val packageName: String) : AutomationAction
     data object CloseApp : AutomationAction
     data object Screenshot : AutomationAction
+    /**
+     * Fills multiple input fields in a single device round-trip.
+     * The agent iterates [fields] in order, setting text on each node.
+     * Fails fast on the first field that cannot be resolved or set.
+     */
+    data class FillForm(val fields: List<FieldFill>) : AutomationAction
 }

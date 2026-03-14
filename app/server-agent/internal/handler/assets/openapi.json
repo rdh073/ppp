@@ -1,0 +1,1102 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PPP server-agent HTTP API",
+    "version": "dev",
+    "description": "HTTP control-plane API for the PPP server-agent. The agent protocol at `/ws/agent` remains JSON-RPC 2.0 over WebSocket and is intentionally excluded from this OpenAPI surface."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Tasks",
+      "description": "Task lifecycle operations."
+    },
+    {
+      "name": "Workflows",
+      "description": "Workflow definition management."
+    },
+    {
+      "name": "Events",
+      "description": "Accepted-event and dead-letter inspection plus replay."
+    },
+    {
+      "name": "Monitoring",
+      "description": "Health and Prometheus metrics endpoints."
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "getHealthz",
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Server is healthy.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "example": "ok"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "operationId": "createTask",
+        "summary": "Create a task",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Task created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          }
+        }
+      }
+    },
+    "/tasks/{id}": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "operationId": "getTask",
+        "summary": "Get a task by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tasks"
+        ],
+        "operationId": "cancelTask",
+        "summary": "Cancel a task by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Task cancelled."
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          }
+        }
+      }
+    },
+    "/workflows": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "operationId": "listWorkflows",
+        "summary": "List workflow definitions",
+        "responses": {
+          "200": {
+            "description": "Workflow definitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowDef"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/PlainTextInternalServerError"
+          }
+        }
+      }
+    },
+    "/workflows/{name}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "operationId": "getWorkflow",
+        "summary": "Get a workflow definition",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDef"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Workflows"
+        ],
+        "operationId": "putWorkflow",
+        "summary": "Store or replace a workflow definition",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-yaml": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDefUpsert"
+              }
+            },
+            "text/yaml": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDefUpsert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored workflow definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDef"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/PlainTextInternalServerError"
+          }
+        }
+      }
+    },
+    "/events/accepted": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "listAcceptedEvents",
+        "summary": "List accepted events",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceIDFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EventKindFilter"
+          },
+          {
+            "$ref": "#/components/parameters/SourceFilter"
+          },
+          {
+            "$ref": "#/components/parameters/FromTime"
+          },
+          {
+            "$ref": "#/components/parameters/ToTime"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Order"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted-event page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          }
+        }
+      }
+    },
+    "/events/accepted/{eventId}": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "getAcceptedEvent",
+        "summary": "Get an accepted event by id",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted-event record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedEventRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          }
+        }
+      }
+    },
+    "/events/accepted/{eventId}/replay": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "replayAcceptedEvent",
+        "summary": "Replay an accepted event",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Replay accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayAcceptedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/PlainTextInternalServerError"
+          }
+        }
+      }
+    },
+    "/events/deadletters": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "listDeadLetters",
+        "summary": "List dead letters",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceIDFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EventKindFilter"
+          },
+          {
+            "$ref": "#/components/parameters/SourceFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EventIDFilter"
+          },
+          {
+            "$ref": "#/components/parameters/FromTime"
+          },
+          {
+            "$ref": "#/components/parameters/ToTime"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Order"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dead-letter page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          }
+        }
+      }
+    },
+    "/events/deadletters/{deadLetterId}": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "getDeadLetter",
+        "summary": "Get a dead letter by id",
+        "parameters": [
+          {
+            "name": "deadLetterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dead-letter record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          }
+        }
+      }
+    },
+    "/events/deadletters/{deadLetterId}/replay": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "operationId": "replayDeadLetter",
+        "summary": "Replay a dead letter",
+        "parameters": [
+          {
+            "name": "deadLetterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Replay accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayDeadLetterResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PlainTextBadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/PlainTextNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/PlainTextInternalServerError"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "getMetrics",
+        "summary": "Render Prometheus metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "DeviceIDFilter": {
+        "name": "deviceId",
+        "in": "query",
+        "description": "Filter by device id.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "EventKindFilter": {
+        "name": "kind",
+        "in": "query",
+        "description": "Filter by event kind.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SourceFilter": {
+        "name": "source",
+        "in": "query",
+        "description": "Filter by event source.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "EventIDFilter": {
+        "name": "eventId",
+        "in": "query",
+        "description": "Filter dead letters by original event id.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "FromTime": {
+        "name": "from",
+        "in": "query",
+        "description": "Inclusive RFC3339 timestamp lower bound.",
+        "schema": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "ToTime": {
+        "name": "to",
+        "in": "query",
+        "description": "Inclusive RFC3339 timestamp upper bound.",
+        "schema": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "description": "Opaque pagination cursor. Cannot be combined with offset.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Order": {
+        "name": "order",
+        "in": "query",
+        "description": "Sort order for event listings.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Page size. Defaults to 100 and is capped at 500.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500,
+          "default": 100
+        }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "description": "Record offset for offset-based pagination.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "responses": {
+      "PlainTextBadRequest": {
+        "description": "Bad request.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PlainTextNotFound": {
+        "description": "Resource not found.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PlainTextInternalServerError": {
+        "description": "Internal server error.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "TaskCreateRequest": {
+        "type": "object",
+        "required": [
+          "goal"
+        ],
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Optional device assignment."
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Optional workflow name. Empty uses the server default."
+          },
+          "inputArtifacts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional seeded workflow artifacts."
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "goal",
+          "inputArtifacts",
+          "status",
+          "assignedDevice",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "inputArtifacts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "paused",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "assignedDevice": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkflowDef": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StepDef"
+            }
+          }
+        }
+      },
+      "WorkflowDefUpsert": {
+        "type": "object",
+        "description": "Workflow definition payload accepted by PUT /workflows/{name}. The handler only requires valid YAML; omitted name defaults to the path parameter.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StepDef"
+            }
+          }
+        }
+      },
+      "StepDef": {
+        "type": "object",
+        "properties": {
+          "trigger": {
+            "$ref": "#/components/schemas/EventMatch"
+          },
+          "action": {
+            "$ref": "#/components/schemas/ActionDef"
+          },
+          "tool_call": {
+            "$ref": "#/components/schemas/ToolCallDef"
+          },
+          "expect": {
+            "$ref": "#/components/schemas/ExpectDef"
+          },
+          "on_success": {
+            "type": "string"
+          },
+          "on_failure": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "string",
+            "description": "Go duration string."
+          },
+          "max_retry": {
+            "type": "integer"
+          }
+        }
+      },
+      "ToolCallDef": {
+        "type": "object",
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "outputs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EventMatch": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "package": {
+            "type": "string"
+          },
+          "class_suffix": {
+            "type": "string"
+          },
+          "text_contains": {
+            "type": "string"
+          }
+        }
+      },
+      "ActionDef": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "open_app",
+              "click",
+              "long_click",
+              "input_text",
+              "scroll",
+              "observe"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetDef"
+          },
+          "input_text": {
+            "type": "string"
+          },
+          "package": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string"
+          }
+        }
+      },
+      "TargetDef": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "resource_id",
+              "content_description",
+              "class"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "ExpectDef": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "package": {
+            "type": "string"
+          },
+          "class_suffix": {
+            "type": "string"
+          },
+          "text_contains": {
+            "type": "string"
+          }
+        }
+      },
+      "AcceptedEventPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcceptedEventRecord"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        }
+      },
+      "AcceptedEventRecord": {
+        "type": "object",
+        "required": [
+          "event",
+          "acceptedAt",
+          "source"
+        ],
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "acceptedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "description": "Accepted-event payload as emitted by Go's default JSON encoding for internal/domain.Event.",
+        "properties": {
+          "ID": {
+            "type": "string"
+          },
+          "Kind": {
+            "type": "string"
+          },
+          "DeviceID": {
+            "type": "string"
+          },
+          "SeqNo": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "OccurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "Payload": {
+            "description": "Arbitrary JSON payload. Shape depends on the event kind."
+          }
+        }
+      },
+      "DeadLetterPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeadLetterRecord"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        }
+      },
+      "DeadLetterRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "reason",
+          "source",
+          "recordedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "seqNo": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payload": {
+            "description": "Arbitrary JSON payload captured for the dead letter."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReplayAcceptedResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "eventId"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "replayed"
+            ]
+          },
+          "eventId": {
+            "type": "string"
+          }
+        }
+      },
+      "ReplayDeadLetterResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "deadLetterId"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "replayed"
+            ]
+          },
+          "deadLetterId": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

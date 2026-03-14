@@ -276,6 +276,7 @@ class AgentAccessibilityService : AccessibilityService() {
             mapOf("name" to "wake", "available" to true),
             mapOf("name" to "open_app", "available" to true),
             mapOf("name" to "close_app", "available" to true),
+            mapOf("name" to "fill_form", "available" to true),
             mapOf(
                 "name" to "screenshot",
                 "available" to (android.os.Build.VERSION.SDK_INT >= 30),

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PPP server-agent Swagger</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"
+    />
+    <style>
+      body {
+        margin: 0;
+        background: #f8fafc;
+        color: #0f172a;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      header {
+        border-bottom: 1px solid #cbd5e1;
+        background: #ffffff;
+        padding: 16px 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 6px 0 0;
+        line-height: 1.5;
+      }
+
+      code {
+        background: #e2e8f0;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PPP server-agent Swagger</h1>
+      <p>
+        Interactive docs for the HTTP control-plane API. The raw spec is served
+        at <code>/openapi.json</code>.
+      </p>
+      <p>
+        The UI assets load from a CDN. If you need offline tooling, use the raw
+        OpenAPI document directly.
+      </p>
+    </header>
+    <div id="swagger-ui"></div>
+    <script
+      src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      window.onload = function () {
+        window.ui = SwaggerUIBundle({
+          url: "/openapi.json",
+          dom_id: "#swagger-ui",
+          deepLinking: true,
+          displayOperationId: true,
+          docExpansion: "list",
+          filter: true,
+          tryItOutEnabled: false,
+          presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+          layout: "StandaloneLayout",
+        });
+      };
+    </script>
+  </body>
+</html>

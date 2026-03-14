@@ -3,6 +3,7 @@ package com.autosdk.agent.agent
 import android.util.Log
 import com.autosdk.agent.action.ActionResult
 import com.autosdk.agent.action.AutomationAction
+import com.autosdk.agent.action.FieldFill
 import com.autosdk.agent.action.ScrollDirection
 import com.autosdk.agent.action.Selector
 import com.autosdk.agent.action.SelectorKind
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -341,6 +343,18 @@ class AgentRuntime(
             }
             "close_app" -> AutomationAction.CloseApp
             "screenshot" -> AutomationAction.Screenshot
+            "fill_form" -> {
+                val jsonFields = obj["fields"]?.jsonArray ?: return null
+                val fields = jsonFields.mapNotNull { element ->
+                    val fieldObj = element.jsonObject
+                    val selector = parseSelector(fieldObj["target"]?.jsonObject ?: return@mapNotNull null)
+                        ?: return@mapNotNull null
+                    val value = fieldObj["value"]?.jsonPrimitive?.contentOrNull ?: ""
+                    FieldFill(selector, value)
+                }
+                if (fields.isEmpty()) return null
+                AutomationAction.FillForm(fields)
+            }
             else -> null
         }
     }

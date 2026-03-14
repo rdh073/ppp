@@ -15,3 +15,6 @@ func newID() string {
 	}
 	return hex.EncodeToString(b)
 }
+
+// NewCommandID returns a unique command identifier with a "cmd-" prefix.
+func NewCommandID() string { return "cmd-" + newID() }

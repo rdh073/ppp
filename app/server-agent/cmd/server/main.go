@@ -192,6 +192,8 @@ func main() {
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)
 	metricsHandler := handler.NewMetricsHandler(metricsRegistry)
+	openAPISpecHandler := handler.NewOpenAPISpecHandler()
+	swaggerUIHandler := handler.NewSwaggerUIHandler()
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
 
 	// --- HTTP mux ---
@@ -204,6 +206,9 @@ func main() {
 	mux.Handle("/events", eventPlaneHandler)
 	mux.Handle("/events/", eventPlaneHandler)
 	mux.Handle("/metrics", metricsHandler)
+	mux.Handle("/openapi.json", openAPISpecHandler)
+	mux.Handle("/swagger", swaggerUIHandler)
+	mux.Handle("/swagger/", swaggerUIHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
