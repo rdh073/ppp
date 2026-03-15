@@ -217,10 +217,18 @@ func (a *DeviceAssigner) assignAndBootstrap(ctx context.Context, task *domain.Ta
 		DeviceID:   deviceID,
 		OccurredAt: now,
 	}
-	if err := a.runtime.ProcessEvent(ctx, event); err != nil {
-		a.log.Warn("bootstrap workflow after assignment failed",
-			"taskId", task.ID, "deviceId", deviceID, "err", err)
-		// Non-fatal: task is assigned; orchestrator will retry on next device event.
-	}
+	// Run ProcessEvent in a goroutine to avoid deadlocking when assignAndBootstrap
+	// is called from within the WebSocket read-loop goroutine (e.g. during Hello).
+	// The read loop must remain free to deliver the device.execute response that
+	// the workflow engine will dispatch synchronously inside ProcessEvent.
+	// Non-fatal: if this fires before the connection is fully ready the orchestrator
+	// will retry on the next device event (heartbeat, reconnect, etc.).
+	taskID := task.ID
+	go func() {
+		if err := a.runtime.ProcessEvent(context.Background(), event); err != nil {
+			a.log.Warn("bootstrap workflow after assignment failed",
+				"taskId", taskID, "deviceId", deviceID, "err", err)
+		}
+	}()
 	return nil
 }

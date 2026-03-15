@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,12 +17,59 @@ import (
 // --- fakes ---
 
 type fakeEventProcessor struct {
+	mu     sync.Mutex
 	events []domain.Event
+	notify chan struct{} // closed/recreated when an event is appended
+}
+
+func newFakeEventProcessor() *fakeEventProcessor {
+	return &fakeEventProcessor{notify: make(chan struct{})}
 }
 
 func (f *fakeEventProcessor) ProcessEvent(_ context.Context, e domain.Event) error {
+	f.mu.Lock()
 	f.events = append(f.events, e)
+	old := f.notify
+	f.notify = make(chan struct{})
+	f.mu.Unlock()
+	close(old) // wake any waiters
 	return nil
+}
+
+func (f *fakeEventProcessor) waitForEvents(n int, timeout time.Duration) []domain.Event {
+	deadline := time.Now().Add(timeout)
+	for {
+		f.mu.Lock()
+		if len(f.events) >= n {
+			out := make([]domain.Event, len(f.events))
+			copy(out, f.events)
+			f.mu.Unlock()
+			return out
+		}
+		ch := f.notify
+		f.mu.Unlock()
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		select {
+		case <-ch:
+		case <-time.After(remaining):
+		}
+	}
+	f.mu.Lock()
+	out := make([]domain.Event, len(f.events))
+	copy(out, f.events)
+	f.mu.Unlock()
+	return out
+}
+
+func (f *fakeEventProcessor) snapshot() []domain.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]domain.Event, len(f.events))
+	copy(out, f.events)
+	return out
 }
 
 type fakeRegistry struct {
@@ -64,7 +112,7 @@ func setupAssigner(t *testing.T, sessions []*domain.Session) (
 	tasks := store.NewMemoryTaskStore()
 	queue := store.NewMemoryTaskQueue()
 	reg := &fakeRegistry{sessions: sessions}
-	proc := &fakeEventProcessor{}
+	proc := newFakeEventProcessor()
 	assigner := usecase.NewDeviceAssigner(tasks, queue, reg, proc, newTestLogger())
 	return assigner, tasks, queue, proc
 }
@@ -83,8 +131,8 @@ func TestTryAssignPendingToDevice_EmptyQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(proc.events) != 0 {
-		t.Errorf("expected no events emitted, got %d", len(proc.events))
+	if len(proc.snapshot()) != 0 {
+		t.Errorf("expected no events emitted, got %d", len(proc.snapshot()))
 	}
 }
 
@@ -107,8 +155,10 @@ func TestTryAssignPendingToDevice_AssignsQueuedTask(t *testing.T) {
 	if got.Status != domain.TaskStatusRunning {
 		t.Errorf("expected running, got %q", got.Status)
 	}
-	if len(proc.events) != 1 || proc.events[0].Kind != domain.EventKindAgentOnline {
-		t.Errorf("expected one agent.online event, got %+v", proc.events)
+	// Bootstrap fires in a goroutine; wait briefly for it.
+	events := proc.waitForEvents(1, time.Second)
+	if len(events) != 1 || events[0].Kind != domain.EventKindAgentOnline {
+		t.Errorf("expected one agent.online event, got %+v", events)
 	}
 }
 
@@ -132,8 +182,8 @@ func TestTryAssignPendingToDevice_SkipsBusyDevice(t *testing.T) {
 	if got.AssignedDevice != "" {
 		t.Errorf("task should not have been assigned; got device %q", got.AssignedDevice)
 	}
-	if len(proc.events) != 0 {
-		t.Errorf("expected no events, got %d", len(proc.events))
+	if n := len(proc.snapshot()); n != 0 {
+		t.Errorf("expected no events, got %d", n)
 	}
 	// Task must still be in the queue.
 	snap, _ := queue.Snapshot(ctx)
@@ -152,7 +202,7 @@ func TestTryAssignTaskToIdleDevice_NoDevices(t *testing.T) {
 	if err := assigner.TryAssignTaskToIdleDevice(ctx, task); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(proc.events) != 0 {
+	if len(proc.snapshot()) != 0 {
 		t.Errorf("expected no events when no devices connected")
 	}
 	snap, _ := queue.Snapshot(ctx)
@@ -177,8 +227,9 @@ func TestTryAssignTaskToIdleDevice_AssignsToIdleDevice(t *testing.T) {
 	if got.AssignedDevice != "device-A" {
 		t.Errorf("expected device-A, got %q", got.AssignedDevice)
 	}
-	if len(proc.events) != 1 {
-		t.Errorf("expected 1 event, got %d", len(proc.events))
+	// Bootstrap fires in a goroutine; wait briefly for it.
+	if events := proc.waitForEvents(1, time.Second); len(events) != 1 {
+		t.Errorf("expected 1 event, got %d", len(events))
 	}
 }
 
@@ -246,7 +297,7 @@ func TestOnTaskTerminal_AssignsNextTask(t *testing.T) {
 	if got.AssignedDevice != "device-A" {
 		t.Errorf("expected device-A, got %q", got.AssignedDevice)
 	}
-	if len(proc.events) == 0 {
+	if len(proc.snapshot()) == 0 {
 		t.Error("expected bootstrap event after terminal assignment")
 	}
 }
