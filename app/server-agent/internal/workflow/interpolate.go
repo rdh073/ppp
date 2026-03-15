@@ -24,6 +24,8 @@ func Interpolate(template string, inputs map[string]string) string {
 func InterpolateStrict(template string, inputs map[string]string) (string, error) {
 	result := Interpolate(template, inputs)
 	if idx := strings.Index(result, "{{input."); idx >= 0 {
+		// end is relative to result[idx:], not to result itself.
+		// Absolute upper bound of the placeholder is idx+end+2 (includes "}}").
 		end := strings.Index(result[idx:], "}}")
 		placeholder := result[idx:]
 		if end >= 0 {

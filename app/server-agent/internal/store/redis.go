@@ -269,6 +269,24 @@ func (s *RedisTaskStore) ListByDevice(ctx context.Context, deviceID domain.Devic
 	return out, nil
 }
 
+func (s *RedisTaskStore) ListActiveByDevice(ctx context.Context, deviceID domain.DeviceID) ([]*domain.Task, error) {
+	ids, err := s.client.SMembers(ctx, taskDeviceKey(deviceID)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("list device task ids: %w", err)
+	}
+	tasks, err := s.loadTasks(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	var out []*domain.Task
+	for _, t := range tasks {
+		if t.AssignedDevice == deviceID && !t.Status.IsTerminal() {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 // loadTasks bulk-fetches task keys by ID; skips nil (expired) entries.
 func (s *RedisTaskStore) loadTasks(ctx context.Context, ids []string) ([]*domain.Task, error) {
 	if len(ids) == 0 {

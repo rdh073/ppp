@@ -14,19 +14,28 @@ import (
 
 // FSDefStore loads WorkflowDef YAML files from a directory and polls for changes.
 // New/changed files are automatically picked up. Deleted files are removed.
-// It wraps a MemoryDefStore internally.
+// It wraps a DefStore internally (default: MemoryDefStore).
 type FSDefStore struct {
-	dir string
-	mem *MemoryDefStore
-	log *slog.Logger
+	dir         string
+	mem         DefStore
+	log         *slog.Logger
+	fileToDefName map[string]string // maps file path → last successfully loaded def name
 }
 
 // NewFSDefStore creates an FSDefStore by loading all YAML files in dir immediately.
+// Uses a MemoryDefStore as the backing store.
 func NewFSDefStore(dir string, log *slog.Logger) (*FSDefStore, error) {
+	return NewFSDefStoreWithBacking(dir, NewMemoryDefStore(), log)
+}
+
+// NewFSDefStoreWithBacking creates an FSDefStore with a caller-supplied backing DefStore.
+// Useful in tests to inject a custom or pre-seeded backing store.
+func NewFSDefStoreWithBacking(dir string, backing DefStore, log *slog.Logger) (*FSDefStore, error) {
 	s := &FSDefStore{
-		dir: dir,
-		mem: NewMemoryDefStore(),
-		log: log,
+		dir:           dir,
+		mem:           backing,
+		log:           log,
+		fileToDefName: make(map[string]string),
 	}
 	if err := s.reload(context.Background()); err != nil {
 		return nil, err
@@ -52,8 +61,18 @@ func (s *FSDefStore) Watch(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// reload reads all .yaml/.yml files in s.dir and updates the MemoryDefStore.
+// ReloadNow triggers an immediate reload of all YAML files in the directory.
+// It is safe to call concurrently with Watch-driven reloads.
+func (s *FSDefStore) ReloadNow(ctx context.Context) error {
+	return s.reload(ctx)
+}
+
+// reload reads all .yaml/.yml files in s.dir and updates the backing DefStore.
 // Deleted files (names no longer on disk) are removed from the store.
+//
+// Retention policy: if a file fails to load (read, parse, or validate error) and
+// a previous valid version exists for that file, the old version is kept in the
+// store and the file's name is added to seen so the deletion sweep leaves it intact.
 func (s *FSDefStore) reload(ctx context.Context) error {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -75,12 +94,20 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			s.log.Warn("fsdefstore: read file error", "file", path, "err", err)
+			if prevName, ok := s.fileToDefName[path]; ok {
+				s.log.Warn("fsdefstore: retaining previous version", "file", path, "name", prevName)
+				seen[prevName] = struct{}{}
+			}
 			continue
 		}
 
 		var def domain.WorkflowDef
 		if err := yaml.Unmarshal(data, &def); err != nil {
 			s.log.Warn("fsdefstore: yaml parse error", "file", path, "err", err)
+			if prevName, ok := s.fileToDefName[path]; ok {
+				s.log.Warn("fsdefstore: retaining previous version", "file", path, "name", prevName)
+				seen[prevName] = struct{}{}
+			}
 			continue
 		}
 
@@ -89,6 +116,16 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 			continue
 		}
 
+		if err := Validate(&def); err != nil {
+			s.log.Warn("fsdefstore: invalid workflow def, retaining previous version",
+				"file", path, "name", def.Name, "err", err)
+			if prevName, ok := s.fileToDefName[path]; ok {
+				seen[prevName] = struct{}{}
+			}
+			continue
+		}
+
+		s.fileToDefName[path] = def.Name
 		seen[def.Name] = struct{}{}
 		if err := s.mem.Put(ctx, def.Name, &def); err != nil {
 			s.log.Warn("fsdefstore: store put error", "name", def.Name, "err", err)
@@ -99,9 +136,9 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 	existing, _ := s.mem.List(ctx)
 	for _, d := range existing {
 		if _, ok := seen[d.Name]; !ok {
-			s.mem.mu.Lock()
-			delete(s.mem.defs, d.Name)
-			s.mem.mu.Unlock()
+			if err := s.mem.Delete(ctx, d.Name); err != nil {
+				s.log.Warn("fsdefstore: delete stale def error", "name", d.Name, "err", err)
+			}
 			s.log.Info("fsdefstore: removed deleted def", "name", d.Name)
 		}
 	}
@@ -117,6 +154,11 @@ func (s *FSDefStore) Get(ctx context.Context, name string) (*domain.WorkflowDef,
 // Put implements DefStore.
 func (s *FSDefStore) Put(ctx context.Context, name string, def *domain.WorkflowDef) error {
 	return s.mem.Put(ctx, name, def)
+}
+
+// Delete implements DefStore.
+func (s *FSDefStore) Delete(ctx context.Context, name string) error {
+	return s.mem.Delete(ctx, name)
 }
 
 // List implements DefStore.

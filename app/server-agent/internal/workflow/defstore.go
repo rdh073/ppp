@@ -17,6 +17,7 @@ var ErrWorkflowDefNotFound = errors.New("workflow def not found")
 type DefStore interface {
 	Get(ctx context.Context, name string) (*domain.WorkflowDef, error)
 	Put(ctx context.Context, name string, def *domain.WorkflowDef) error
+	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]*domain.WorkflowDef, error)
 }
 
@@ -41,9 +42,19 @@ func (s *MemoryDefStore) Get(_ context.Context, name string) (*domain.WorkflowDe
 }
 
 func (s *MemoryDefStore) Put(_ context.Context, name string, def *domain.WorkflowDef) error {
+	if err := Validate(def); err != nil {
+		return fmt.Errorf("workflow def %q invalid: %w", name, err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defs[name] = def
+	return nil
+}
+
+func (s *MemoryDefStore) Delete(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.defs, name)
 	return nil
 }
 

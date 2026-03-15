@@ -1,0 +1,64 @@
+# Illustrative semantic workflow for a conventional login screen.
+#
+# This is intentionally an example, not a guarantee that every app will emit the
+# same keys. It shows the intended authoring style when the android-agent can
+# classify the screen and targets semantically.
+#
+# Assumptions used here mirror the current semantic projection rules:
+# - package/activity resolve to `active_ui_key: example.login`
+# - form fields resolve to `form.primary.email` / `form.primary.password`
+# - submit button resolves to `form.primary.submit`
+# - successful navigation lands on `active_ui_key: example.home`
+
+name: android-semantic-login
+version: 2
+entry: wait_login
+
+steps:
+  wait_login:
+    trigger:
+      kind: android.screen.changed
+      ui:
+        active_ui_key: example.login
+        ui_ready: true
+        form_key: form.primary
+    action:
+      kind: fill_form
+      fields:
+        - target:
+            kind: semantic_key
+            value: form.primary.email
+          value: "{{input.account_email}}"
+        - target:
+            kind: semantic_key
+            value: form.primary.password
+          value: "{{input.account_password}}"
+    expect:
+      kind: android.screen.changed
+      ui:
+        active_ui_key: example.login
+        ui_ready: true
+        button_key: form.primary.submit
+        button_enabled: true
+    timeout: 10s
+    max_retry: 1
+    on_success: submit_login
+    on_failure: terminal
+
+  submit_login:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: semantic_key
+        value: form.primary.submit
+    expect:
+      kind: android.screen.changed
+      ui:
+        active_ui_key: example.home
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: terminal
+    on_failure: terminal
+

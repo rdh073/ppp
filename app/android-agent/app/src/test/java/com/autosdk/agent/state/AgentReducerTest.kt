@@ -1,6 +1,9 @@
 package com.autosdk.agent.state
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -166,6 +169,109 @@ class AgentReducerTest {
         assertEquals(AgentExecutionPhase.RESPONDING, afterFailure.execution)
         assertEquals("req-77", afterFailure.currentRequestId)
         assertEquals("Accessibility tree not available", afterFailure.lastError)
+    }
+
+    @Test
+    fun `window state changed when connected and idle emits PublishUiEvent`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params =
+            buildJsonObject {
+                put("packageName", "com.example")
+                put(
+                    "ui",
+                    buildJsonObject {
+                        put("semanticDigest", "digest-1")
+                    },
+                )
+            }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.WindowStateChanged(params))
+
+        assertEquals("digest-1", reduction.state.lastPublishedUiDigest)
+        assertEquals(1, reduction.effects.size)
+        val effect = reduction.effects.single()
+        assertTrue(effect is AgentEffect.PublishUiEvent)
+        assertEquals("android.screen.changed", (effect as AgentEffect.PublishUiEvent).method)
+        assertEquals(params, effect.params)
+    }
+
+    @Test
+    fun `window state changed when transport not connected drops event with log`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTING,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params =
+            buildJsonObject {
+                put(
+                    "ui",
+                    buildJsonObject {
+                        put("semanticDigest", "digest-1")
+                    },
+                )
+            }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.WindowStateChanged(params))
+
+        assertEquals(state, reduction.state)
+        assertEquals(1, reduction.effects.size)
+        val log = reduction.effects.single()
+        assertTrue(log is AgentEffect.Log)
+        assertTrue((log as AgentEffect.Log).message.startsWith("ui_event_dropped"))
+    }
+
+    @Test
+    fun `window state changed when execution busy drops event with log`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.EXECUTING_ACTION,
+            currentRequestId = "req-1",
+        )
+        val params =
+            buildJsonObject {
+                put(
+                    "ui",
+                    buildJsonObject {
+                        put("semanticDigest", "digest-1")
+                    },
+                )
+            }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.WindowStateChanged(params))
+
+        assertEquals(state, reduction.state)
+        assertEquals(1, reduction.effects.size)
+        assertTrue(reduction.effects.single() is AgentEffect.Log)
+    }
+
+    @Test
+    fun `window state changed with duplicate digest is dropped`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.IDLE,
+            lastPublishedUiDigest = "digest-1",
+        )
+        val params =
+            buildJsonObject {
+                put(
+                    "ui",
+                    buildJsonObject {
+                        put("semanticDigest", "digest-1")
+                    },
+                )
+            }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.WindowStateChanged(params))
+
+        assertEquals(state, reduction.state)
+        assertEquals(listOf(AgentEffect.Log("ui_event_dropped:duplicate_digest")), reduction.effects)
     }
 
     @Test

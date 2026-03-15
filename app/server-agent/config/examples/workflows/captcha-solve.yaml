@@ -169,7 +169,7 @@ steps:
         kind: text
         value: "{{input.submit_text}}"
     expect:
-      kind: android.window.state_changed
+      kind: android.screen.changed
     timeout: 10s
     max_retry: 2
     on_success: terminal

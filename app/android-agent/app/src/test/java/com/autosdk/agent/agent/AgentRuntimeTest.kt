@@ -3,6 +3,9 @@ package com.autosdk.agent.agent
 import com.autosdk.agent.action.ActionResult
 import com.autosdk.agent.action.AutomationAction
 import com.autosdk.agent.action.Selector
+import com.autosdk.agent.observation.UiButtonState
+import com.autosdk.agent.observation.UiFormState
+import com.autosdk.agent.observation.UiSemanticState
 import com.autosdk.agent.observation.UiSnapshot
 import com.autosdk.agent.observation.UiTarget
 import com.autosdk.agent.state.AgentEvent
@@ -13,9 +16,39 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentRuntimeTest {
+    @Test
+    fun `device observe includes semantic projection in response`() =
+        runBlocking {
+            val transport = FakeAgentTransport()
+            val runtime =
+                AgentRuntime(
+                    transport = transport,
+                    snapshotBuilder = { snapshot(snapshotId = "observe-1") },
+                    settle = {},
+                    automationDriver = FakeAutomationDriver(actionResult = ActionResult.Ok),
+                    deviceId = "device-1",
+                    capabilities = emptyList(),
+                )
+
+            runtime.start()
+            transport.emitRequest(
+                JsonRpcRequest(
+                    id = "req-observe",
+                    method = "device.observe",
+                    params = buildJsonObject { },
+                ),
+            )
+
+            val payload = transport.successes.single().result.toString()
+            assertTrue(payload.contains(""""activeUiKey":"example.main""""))
+            assertTrue(payload.contains(""""semanticKey":"button.open""""))
+            assertTrue(payload.contains(""""semanticDigest":"digest-1""""))
+        }
+
     @Test
     fun `device execute emits execution events and returns success`() =
         runBlocking {
@@ -253,13 +286,29 @@ private fun snapshot(snapshotId: String): UiSnapshot =
         deviceId = "device-1",
         packageName = "com.example.app",
         activityName = "MainActivity",
-        screenState = null,
+        screenState = "ready",
+        focusedTargetId = null,
+        semantic =
+            UiSemanticState(
+                activeUiKey = "example.main",
+                baseScreenKey = "example.main",
+                overlayKey = null,
+                uiReady = true,
+                semanticDigest = "digest-1",
+                focusedTargetKey = null,
+                forms = listOf(UiFormState("form.primary", listOf("form.primary.email"), "form.primary.email", true)),
+                buttons = listOf(UiButtonState("button.open", enabled = true, visible = true, primary = true)),
+            ),
         capturedAt = "2026-03-12T00:00:00Z",
         targets =
             listOf(
                 UiTarget(
                     targetId = "target-1",
                     role = "button",
+                    uiRole = "button",
+                    label = null,
+                    semanticKey = "button.open",
+                    formKey = null,
                     text = "Open",
                     contentDesc = null,
                     resourceId = "button.open",

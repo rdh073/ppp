@@ -24,7 +24,6 @@ const (
 	EventKindAgentOnline     EventKind = "agent.online"
 	EventKindAgentOffline    EventKind = "agent.offline"
 	EventKindAgentHeartbeat  EventKind = "agent.heartbeat"
-	EventKindUiObservation   EventKind = "ui.observation"
 	EventKindToolResult      EventKind = "tool.result"
 	EventKindCommandResponse EventKind = "command.response"
 
@@ -124,11 +123,6 @@ func MarshalEventPayload(event Event) json.RawMessage {
 type AgentOnlinePayload struct {
 	SessionID    SessionID
 	Capabilities []Capability
-}
-
-// UiObservationPayload carries the normalised UI snapshot from the agent.
-type UiObservationPayload struct {
-	Snapshot UiSnapshot
 }
 
 // ToolResultPayload carries the result of an internal tool call.

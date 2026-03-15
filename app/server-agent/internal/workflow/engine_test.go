@@ -62,7 +62,7 @@ func freshState(taskID, deviceID string) *domain.WorkflowState {
 func anyEvent() domain.Event {
 	return domain.Event{
 		ID:      "ev-1",
-		Kind:    "android.window.state_changed",
+		Kind:    domain.EventKindScreenChanged,
 		SeqNo:   1,
 		OccurredAt: time.Now(),
 	}
@@ -91,14 +91,14 @@ func TestEngine_PureRoutingStep(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{})
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "pure-route", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "pure-route", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !result.Terminal {
 		t.Error("expected terminal=true")
 	}
-	if !newState.TerminalSuccess {
+	if !result.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=true on success path")
 	}
 }
@@ -113,7 +113,7 @@ func TestEngine_ActionStepArmsExpect(t *testing.T) {
 			"do_click": {
 				Trigger: domain.EventMatch{},
 				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
-				Expect:  &domain.ExpectDef{Kind: "android.window.state_changed"},
+				Expect:  &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout: "5s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
@@ -124,27 +124,27 @@ func TestEngine_ActionStepArmsExpect(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	// First event triggers the step — action dispatched, expect armed.
-	mid, terminal, err := eng.ProcessEvent(context.Background(), state, "action-expect", task("t1"), anyEvent())
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "action-expect", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if terminal {
+	if r1.Terminal {
 		t.Error("should not be terminal before expect event")
 	}
-	if mid.WaitingExpect == nil {
+	if r1.State.WaitingExpect == nil {
 		t.Error("WaitingExpect should be set after action dispatch")
 	}
 
 	// Confirming event arrives → advance to terminal.
-	confirm := domain.Event{ID: "ev-2", Kind: "android.window.state_changed", SeqNo: 2, OccurredAt: time.Now()}
-	final, terminal2, err := eng.ProcessEvent(context.Background(), mid, "action-expect", task("t1"), confirm)
+	confirm := domain.Event{ID: "ev-2", Kind: domain.EventKindScreenChanged, SeqNo: 2, OccurredAt: time.Now()}
+	r2, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r1.State, WorkflowName: "action-expect", Task: task("t1"), Event: confirm})
 	if err != nil {
 		t.Fatalf("unexpected error on confirm: %v", err)
 	}
-	if !terminal2 {
+	if !r2.Terminal {
 		t.Error("expected terminal=true after confirm event")
 	}
-	if !final.TerminalSuccess {
+	if !r2.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=true")
 	}
 }
@@ -170,7 +170,8 @@ func TestEngine_ExpectTimeout(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	// Arm the expect.
-	mid, _, _ := eng.ProcessEvent(context.Background(), state, "timeout-test", task("t1"), anyEvent())
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "timeout-test", Task: task("t1"), Event: anyEvent()})
+	mid := r0.State
 	if mid == nil || mid.WaitingExpect == nil {
 		t.Fatal("expected WaitingExpect to be armed")
 	}
@@ -179,30 +180,34 @@ func TestEngine_ExpectTimeout(t *testing.T) {
 	mid.DeadlineAt = time.Now().Add(-1 * time.Second)
 
 	// Next event arrives after deadline → handleFailure → retry (MaxRetry=1, RetryCount was 0).
-	retry1, terminal, _ := eng.ProcessEvent(context.Background(), mid, "timeout-test", task("t1"), anyEvent())
-	if terminal {
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: mid, WorkflowName: "timeout-test", Task: task("t1"), Event: anyEvent()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r1.Terminal {
 		t.Error("should not be terminal after first timeout (retry budget=1)")
 	}
-	if retry1.RetryCount != 1 {
-		t.Errorf("expected RetryCount=1, got %d", retry1.RetryCount)
+	if r1.State.RetryCount != 1 {
+		t.Errorf("expected RetryCount=1, got %d", r1.State.RetryCount)
 	}
-	if retry1.WaitingExpect != nil {
+	if r1.State.WaitingExpect != nil {
 		t.Error("WaitingExpect should be cleared after timeout")
 	}
 
 	// Arm expect again (retry fires on next event because trigger is empty).
-	mid2, _, _ := eng.ProcessEvent(context.Background(), retry1, "timeout-test", task("t1"), anyEvent())
+	r2, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: r1.State, WorkflowName: "timeout-test", Task: task("t1"), Event: anyEvent()})
+	mid2 := r2.State
 	if mid2 == nil || mid2.WaitingExpect == nil {
 		t.Fatal("expected WaitingExpect to be re-armed on retry")
 	}
 	mid2.DeadlineAt = time.Now().Add(-1 * time.Second)
 
 	// Second timeout — retry budget exhausted → OnFailure = terminal.
-	final, terminal2, _ := eng.ProcessEvent(context.Background(), mid2, "timeout-test", task("t1"), anyEvent())
-	if !terminal2 {
+	r3, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: mid2, WorkflowName: "timeout-test", Task: task("t1"), Event: anyEvent()})
+	if !r3.Terminal {
 		t.Error("expected terminal after retry budget exhausted")
 	}
-	if final.TerminalSuccess {
+	if r3.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=false on failure path")
 	}
 }
@@ -243,21 +248,21 @@ func TestEngine_ToolCallStep_AutoExecutes(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{}, inv)
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "tool-auto", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tool-auto", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !result.Terminal {
 		t.Error("expected terminal=true after tool call auto-execute")
 	}
 	if inv.calls != 1 {
 		t.Errorf("expected 1 tool call, got %d", inv.calls)
 	}
-	if newState.Inputs["username"] != "Budi Santoso" {
-		t.Errorf("expected username=Budi Santoso, got %q", newState.Inputs["username"])
+	if result.State.Inputs["username"] != "Budi Santoso" {
+		t.Errorf("expected username=Budi Santoso, got %q", result.State.Inputs["username"])
 	}
-	if newState.Inputs["password"] != "S3cur3!" {
-		t.Errorf("expected password=S3cur3!, got %q", newState.Inputs["password"])
+	if result.State.Inputs["password"] != "S3cur3!" {
+		t.Errorf("expected password=S3cur3!, got %q", result.State.Inputs["password"])
 	}
 }
 
@@ -290,14 +295,14 @@ func TestEngine_ToolCallStep_OptionalSkipsOnError(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{}, inv)
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "optional-tool", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "optional-tool", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !result.Terminal {
 		t.Error("expected terminal=true: optional tool failure should follow OnSuccess")
 	}
-	if !newState.TerminalSuccess {
+	if !result.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=true when optional tool is skipped")
 	}
 }
@@ -331,14 +336,14 @@ func TestEngine_ToolCallStep_FailureFollowsOnFailure(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{}, inv)
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "required-tool", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "required-tool", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !result.Terminal {
 		t.Error("expected terminal=true after tool failure")
 	}
-	if newState.TerminalSuccess {
+	if result.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=false after required tool failure")
 	}
 }
@@ -380,7 +385,7 @@ func TestEngine_ToolCallStep_InterpolatesParams(t *testing.T) {
 	state := freshState("t1", "dev1")
 	state.Inputs["private_dns_hostname"] = "dns.example.com"
 
-	_, _, err := eng.ProcessEvent(context.Background(), state, "interp-tool", task("t1"), anyEvent())
+	_, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "interp-tool", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -411,12 +416,14 @@ func TestEngine_NonMatchingTrigger(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	// Send a non-matching event.
-	newState, _, err := eng.ProcessEvent(context.Background(), state, "specific-trigger", task("t1"),
-		domain.Event{ID: "ev-1", Kind: "android.screen.changed", SeqNo: 1, OccurredAt: time.Now()})
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{
+		State: state, WorkflowName: "specific-trigger", Task: task("t1"),
+		Event: domain.Event{ID: "ev-1", Kind: "android.screen.changed", SeqNo: 1, OccurredAt: time.Now()},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if newState != nil {
+	if result.State != nil {
 		t.Error("expected nil state for non-matching event")
 	}
 }
@@ -431,7 +438,7 @@ func TestEngine_ActionAutoExecuteChain(t *testing.T) {
 			"start": {
 				Trigger:   domain.EventMatch{},
 				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
-				Expect:    &domain.ExpectDef{Kind: "android.ui.observation"},
+				Expect:    &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout:   "5s",
 				OnSuccess: "click_next",
 				OnFailure: "terminal",
@@ -440,7 +447,7 @@ func TestEngine_ActionAutoExecuteChain(t *testing.T) {
 			"click_next": {
 				Trigger: domain.EventMatch{},
 				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "Next"}},
-				Expect:  &domain.ExpectDef{Kind: "android.window.state_changed"},
+				Expect:  &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout: "5s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
@@ -450,47 +457,47 @@ func TestEngine_ActionAutoExecuteChain(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{})
 	state := freshState("t1", "dev1")
 
-	// First event: activates start → observe dispatched → WaitingExpect armed for "android.ui.observation".
-	mid1, terminal, err := eng.ProcessEvent(context.Background(), state, "action-chain", task("t1"), anyEvent())
+	// First event: activates start → observe dispatched → WaitingExpect armed for android.screen.changed.
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "action-chain", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("step 1 error: %v", err)
 	}
-	if terminal {
+	if r1.Terminal {
 		t.Error("should not be terminal after step 1 action")
 	}
-	if mid1.WaitingExpect == nil {
+	if r1.State.WaitingExpect == nil {
 		t.Fatal("WaitingExpect should be armed after step 1 action")
 	}
-	if mid1.WaitingExpect.Kind != "android.ui.observation" {
-		t.Errorf("wrong WaitingExpect kind: %q", mid1.WaitingExpect.Kind)
+	if r1.State.WaitingExpect.Kind != domain.EventKindScreenChanged {
+		t.Errorf("wrong WaitingExpect kind: %q", r1.State.WaitingExpect.Kind)
 	}
 
-	// Confirm event for start → advance to click_next → auto-execute → WaitingExpect armed for "android.window.state_changed".
-	confirmObs := domain.Event{ID: "ev-2", Kind: "android.ui.observation", SeqNo: 2, OccurredAt: time.Now()}
-	mid2, terminal, err := eng.ProcessEvent(context.Background(), mid1, "action-chain", task("t1"), confirmObs)
+	// Confirm event for start → advance to click_next → auto-execute → WaitingExpect armed for android.screen.changed.
+	confirmObs := domain.Event{ID: "ev-2", Kind: domain.EventKindScreenChanged, SeqNo: 2, OccurredAt: time.Now()}
+	r2, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r1.State, WorkflowName: "action-chain", Task: task("t1"), Event: confirmObs})
 	if err != nil {
 		t.Fatalf("step 2 confirm error: %v", err)
 	}
-	if terminal {
+	if r2.Terminal {
 		t.Error("should not be terminal after auto-executing click_next")
 	}
-	if mid2.WaitingExpect == nil {
+	if r2.State.WaitingExpect == nil {
 		t.Fatal("WaitingExpect should be armed after click_next auto-execute")
 	}
-	if mid2.WaitingExpect.Kind != "android.window.state_changed" {
-		t.Errorf("wrong WaitingExpect kind: %q", mid2.WaitingExpect.Kind)
+	if r2.State.WaitingExpect.Kind != domain.EventKindScreenChanged {
+		t.Errorf("wrong WaitingExpect kind: %q", r2.State.WaitingExpect.Kind)
 	}
 
 	// Confirm event for click_next → terminal.
-	confirmWin := domain.Event{ID: "ev-3", Kind: "android.window.state_changed", SeqNo: 3, OccurredAt: time.Now()}
-	final, terminal, err := eng.ProcessEvent(context.Background(), mid2, "action-chain", task("t1"), confirmWin)
+	confirmWin := domain.Event{ID: "ev-3", Kind: domain.EventKindScreenChanged, SeqNo: 3, OccurredAt: time.Now()}
+	r3, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r2.State, WorkflowName: "action-chain", Task: task("t1"), Event: confirmWin})
 	if err != nil {
 		t.Fatalf("step 3 confirm error: %v", err)
 	}
-	if !terminal {
+	if !r3.Terminal {
 		t.Error("expected terminal after final confirm")
 	}
-	if !final.TerminalSuccess {
+	if !r3.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=true")
 	}
 }
@@ -545,17 +552,17 @@ func TestEngine_SnapshotPreCheck_Match(t *testing.T) {
 	eng := buildEngine(def, rawDispatcher{raw: raw})
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "precheck-match", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "precheck-match", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !result.Terminal {
 		t.Error("expected terminal=true: snapshot already matched, should advance immediately")
 	}
-	if newState.WaitingExpect != nil {
+	if result.State.WaitingExpect != nil {
 		t.Error("WaitingExpect should NOT be set when snapshot pre-check matches")
 	}
-	if !newState.TerminalSuccess {
+	if !result.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=true")
 	}
 }
@@ -584,14 +591,14 @@ func TestEngine_SnapshotPreCheck_NoMatch(t *testing.T) {
 	eng := buildEngine(def, rawDispatcher{raw: raw})
 	state := freshState("t1", "dev1")
 
-	newState, terminal, err := eng.ProcessEvent(context.Background(), state, "precheck-nomatch", task("t1"), anyEvent())
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "precheck-nomatch", Task: task("t1"), Event: anyEvent()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if terminal {
+	if result.Terminal {
 		t.Error("should not be terminal: snapshot did not match, WaitingExpect should be armed")
 	}
-	if newState.WaitingExpect == nil {
+	if result.State.WaitingExpect == nil {
 		t.Error("WaitingExpect should be set when snapshot pre-check does not match")
 	}
 }
@@ -606,7 +613,7 @@ func TestEngine_TickEvent_ClearsExpiredWaiting(t *testing.T) {
 			"step1": {
 				Trigger:   domain.EventMatch{},
 				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
-				Expect:    &domain.ExpectDef{Kind: "android.ui.observation"},
+				Expect:    &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout:   "1ms",
 				MaxRetry:  0,
 				OnSuccess: "terminal",
@@ -618,7 +625,8 @@ func TestEngine_TickEvent_ClearsExpiredWaiting(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	// Arm WaitingExpect.
-	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-test", task("t1"), anyEvent())
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tick-test", Task: task("t1"), Event: anyEvent()})
+	mid := r0.State
 	if mid == nil || mid.WaitingExpect == nil {
 		t.Fatal("expected WaitingExpect to be armed")
 	}
@@ -630,14 +638,14 @@ func TestEngine_TickEvent_ClearsExpiredWaiting(t *testing.T) {
 		Kind:       domain.EventKindWorkflowTick,
 		OccurredAt: time.Now(),
 	}
-	final, terminal, err := eng.ProcessEvent(context.Background(), mid, "tick-test", task("t1"), tick)
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: mid, WorkflowName: "tick-test", Task: task("t1"), Event: tick})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal {
+	if !r1.Terminal {
 		t.Error("expected terminal=true after tick fires expired deadline (MaxRetry=0)")
 	}
-	if final.TerminalSuccess {
+	if r1.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=false on failure path")
 	}
 }
@@ -652,7 +660,7 @@ func TestEngine_TickEvent_NotExpired_Ignored(t *testing.T) {
 			"step1": {
 				Trigger:   domain.EventMatch{},
 				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
-				Expect:    &domain.ExpectDef{Kind: "android.ui.observation"},
+				Expect:    &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout:   "60s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
@@ -662,21 +670,22 @@ func TestEngine_TickEvent_NotExpired_Ignored(t *testing.T) {
 	eng := buildEngine(def, successDispatcher{})
 	state := freshState("t1", "dev1")
 
-	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-noop", task("t1"), anyEvent())
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tick-noop", Task: task("t1"), Event: anyEvent()})
+	mid := r0.State
 	if mid == nil || mid.WaitingExpect == nil {
 		t.Fatal("expected WaitingExpect to be armed")
 	}
 	// deadline is 60s from now — not expired
 
 	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
-	noState, terminal, err := eng.ProcessEvent(context.Background(), mid, "tick-noop", task("t1"), tick)
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: mid, WorkflowName: "tick-noop", Task: task("t1"), Event: tick})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if terminal {
+	if r1.Terminal {
 		t.Error("should not be terminal: deadline not expired")
 	}
-	if noState != nil {
+	if r1.State != nil {
 		t.Error("expected nil state: non-expired tick is a no-op")
 	}
 }
@@ -699,11 +708,11 @@ func TestEngine_TickEvent_WhenNotWaiting_Ignored(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
-	noState, terminal, err := eng.ProcessEvent(context.Background(), state, "tick-nowaiting", task("t1"), tick)
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tick-nowaiting", Task: task("t1"), Event: tick})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if terminal || noState != nil {
+	if result.Terminal || result.State != nil {
 		t.Error("tick event should be ignored when not in WaitingExpect state")
 	}
 }
@@ -733,14 +742,16 @@ func TestEngine_RetryReExecute_SkipsTrigger(t *testing.T) {
 
 	// Activate step with matching trigger.
 	activateEv := domain.Event{ID: "ev-1", Kind: domain.EventKindActivityCreated, SeqNo: 1, OccurredAt: time.Now()}
-	mid, _, _ := eng.ProcessEvent(context.Background(), state, "retry-reexecute", task("t1"), activateEv)
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "retry-reexecute", Task: task("t1"), Event: activateEv})
+	mid := r0.State
 	if mid == nil || mid.WaitingExpect == nil {
 		t.Fatal("expected WaitingExpect to be armed after initial activation")
 	}
 	mid.DeadlineAt = time.Now().Add(-1 * time.Second) // expire deadline
 
 	// Timeout: triggers handleFailure, RetryCount becomes 1.
-	retry1, _, _ := eng.ProcessEvent(context.Background(), mid, "retry-reexecute", task("t1"), anyEvent())
+	r1, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: mid, WorkflowName: "retry-reexecute", Task: task("t1"), Event: anyEvent()})
+	retry1 := r1.State
 	if retry1 == nil || retry1.RetryCount != 1 {
 		t.Fatalf("expected RetryCount=1 after first timeout, got state=%v", retry1)
 	}
@@ -751,15 +762,15 @@ func TestEngine_RetryReExecute_SkipsTrigger(t *testing.T) {
 	// Now send a NON-matching event (kind does not match "android.activity.created").
 	// With retry re-execute, the action should fire despite the trigger mismatch.
 	nonMatch := domain.Event{ID: "ev-2", Kind: "android.screen.changed", SeqNo: 2, OccurredAt: time.Now()}
-	retry1Exec, _, err := eng.ProcessEvent(context.Background(), retry1, "retry-reexecute", task("t1"), nonMatch)
+	r2, err := eng.Handle(context.Background(), workflow.EngineCommand{State: retry1, WorkflowName: "retry-reexecute", Task: task("t1"), Event: nonMatch})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if retry1Exec == nil {
+	if r2.State == nil {
 		t.Fatal("expected non-nil state: retry should re-execute action on any event")
 	}
 	// Action dispatched (successDispatcher), expect kind-only → WaitingExpect re-armed.
-	if retry1Exec.WaitingExpect == nil {
+	if r2.State.WaitingExpect == nil {
 		t.Error("expected WaitingExpect re-armed after retry re-execute")
 	}
 }
@@ -786,7 +797,8 @@ func TestEngine_TickEvent_TriggersRetry_ForRetryPending(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	// Activate: first attempt fails in advance loop → RetryCount=1.
-	mid, _, _ := eng.ProcessEvent(context.Background(), state, "tick-retry", task("t1"), anyEvent())
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tick-retry", Task: task("t1"), Event: anyEvent()})
+	mid := r0.State
 	if mid == nil {
 		t.Fatal("expected non-nil state after initial activation")
 	}
@@ -799,24 +811,24 @@ func TestEngine_TickEvent_TriggersRetry_ForRetryPending(t *testing.T) {
 
 	// Inject a tick: should trigger the retry immediately.
 	tick := domain.Event{ID: "tick-1", Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
-	mid2, _, err := eng.ProcessEvent(context.Background(), mid, "tick-retry", task("t1"), tick)
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: mid, WorkflowName: "tick-retry", Task: task("t1"), Event: tick})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mid2 == nil {
+	if r1.State == nil {
 		t.Fatal("expected non-nil state: tick should trigger retry for retry-pending step")
 	}
-	if mid2.RetryCount != 2 {
-		t.Errorf("expected RetryCount=2 after second failure via tick, got %d", mid2.RetryCount)
+	if r1.State.RetryCount != 2 {
+		t.Errorf("expected RetryCount=2 after second failure via tick, got %d", r1.State.RetryCount)
 	}
 
 	// Third tick: retry budget exhausted (MaxRetry=2) → OnFailure = terminal.
 	tick2 := domain.Event{ID: "tick-2", Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
-	final, terminal, err := eng.ProcessEvent(context.Background(), mid2, "tick-retry", task("t1"), tick2)
+	r2, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r1.State, WorkflowName: "tick-retry", Task: task("t1"), Event: tick2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !terminal || final == nil {
+	if !r2.Terminal || r2.State == nil {
 		t.Error("expected terminal after retry budget exhausted via ticks")
 	}
 }
@@ -840,11 +852,42 @@ func TestEngine_TickEvent_WhenNotWaiting_NoAction_Ignored(t *testing.T) {
 	state := freshState("t1", "dev1")
 
 	tick := domain.Event{Kind: domain.EventKindWorkflowTick, OccurredAt: time.Now()}
-	noState, terminal, err := eng.ProcessEvent(context.Background(), state, "tick-noaction", task("t1"), tick)
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "tick-noaction", Task: task("t1"), Event: tick})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if terminal || noState != nil {
+	if result.Terminal || result.State != nil {
 		t.Error("tick must be ignored for steps with no Action")
+	}
+}
+
+// errorDefStore is a fake DefStore that always returns a non-not-found error.
+type errorDefStore struct{ err error }
+
+func (s errorDefStore) Get(_ context.Context, _ string) (*domain.WorkflowDef, error) {
+	return nil, s.err
+}
+func (s errorDefStore) Put(_ context.Context, _ string, _ *domain.WorkflowDef) error { return nil }
+func (s errorDefStore) Delete(_ context.Context, _ string) error                     { return nil }
+func (s errorDefStore) List(_ context.Context) ([]*domain.WorkflowDef, error)        { return nil, nil }
+
+// TestEngine_ResolveDef_StoreError verifies that a non-ErrWorkflowDefNotFound
+// error from the DefStore is propagated instead of silently falling back to "default".
+func TestEngine_ResolveDef_StoreError(t *testing.T) {
+	storeErr := errors.New("connection refused")
+	eng := workflow.NewEngine(errorDefStore{err: storeErr}, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	_, err := eng.Handle(context.Background(), workflow.EngineCommand{
+		State:        state,
+		WorkflowName: "some-workflow",
+		Task:         task("t1"),
+		Event:        anyEvent(),
+	})
+	if err == nil {
+		t.Fatal("expected error from DefStore to propagate, got nil")
+	}
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("expected wrapped storeErr, got: %v", err)
 	}
 }

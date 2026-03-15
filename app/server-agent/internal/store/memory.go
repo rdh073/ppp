@@ -60,6 +60,18 @@ func (s *MemoryTaskStore) ListByDevice(_ context.Context, deviceID domain.Device
 	return out, nil
 }
 
+func (s *MemoryTaskStore) ListActiveByDevice(_ context.Context, deviceID domain.DeviceID) ([]*domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*domain.Task
+	for _, t := range s.tasks {
+		if t.AssignedDevice == deviceID && !t.Status.IsTerminal() {
+			out = append(out, cloneTask(t))
+		}
+	}
+	return out, nil
+}
+
 // MemoryWorkflowStateStore is a thread-safe in-memory WorkflowStateStore.
 type MemoryWorkflowStateStore struct {
 	mu     sync.RWMutex

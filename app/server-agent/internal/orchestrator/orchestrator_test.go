@@ -60,7 +60,7 @@ func actionDef(name string) *domain.WorkflowDef {
 			"start": {
 				Trigger: domain.EventMatch{Kind: domain.EventKindAgentOnline},
 				Action:  &domain.ActionDef{Kind: domain.ActionKindObserve},
-				Expect:  &domain.ExpectDef{Kind: domain.EventKindUiObservation},
+				Expect:  &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
 				Timeout: "30s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
@@ -192,7 +192,7 @@ func TestProcessEvent_StaleEventDropped(t *testing.T) {
 
 	orch := newOrch(seededEngine(def, noopDispatcher{}), tasks, states)
 	ctx := context.Background()
-	base := domain.Event{Kind: domain.EventKindUiObservation, DeviceID: "dev-2", OccurredAt: time.Now()}
+	base := domain.Event{Kind: domain.EventKindScreenChanged, DeviceID: "dev-2", OccurredAt: time.Now()}
 
 	ev5 := base
 	ev5.ID = "ev-5"
@@ -218,7 +218,7 @@ func TestProcessEvent_DuplicateEventDropped(t *testing.T) {
 	orch := newOrch(seededEngine(def, noopDispatcher{}), tasks, states)
 	ctx := context.Background()
 
-	ev := domain.Event{ID: "ev-same", Kind: domain.EventKindUiObservation, DeviceID: "dev-3", SeqNo: 1, OccurredAt: time.Now()}
+	ev := domain.Event{ID: "ev-same", Kind: domain.EventKindScreenChanged, DeviceID: "dev-3", SeqNo: 1, OccurredAt: time.Now()}
 	_ = orch.ProcessEvent(ctx, ev)
 
 	if err := orch.ProcessEvent(ctx, ev); !errors.Is(err, domain.ErrEventDropped) {

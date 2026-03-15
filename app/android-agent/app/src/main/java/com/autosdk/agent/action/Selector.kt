@@ -4,6 +4,7 @@ package com.autosdk.agent.action
 enum class SelectorKind {
     TEXT,
     RESOURCE_ID,
+    SEMANTIC_KEY,
     TARGET_ID,
     CONTENT_DESC,
     BOUNDS,

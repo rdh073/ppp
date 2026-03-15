@@ -8,6 +8,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.autosdk.agent.action.ActionExecutor
 import com.autosdk.agent.agent.AccessibilityAgentAutomationDriver
+import com.autosdk.agent.agent.AgentCapabilities
 import com.autosdk.agent.agent.AgentRuntime
 import com.autosdk.agent.observation.SnapshotBuilder
 import com.autosdk.agent.state.AgentEvent
@@ -23,11 +24,15 @@ import com.autosdk.agent.state.SharedPreferencesAgentStateStore
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
@@ -71,6 +76,12 @@ class AgentAccessibilityService : AccessibilityService() {
     /** Last known foreground activity class name. Updated on TYPE_WINDOW_STATE_CHANGED. */
     @Volatile private var currentActivityName: String? = null
 
+    /** Device ID set during setupAgentRuntime(); used by the debounced publish coroutine. */
+    @Volatile private var agentDeviceId: String? = null
+
+    /** Inflight debounce job for proactive android.screen.changed notifications. */
+    @Volatile private var pendingScreenChangeJob: Job? = null
+
     /**
      * Epoch-ms of the last accessibility event. Used by awaitSettle to detect
      * when the UI has stopped changing after an action.
@@ -110,6 +121,10 @@ class AgentAccessibilityService : AccessibilityService() {
             if (!cls.isNullOrBlank()) {
                 currentActivityName = cls
             }
+        }
+
+        if (event != null && shouldScheduleSemanticPublish(event.eventType)) {
+            scheduleSemanticPublish(eventType = event.eventType)
         }
     }
 
@@ -162,8 +177,9 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun setupAgentRuntime() {
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        agentDeviceId = deviceId
         val serverUrl = resolveServerUrl()
-        val capabilityProvider = { buildCapabilityList() }
+        val capabilityProvider = { AgentCapabilities.buildCapabilityList() }
         val localStateStore = SharedPreferencesAgentStateStore.from(applicationContext)
         stateStore = localStateStore
         outboundEventSeqNo.set(localStateStore.read().lastOutboundEventSeqNo)
@@ -229,12 +245,16 @@ class AgentAccessibilityService : AccessibilityService() {
      * Falls back to rootInActiveWindow when the window list is unavailable.
      */
     private fun buildSnapshot(deviceId: String): com.autosdk.agent.observation.UiSnapshot? {
-        val windowRoots =
-            windows
+        val allWindows = windows
+        val filteredWindows =
+            allWindows
                 ?.filter { win ->
                     win.type == AccessibilityWindowInfo.TYPE_APPLICATION ||
                         win.type == AccessibilityWindowInfo.TYPE_SYSTEM
                 }
+
+        val windowRoots =
+            filteredWindows
                 ?.mapNotNull { it.root }
                 ?.takeIf { it.isNotEmpty() }
                 ?: listOfNotNull(rootInActiveWindow)
@@ -244,14 +264,127 @@ class AgentAccessibilityService : AccessibilityService() {
         }
 
         val foregroundPkg = windowRoots.firstOrNull()?.packageName?.toString()
+        val hasSystemWindow = filteredWindows?.any { it.type == AccessibilityWindowInfo.TYPE_SYSTEM } == true
 
         return SnapshotBuilder.build(
             roots = windowRoots,
             deviceId = deviceId,
             packageName = foregroundPkg,
             activityName = currentActivityName,
+            hasSystemWindow = hasSystemWindow,
         )
     }
+
+    private fun scheduleSemanticPublish(eventType: Int) {
+        pendingScreenChangeJob?.cancel()
+        pendingScreenChangeJob =
+            serviceScope.launch {
+                awaitSettle()
+                val deviceId = agentDeviceId ?: return@launch
+                val snapshot = buildSnapshot(deviceId) ?: return@launch
+                val seqNo = outboundEventSeqNo.incrementAndGet()
+                stateStore?.persistLastOutboundEventSeqNo(seqNo)
+                val params =
+                    buildScreenChangedParams(
+                        seqNo = seqNo,
+                        eventType = eventTypeName(eventType),
+                        snapshot = snapshot,
+                    )
+                coordinator?.dispatch(AgentEvent.WindowStateChanged(params))
+            }
+    }
+
+    private fun buildScreenChangedParams(
+        seqNo: Long,
+        eventType: String,
+        snapshot: com.autosdk.agent.observation.UiSnapshot,
+    ) = buildJsonObject {
+        put("seqNo", seqNo)
+        snapshot.packageName?.let { put("packageName", it) }
+        snapshot.activityName?.let { put("className", it) }
+        put("eventType", eventType)
+        snapshot.screenState?.let { put("screenState", it) }
+        snapshot.focusedTargetId?.let { put("focusedTargetId", it) }
+        put("text", buildJsonArray {
+            snapshot.targets.forEach { target ->
+                target.text?.takeIf { it.isNotBlank() }?.let { add(it) }
+                target.label?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+        })
+        put(
+            "ui",
+            buildJsonObject {
+                put("activeUiKey", snapshot.semantic.activeUiKey)
+                put("baseScreenKey", snapshot.semantic.baseScreenKey)
+                snapshot.semantic.overlayKey?.let { put("overlayKey", it) }
+                put("uiReady", snapshot.semantic.uiReady)
+                put("semanticDigest", snapshot.semantic.semanticDigest)
+                snapshot.semantic.focusedTargetKey?.let { put("focusedTargetKey", it) }
+                put(
+                    "forms",
+                    buildJsonArray {
+                        snapshot.semantic.forms.forEach { form ->
+                            addJsonObject {
+                                put("formKey", form.formKey)
+                                put("fieldKeys", buildJsonArray {
+                                    form.fieldKeys.forEach { add(it) }
+                                })
+                                form.focusedFieldKey?.let { put("focusedFieldKey", it) }
+                                put("ready", form.ready)
+                            }
+                        }
+                    },
+                )
+                put(
+                    "buttons",
+                    buildJsonArray {
+                        snapshot.semantic.buttons.forEach { button ->
+                            addJsonObject {
+                                put("buttonKey", button.buttonKey)
+                                put("enabled", button.enabled)
+                                put("visible", button.visible)
+                                put("primary", button.primary)
+                            }
+                        }
+                    },
+                )
+            },
+        )
+        put("targets", buildJsonArray {
+            snapshot.targets.forEach { target ->
+                addJsonObject {
+                    put("targetId", target.targetId)
+                    put("uiRole", target.uiRole)
+                    target.label?.let { put("label", it) }
+                    target.semanticKey?.let { put("semanticKey", it) }
+                    target.formKey?.let { put("formKey", it) }
+                    target.text?.let { put("text", it) }
+                    target.resourceId?.let { put("resourceId", it) }
+                    put("enabled", target.enabled)
+                    put("actionable", target.actionable)
+                    target.checked?.let { put("checked", it) }
+                    put("focused", target.focused)
+                }
+            }
+        })
+    }
+
+    private fun shouldScheduleSemanticPublish(eventType: Int): Boolean =
+        eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
+
+    private fun eventTypeName(eventType: Int): String =
+        when (eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "TYPE_WINDOW_STATE_CHANGED"
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "TYPE_WINDOW_CONTENT_CHANGED"
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> "TYPE_WINDOWS_CHANGED"
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "TYPE_VIEW_TEXT_CHANGED"
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> "TYPE_VIEW_SCROLLED"
+            else -> "TYPE_UNKNOWN"
+        }
 
     private fun resolveServerUrl(): String {
         val sysProp =
@@ -263,26 +396,6 @@ class AgentAccessibilityService : AccessibilityService() {
         return sysProp.takeIf { it.isNotBlank() } ?: com.autosdk.agent.BuildConfig.SERVER_URL
     }
 
-    private fun buildCapabilityList(): List<Map<String, Any>> =
-        listOf(
-            mapOf("name" to "observe", "available" to true),
-            mapOf("name" to "click", "available" to true),
-            mapOf("name" to "long_press", "available" to true),
-            mapOf("name" to "input_text", "available" to true),
-            mapOf("name" to "delete_text", "available" to true),
-            mapOf("name" to "scroll", "available" to true),
-            mapOf("name" to "home", "available" to true),
-            mapOf("name" to "back", "available" to true),
-            mapOf("name" to "wake", "available" to true),
-            mapOf("name" to "open_app", "available" to true),
-            mapOf("name" to "close_app", "available" to true),
-            mapOf("name" to "fill_form", "available" to true),
-            mapOf(
-                "name" to "screenshot",
-                "available" to (android.os.Build.VERSION.SDK_INT >= 30),
-                "reason" to if (android.os.Build.VERSION.SDK_INT < 30) "Requires API 30+" else "",
-            ),
-        )
 
     private suspend fun notifyAccessibilityDisabled(reason: String) {
         val seqNo = outboundEventSeqNo.incrementAndGet()

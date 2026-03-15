@@ -41,6 +41,7 @@ data class AgentState(
     val lastHeartbeatAtEpochMs: Long? = null,
     val lastRegistrationAtEpochMs: Long? = null,
     val currentRequestId: String? = null,
+    val lastPublishedUiDigest: String? = null,
     val lastError: String? = null,
 ) {
     companion object {

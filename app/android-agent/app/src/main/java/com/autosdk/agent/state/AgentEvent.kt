@@ -1,5 +1,7 @@
 package com.autosdk.agent.state
 
+import kotlinx.serialization.json.JsonObject
+
 sealed interface AgentEvent {
     data object BootCompleted : AgentEvent
 
@@ -81,4 +83,6 @@ sealed interface AgentEvent {
     data class SnapshotAfterBuilt(val requestId: String) : AgentEvent
 
     data class ResponseSent(val requestId: String) : AgentEvent
+
+    data class WindowStateChanged(val params: JsonObject) : AgentEvent
 }

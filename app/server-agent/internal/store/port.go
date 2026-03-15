@@ -13,6 +13,9 @@ type TaskStore interface {
 	Get(ctx context.Context, id domain.TaskID) (*domain.Task, error)
 	List(ctx context.Context) ([]*domain.Task, error)
 	ListByDevice(ctx context.Context, deviceID domain.DeviceID) ([]*domain.Task, error)
+	// ListActiveByDevice returns only non-terminal tasks for a device.
+	// Use this in hot paths (e.g. per-event orchestration) to avoid O(n_all) cost.
+	ListActiveByDevice(ctx context.Context, deviceID domain.DeviceID) ([]*domain.Task, error)
 }
 
 // WorkflowStateStore checkpoints per-device workflow execution state.

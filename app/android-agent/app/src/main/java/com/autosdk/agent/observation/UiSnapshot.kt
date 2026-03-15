@@ -15,6 +15,14 @@ package com.autosdk.agent.observation
 data class UiTarget(
     val targetId: String,
     val role: String?,
+    /** Semantic role: button|input|checkbox|switch|radio|loading|text|image|list|container */
+    val uiRole: String,
+    /** contentDescription for inputs/checkboxes/switches/radios; null for other roles. */
+    val label: String?,
+    /** Stable semantic selector for workflow actions, e.g. `form.primary.email` or `button.save`. */
+    val semanticKey: String?,
+    /** Parent semantic form identifier when the target belongs to the active form. */
+    val formKey: String?,
     val text: String?,
     val contentDesc: String?,
     val resourceId: String?,
@@ -35,7 +43,9 @@ data class UiTarget(
  * A committed snapshot of the device UI state, aligned with the contracts UiSnapshot interface.
  *
  * [capturedAt] is an ISO-8601 instant string.
- * [screenState] is left null by the agent; the server observation domain classifies it.
+ * [screenState] is populated by [SnapshotBuilder]: "loading", "dialog", or "ready".
+ * [focusedTargetId] is the [UiTarget.targetId] of the currently focused node, or null.
+ * [semantic] is the workflow-facing semantic projection derived from the raw accessibility tree.
  */
 data class UiSnapshot(
     val snapshotId: String,
@@ -43,6 +53,8 @@ data class UiSnapshot(
     val packageName: String?,
     val activityName: String?,
     val screenState: String?,
+    val focusedTargetId: String?,
+    val semantic: UiSemanticState,
     val capturedAt: String,
     val targets: List<UiTarget>,
 )

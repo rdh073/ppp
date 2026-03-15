@@ -7,9 +7,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.autosdk.agent.agent.AgentCapabilities
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -47,6 +46,8 @@ interface AgentTransportDriver {
     fun onRpcSuccess(handler: (String, JsonElement) -> Unit)
 
     fun onRpcFailure(handler: (String, Int, String) -> Unit)
+
+    suspend fun sendNotification(method: String, params: JsonElement): Boolean = false
 }
 
 interface AgentHeartbeatScheduler {
@@ -221,6 +222,20 @@ class AgentStateCoordinator(
         }
     }
 
+    /**
+     * Executes a single side-effect produced by [AgentReducer].
+     *
+     * Effects fall into two categories:
+     *
+     * **Tracked effects** — SendHello, SendResume, SendHeartbeat:
+     * Use [sendAgentRequest], which registers the outbound request by ID.
+     * The corresponding [onRpcSuccess] / [onRpcFailure] callbacks handle the
+     * outcome and dispatch the appropriate [AgentEvent] back into the state machine.
+     *
+     * **Fire-and-forget effects** — SendDisconnect, PublishUiEvent, ConnectSocket:
+     * Wrap in `runCatching { ... }.onFailure { log }`. Failures are logged but
+     * do not trigger state transitions; they are inherently best-effort.
+     */
     private suspend fun runEffect(
         effect: AgentEffect,
         currentState: AgentState,
@@ -308,6 +323,17 @@ class AgentStateCoordinator(
             }
 
             is AgentEffect.Log -> logger.log(effect.message)
+
+            is AgentEffect.PublishUiEvent ->
+                runCatching {
+                    transportDriver.sendNotification(effect.method, effect.params)
+                }.onFailure { error ->
+                    logger.log("publish_ui_event_failed:${effect.method}:${error.message}")
+                }.onSuccess { sent ->
+                    if (!sent) {
+                        logger.log("publish_ui_event_failed:${effect.method}:socket_unavailable")
+                    }
+                }
         }
     }
 
@@ -400,17 +426,7 @@ class AgentStateCoordinator(
         "$method:${requestCounter.incrementAndGet()}"
 
     private fun capabilitiesToJson(): JsonElement =
-        buildJsonArray {
-            capabilitiesProvider().forEach { capability ->
-                addJsonObject {
-                    put("name", capability["name"] as String)
-                    put("available", capability["available"] as Boolean)
-                    (capability["reason"] as? String)
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { put("reason", it) }
-                }
-            }
-        }
+        AgentCapabilities.capabilitiesToJson(capabilitiesProvider())
 }
 
 private fun JsonElement.sessionId(): String? =

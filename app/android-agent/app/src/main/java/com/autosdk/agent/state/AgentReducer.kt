@@ -1,5 +1,10 @@
 package com.autosdk.agent.state
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
 data class AgentReduction(
     val state: AgentState,
     val effects: List<AgentEffect> = emptyList(),
@@ -157,6 +162,28 @@ object AgentReducer {
 
             is AgentEvent.ResponseSent ->
                 onResponseSent(state, event.requestId)
+
+            is AgentEvent.WindowStateChanged ->
+                if (state.transport != AgentTransportPhase.CONNECTED ||
+                    state.execution != AgentExecutionPhase.IDLE
+                ) {
+                    AgentReduction(state, listOf(AgentEffect.Log("ui_event_dropped:not_connected_or_busy")))
+                } else {
+                    val digest = extractSemanticDigest(event.params)
+                    if (!digest.isNullOrBlank() && digest == state.lastPublishedUiDigest) {
+                        AgentReduction(state, listOf(AgentEffect.Log("ui_event_dropped:duplicate_digest")))
+                    } else {
+                        AgentReduction(
+                            state.copy(lastPublishedUiDigest = digest ?: state.lastPublishedUiDigest),
+                            listOf(
+                                AgentEffect.PublishUiEvent(
+                                    method = "android.screen.changed",
+                                    params = event.params,
+                                ),
+                            ),
+                        )
+                    }
+                }
         }
 
     private fun resetForFreshBoundary(
@@ -174,6 +201,7 @@ object AgentReducer {
                     lastHeartbeatAtEpochMs = null,
                     lastRegistrationAtEpochMs = null,
                     currentRequestId = null,
+                    lastPublishedUiDigest = null,
                     lastError = null,
                 ),
             effects =
@@ -228,6 +256,7 @@ object AgentReducer {
                 execution = AgentExecutionPhase.IDLE,
                 registrationMode = null,
                 currentRequestId = null,
+                lastPublishedUiDigest = null,
                 lastError = reason,
             )
         val effects =
@@ -256,6 +285,7 @@ object AgentReducer {
                 state.copy(
                     transport = AgentTransportPhase.CONNECTING,
                     registrationMode = null,
+                    lastPublishedUiDigest = null,
                     lastError = null,
                 ),
             effects = listOf(AgentEffect.ConnectSocket),
@@ -272,6 +302,7 @@ object AgentReducer {
                 state.copy(
                     transport = AgentTransportPhase.CONNECTING,
                     registrationMode = null,
+                    lastPublishedUiDigest = null,
                     lastError = null,
                 ),
             effects = listOf(AgentEffect.ConnectSocket),
@@ -302,6 +333,7 @@ object AgentReducer {
                 state.copy(
                     transport = AgentTransportPhase.REGISTERING,
                     registrationMode = nextMode,
+                    lastPublishedUiDigest = null,
                     lastError = null,
                 ),
             effects =
@@ -379,6 +411,7 @@ object AgentReducer {
                     transport = AgentTransportPhase.BACKOFF_WAIT,
                     registrationMode = null,
                     reconnectAttempt = attempt,
+                    lastPublishedUiDigest = null,
                     lastError = reason,
                 ),
             effects =
@@ -406,6 +439,7 @@ object AgentReducer {
                     registrationMode = null,
                     sessionId = null,
                     reconnectAttempt = attempt,
+                    lastPublishedUiDigest = null,
                     lastError = reason,
                 ),
             effects =
@@ -437,6 +471,7 @@ object AgentReducer {
                         registrationMode = null,
                         execution = AgentExecutionPhase.IDLE,
                         currentRequestId = null,
+                        lastPublishedUiDigest = null,
                         lastError = reason,
                     ),
                 effects = listOf(AgentEffect.StopHeartbeatTimer, AgentEffect.Log(reason)),
@@ -460,6 +495,7 @@ object AgentReducer {
                     registrationMode = null,
                     reconnectAttempt = attempt,
                     currentRequestId = null,
+                    lastPublishedUiDigest = null,
                     lastError = reason,
                 ),
             effects =
@@ -569,4 +605,11 @@ object AgentReducer {
                     ),
                 ),
         )
+
+    private fun extractSemanticDigest(params: JsonObject): String? =
+        params["ui"]
+            ?.jsonObject
+            ?.get("semanticDigest")
+            ?.jsonPrimitive
+            ?.contentOrNull
 }

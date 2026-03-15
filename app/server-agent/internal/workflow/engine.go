@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,25 +47,37 @@ func NewEngine(defs DefStore, disp ActionDispatcher, tools ...ToolInvoker) *Engi
 	return &Engine{defs: defs, disp: disp, tools: inv}
 }
 
-// ProcessEvent evaluates event against the current step of state.
-// Returns (newState, terminal, error).
-//   - newState is nil when the event is irrelevant to the current step.
-//   - terminal is true when newState.CurrentStep == "terminal".
-//   - Caller is responsible for checkpointing non-nil newState.
-func (e *Engine) ProcessEvent(
-	ctx context.Context,
-	state *domain.WorkflowState,
-	workflowName string,
-	task *domain.Task,
-	event domain.Event,
-) (*domain.WorkflowState, bool, error) {
+// EngineCommand is the input to the workflow engine.
+// It bundles all context the engine needs so the API is self-documenting
+// and callers cannot accidentally omit required fields.
+type EngineCommand struct {
+	State        *domain.WorkflowState
+	WorkflowName string
+	Task         *domain.Task
+	Event        domain.Event
+}
+
+// EngineResult is returned by Handle.
+type EngineResult struct {
+	State    *domain.WorkflowState // nil when the event is irrelevant to the current step
+	Terminal bool
+}
+
+// Handle processes one command against the workflow state machine.
+// It is the single entry point for the engine.
+//   - result.State is nil when the event is irrelevant to the current step.
+//   - result.Terminal is true when the new state's CurrentStep == "terminal".
+//   - Caller is responsible for checkpointing non-nil result.State.
+func (e *Engine) Handle(ctx context.Context, cmd EngineCommand) (EngineResult, error) {
+	state, workflowName, task, event := cmd.State, cmd.WorkflowName, cmd.Task, cmd.Event
+
 	if state.IsTerminal() {
-		return nil, true, nil
+		return EngineResult{Terminal: true}, nil
 	}
 
 	def, err := e.resolveDef(ctx, workflowName)
 	if err != nil {
-		return nil, false, fmt.Errorf("resolve def %q: %w", workflowName, err)
+		return EngineResult{}, fmt.Errorf("resolve def %q: %w", workflowName, err)
 	}
 
 	stepID := state.CurrentStep
@@ -74,12 +86,13 @@ func (e *Engine) ProcessEvent(
 	}
 	step, ok := def.Steps[stepID]
 	if !ok {
-		return nil, false, fmt.Errorf("workflow %q has no step %q", workflowName, stepID)
+		return EngineResult{}, fmt.Errorf("workflow %q has no step %q", workflowName, stepID)
 	}
 
 	// Waiting for a confirming event after an action was dispatched.
 	if state.WaitingExpect != nil {
-		return e.processWaiting(ctx, state, step, event, task, def)
+		newState, terminal, err := e.processWaiting(ctx, state, step, event, task, def)
+		return EngineResult{State: newState, Terminal: terminal}, err
 	}
 
 	// Tick events drive two recovery paths:
@@ -89,23 +102,45 @@ func (e *Engine) ProcessEvent(
 	//      instead of waiting for the next device-originated event (up to 30 s).
 	if event.Kind == domain.EventKindWorkflowTick {
 		if state.RetryCount > 0 && step.Action != nil {
-			return e.executeStep(ctx, state, step, task, def)
+			newState, terminal, err := e.executeStep(ctx, state, step, task, def)
+			return EngineResult{State: newState, Terminal: terminal}, err
 		}
-		return nil, false, nil
+		return EngineResult{}, nil
 	}
 
 	// Retry: trigger was already matched once; re-execute the action on the
 	// first incoming event (any kind) without re-matching the trigger.
 	if state.RetryCount > 0 && step.Action != nil {
-		return e.executeStep(ctx, state, step, task, def)
+		newState, terminal, err := e.executeStep(ctx, state, step, task, def)
+		return EngineResult{State: newState, Terminal: terminal}, err
 	}
 
 	// Check whether this event activates the current step.
 	if !MatchEvent(step.Trigger, event) {
-		return nil, false, nil
+		return EngineResult{}, nil
 	}
 
-	return e.executeStep(ctx, state, step, task, def)
+	newState, terminal, err := e.executeStep(ctx, state, step, task, def)
+	return EngineResult{State: newState, Terminal: terminal}, err
+}
+
+// nodeFor returns the Node responsible for executing step.
+func (e *Engine) nodeFor(step domain.StepDef) Node {
+	if step.Action != nil {
+		return &ActionNode{disp: e.disp}
+	}
+	if step.ToolCall != nil {
+		return &ToolCallNode{tools: e.tools}
+	}
+	return routingNode{}
+}
+
+// routingNode is a no-op Node for pure routing steps (no Action, no ToolCall).
+// It returns an empty NodeOutput, which the engine interprets as "advance to OnSuccess".
+type routingNode struct{}
+
+func (routingNode) Execute(_ context.Context, _ NodeCommand) (NodeOutput, error) {
+	return NodeOutput{}, nil
 }
 
 // executeStep runs the logic for an activated step and returns the resulting state.
@@ -116,42 +151,8 @@ func (e *Engine) executeStep(
 	task *domain.Task,
 	def *domain.WorkflowDef,
 ) (*domain.WorkflowState, bool, error) {
-	if step.ToolCall != nil {
-		outputs, err := e.runToolCall(ctx, step.ToolCall, state.Inputs)
-		if err != nil && !step.ToolCall.Optional {
-			return e.handleFailure(state, step)
-		}
-		// Merge outputs into state before advance(); advance() will clone once.
-		// state is not reused by the caller after ProcessEvent returns newState.
-		for k, v := range outputs {
-			state.Inputs[k] = v
-		}
-		return e.advance(ctx, state, step.OnSuccess, def, task)
-	}
-
-	if step.Action != nil {
-		result, err := e.executeAction(ctx, state, task, step.Action)
-		if err != nil {
-			return e.handleFailure(state, step)
-		}
-		if step.Expect != nil {
-			// Pre-check: if the action's snapshotAfter already matches the
-			// expect condition, advance immediately without arming WaitingExpect.
-			if SnapshotMatchesExpect(result.Raw, *step.Expect) {
-				return e.advance(ctx, state, step.OnSuccess, def, task)
-			}
-			timeout := parseDuration(step.Timeout, defaultStepTimeout)
-			next := cloneState(state)
-			exp := *step.Expect
-			next.WaitingExpect = &exp
-			next.DeadlineAt = time.Now().Add(timeout)
-			return next, false, nil
-		}
-		return e.advance(ctx, state, step.OnSuccess, def, task)
-	}
-
 	// Action-less expect (unusual but valid: wait for an event without dispatching).
-	if step.Expect != nil {
+	if step.Action == nil && step.ToolCall == nil && step.Expect != nil {
 		timeout := parseDuration(step.Timeout, defaultStepTimeout)
 		next := cloneState(state)
 		exp := *step.Expect
@@ -160,6 +161,27 @@ func (e *Engine) executeStep(
 		return next, false, nil
 	}
 
+	out, sysErr := e.nodeFor(step).Execute(ctx, NodeCommand{Step: step, State: state, Task: task})
+	if sysErr != nil {
+		return nil, false, sysErr
+	}
+
+	if out.Err != nil {
+		return e.handleFailure(state, step)
+	}
+
+	// Merge node outputs into state before routing; advance() will clone once.
+	// state is not reused by the caller after Handle returns newState.
+	for k, v := range out.StateInputs {
+		state.Inputs[k] = v
+	}
+
+	if out.SuspendExpect != nil {
+		next := cloneState(state)
+		next.WaitingExpect = out.SuspendExpect
+		next.DeadlineAt = time.Now().Add(out.Deadline)
+		return next, false, nil
+	}
 	return e.advance(ctx, state, step.OnSuccess, def, task)
 }
 
@@ -236,63 +258,36 @@ func (e *Engine) advance(
 	for !next.IsTerminal() {
 		step, ok := def.Steps[next.CurrentStep]
 		if !ok || !step.Trigger.IsEmpty() {
-			// Needs a device event to activate — stop here.
-			break
+			break // stop: step waits for a device event to activate
 		}
-		// Pure routing steps (no action, no tool call) always wait for a device event.
-		// Auto-executing them would cause infinite loops when OnSuccess loops back.
 		if step.ToolCall == nil && step.Action == nil {
-			break
+			break // stop: pure routing step — auto-executing would loop if OnSuccess points back here
 		}
 
-		if step.ToolCall != nil {
-			outputs, err := e.runToolCall(ctx, step.ToolCall, next.Inputs)
-			if err != nil && !step.ToolCall.Optional {
-				// Tool failed; follow failure routing.
-				next.CurrentStep = step.OnFailure
-				terminalViaSuccess = false
-			} else {
-				for k, v := range outputs {
-					next.Inputs[k] = v
-				}
-				next.CurrentStep = step.OnSuccess
+		out, sysErr := e.nodeFor(step).Execute(ctx, NodeCommand{Step: step, State: next, Task: task})
+		if sysErr != nil {
+			return next, next.IsTerminal(), sysErr
+		}
+
+		if out.Err != nil {
+			if next.RetryCount < step.MaxRetry {
+				next.RetryCount++
+				break // stop: retry pending, will fire on next tick
 			}
 			next.RetryCount = 0
+			next.CurrentStep = step.OnFailure
+			terminalViaSuccess = false
 			continue
 		}
-
-		if step.Action != nil {
-			result, err := e.executeAction(ctx, next, task, step.Action)
-			if err != nil {
-				if next.RetryCount < step.MaxRetry {
-					// Keep current step; retry will fire on the next incoming event.
-					next.RetryCount++
-					break
-				}
-				next.RetryCount = 0
-				next.CurrentStep = step.OnFailure
-				terminalViaSuccess = false
-				continue
-			}
-			// Action succeeded.
-			next.RetryCount = 0
-			if step.Expect != nil {
-				// Pre-check: if snapshotAfter already satisfies the expect, advance immediately.
-				if SnapshotMatchesExpect(result.Raw, *step.Expect) {
-					next.CurrentStep = step.OnSuccess
-					continue
-				}
-				timeout := parseDuration(step.Timeout, defaultStepTimeout)
-				exp := *step.Expect
-				next.WaitingExpect = &exp
-				next.DeadlineAt = time.Now().Add(timeout)
-				break // suspended: waiting for the confirming event
-			}
-			next.CurrentStep = step.OnSuccess
-			continue
+		for k, v := range out.StateInputs {
+			next.Inputs[k] = v
 		}
-
-		// Pure routing step (no action, no tool call): advance immediately.
+		next.RetryCount = 0
+		if out.SuspendExpect != nil {
+			next.WaitingExpect = out.SuspendExpect
+			next.DeadlineAt = time.Now().Add(out.Deadline)
+			break // stop: action dispatched, awaiting confirm event
+		}
 		next.CurrentStep = step.OnSuccess
 	}
 
@@ -316,98 +311,15 @@ func (e *Engine) handleFailure(state *domain.WorkflowState, step domain.StepDef)
 	return next, next.IsTerminal(), nil
 }
 
-// runToolCall invokes a registered tool and extracts outputs into a string map.
-// Returns nil outputs (not an error) when the tool call is optional and succeeds
-// with no output mapping.
-func (e *Engine) runToolCall(
-	ctx context.Context,
-	def *domain.ToolCallDef,
-	inputs map[string]string,
-) (map[string]string, error) {
-	if e.tools == nil {
-		if def.Optional {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("tool invoker not configured")
-	}
-
-	// Build JSON params: interpolate {{input.key}} placeholders.
-	paramMap := make(map[string]string, len(def.Params))
-	for k, v := range def.Params {
-		paramMap[k] = Interpolate(v, inputs)
-	}
-	raw, err := json.Marshal(paramMap)
-	if err != nil {
-		return nil, fmt.Errorf("marshal tool params: %w", err)
-	}
-
-	result, err := e.tools.Invoke(ctx, def.ToolName, raw)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(def.Outputs) == 0 {
-		return nil, nil
-	}
-
-	// Extract top-level string values from the result JSON object.
-	var resultMap map[string]json.RawMessage
-	if err := json.Unmarshal(result, &resultMap); err != nil {
-		return nil, fmt.Errorf("unmarshal tool result: %w", err)
-	}
-	outputs := make(map[string]string, len(def.Outputs))
-	for resultKey, inputKey := range def.Outputs {
-		raw, ok := resultMap[resultKey]
-		if !ok {
-			continue
-		}
-		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
-			// Not a JSON string: use raw representation.
-			s = string(raw)
-		}
-		outputs[inputKey] = s
-	}
-	return outputs, nil
-}
-
-// executeAction builds a device command from action, dispatches it, and waits
-// for the device response. Returns the CommandResult (including Raw payload) on
-// success, or an empty result with a non-nil error on failure.
-func (e *Engine) executeAction(
-	ctx context.Context,
-	state *domain.WorkflowState,
-	task *domain.Task,
-	action *domain.ActionDef,
-) (domain.CommandResult, error) {
-	cmd, err := buildCommand(action, state.DeviceID, task.ID, state.Inputs)
-	if err != nil {
-		return domain.CommandResult{}, fmt.Errorf("build command: %w", err)
-	}
-
-	ch, err := e.disp.Dispatch(ctx, cmd)
-	if err != nil {
-		return domain.CommandResult{}, fmt.Errorf("dispatch: %w", err)
-	}
-
-	select {
-	case result := <-ch:
-		if !result.Success {
-			if result.Err != nil {
-				return domain.CommandResult{}, fmt.Errorf("device error %d: %s", result.Err.Code, result.Err.Message)
-			}
-			return domain.CommandResult{}, fmt.Errorf("action returned failure")
-		}
-		return result, nil
-	case <-ctx.Done():
-		return domain.CommandResult{}, ctx.Err()
-	}
-}
-
 func (e *Engine) resolveDef(ctx context.Context, name string) (*domain.WorkflowDef, error) {
 	if name != "" {
-		if d, err := e.defs.Get(ctx, name); err == nil {
+		d, err := e.defs.Get(ctx, name)
+		if err == nil {
 			return d, nil
+		}
+		if !errors.Is(err, ErrWorkflowDefNotFound) {
+			// Propagate genuine store errors; only fall back to "default" on not-found.
+			return nil, err
 		}
 	}
 	// Fall back to the "default" workflow def for tasks with no explicit name.
@@ -418,7 +330,6 @@ func (e *Engine) resolveDef(ctx context.Context, name string) (*domain.WorkflowD
 }
 
 // --- helpers ---
-
 
 func cloneState(s *domain.WorkflowState) *domain.WorkflowState {
 	next := *s

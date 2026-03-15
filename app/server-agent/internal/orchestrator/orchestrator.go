@@ -99,31 +99,31 @@ func (o *Orchestrator) ProcessAcceptedEvent(ctx context.Context, e domain.Event)
 		o.metrics.ObserveIngestLag(source, time.Since(e.OccurredAt))
 	}
 
-	tasks, err := o.tasks.ListByDevice(ctx, e.DeviceID)
+	tasks, err := o.tasks.ListActiveByDevice(ctx, e.DeviceID)
 	if err != nil {
 		o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&e, nil, fmt.Sprintf("list tasks: %v", err), "orchestrator"))
 		return fmt.Errorf("list tasks for device %s: %w", e.DeviceID, err)
 	}
 
-	var processErr error
+	if err := o.processTasksForEvent(ctx, e, tasks); err != nil {
+		o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&e, nil, err.Error(), "orchestrator"))
+		return err
+	}
+	return nil
+}
+
+func (o *Orchestrator) processTasksForEvent(ctx context.Context, e domain.Event, tasks []*domain.Task) error {
+	var firstErr error
 	for _, task := range tasks {
-		if task.Status.IsTerminal() {
-			continue
-		}
 		if err := o.processForTask(ctx, e, task); err != nil {
 			o.log.Error("process event for task failed",
 				"taskId", task.ID, "deviceId", e.DeviceID, "err", err)
-			if processErr == nil {
-				processErr = err
+			if firstErr == nil {
+				firstErr = err
 			}
 		}
 	}
-	if processErr != nil {
-		o.recordDeadLetter(ctx, domain.NewDeadLetterRecord(&e, nil, processErr.Error(), "orchestrator"))
-		return processErr
-	}
-
-	return nil
+	return firstErr
 }
 
 func (o *Orchestrator) RecordDeadLetter(ctx context.Context, record domain.DeadLetterRecord) error {
@@ -149,78 +149,105 @@ func (o *Orchestrator) SetOnTaskTerminal(f func(ctx context.Context, task *domai
 }
 
 func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task *domain.Task) error {
-	state, err := o.states.Get(ctx, task.ID, e.DeviceID)
+	state, err := o.loadState(ctx, task, e.DeviceID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			state = domain.NewBootstrapWorkflowState(task, e.DeviceID)
-		} else {
-			return fmt.Errorf("load workflow state: %w", err)
-		}
+		return err
 	}
-
 	if state.IsTerminal() {
 		return nil
 	}
 
-	newState, terminal, err := o.engine.ProcessEvent(ctx, state, task.WorkflowName, task, e)
+	result, err := o.engine.Handle(ctx, workflow.EngineCommand{
+		State: state, WorkflowName: task.WorkflowName, Task: task, Event: e,
+	})
 	if err != nil {
-		if errors.Is(err, workflow.ErrWorkflowDefNotFound) {
-			// Workflow def is unresolvable — permanently fail the task so subsequent
-			// device events don't keep retrying an unbounded bootstrap loop.
-			task.Status = domain.TaskStatusFailed
-			task.UpdatedAt = time.Now()
-			if saveErr := o.tasks.Save(ctx, task); saveErr != nil {
-				o.log.Error("save failed task after bootstrap error", "taskId", task.ID, "err", saveErr)
-			} else if o.onTaskTerminal != nil {
-				go o.onTaskTerminal(context.Background(), task)
-			}
-		}
-		return fmt.Errorf("engine: %w", err)
+		return o.handleEngineError(ctx, task, err)
 	}
-	if newState == nil {
+	if result.State == nil {
 		return nil // event not relevant to current step
 	}
 
-	newState.UpdatedAt = time.Now()
-	if err := o.states.Save(ctx, newState); err != nil {
-		return fmt.Errorf("checkpoint: %w", err)
+	if err := o.checkpoint(ctx, result.State); err != nil {
+		return err
 	}
+	o.syncWatchdog(task.ID, result.State)
 
-	if o.watchdog != nil {
-		if newState.WaitingExpect != nil {
-			o.watchdog.Track(task.ID, newState.DeviceID, newState.DeadlineAt)
-		} else if newState.RetryCount > 0 {
-			// Retry-pending: action failed but budget remains. Track with a short
-			// deadline so the watchdog fires a tick that re-executes the action
-			// within one tick interval instead of waiting for the next device event.
-			o.watchdog.Track(task.ID, newState.DeviceID, time.Now().Add(o.watchdog.tickInterval))
-		} else {
-			o.watchdog.Untrack(task.ID)
-		}
+	if result.Terminal {
+		return o.finalizeTask(ctx, task, result.State, e.DeviceID)
 	}
+	return nil
+}
 
-	if terminal {
-		status := domain.TaskStatusCompleted
-		if !newState.TerminalSuccess {
-			status = domain.TaskStatusFailed
+func (o *Orchestrator) loadState(ctx context.Context, task *domain.Task, deviceID domain.DeviceID) (*domain.WorkflowState, error) {
+	state, err := o.states.Get(ctx, task.ID, deviceID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.NewBootstrapWorkflowState(task, deviceID), nil
 		}
-		task.Status = status
+		return nil, fmt.Errorf("load workflow state: %w", err)
+	}
+	return state, nil
+}
+
+func (o *Orchestrator) handleEngineError(ctx context.Context, task *domain.Task, err error) error {
+	if errors.Is(err, workflow.ErrWorkflowDefNotFound) {
+		// Workflow def is unresolvable — permanently fail the task so subsequent
+		// device events don't keep retrying an unbounded bootstrap loop.
+		task.Status = domain.TaskStatusFailed
 		task.UpdatedAt = time.Now()
-		if err := o.tasks.Save(ctx, task); err != nil {
-			return fmt.Errorf("save terminal task: %w", err)
-		}
-		o.log.Info("workflow terminal",
-			"taskId", task.ID,
-			"deviceId", e.DeviceID,
-			"success", newState.TerminalSuccess,
-		)
-		if o.onTaskTerminal != nil {
-			// Run async so the terminal callback (e.g. device re-assignment)
-			// does not block or deadlock the current orchestrator lane.
+		if saveErr := o.tasks.Save(ctx, task); saveErr != nil {
+			o.log.Error("save failed task after bootstrap error", "taskId", task.ID, "err", saveErr)
+		} else if o.onTaskTerminal != nil {
 			go o.onTaskTerminal(context.Background(), task)
 		}
 	}
+	return fmt.Errorf("engine: %w", err)
+}
 
+func (o *Orchestrator) checkpoint(ctx context.Context, state *domain.WorkflowState) error {
+	state.UpdatedAt = time.Now()
+	if err := o.states.Save(ctx, state); err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) syncWatchdog(taskID domain.TaskID, state *domain.WorkflowState) {
+	if o.watchdog == nil {
+		return
+	}
+	if state.WaitingExpect != nil {
+		o.watchdog.Track(taskID, state.DeviceID, state.DeadlineAt)
+	} else if state.RetryCount > 0 {
+		// Retry-pending: action failed but budget remains. Track with a short
+		// deadline so the watchdog fires a tick that re-executes the action
+		// within one tick interval instead of waiting for the next device event.
+		o.watchdog.Track(taskID, state.DeviceID, time.Now().Add(o.watchdog.tickInterval))
+	} else {
+		o.watchdog.Untrack(taskID)
+	}
+}
+
+func (o *Orchestrator) finalizeTask(ctx context.Context, task *domain.Task, state *domain.WorkflowState, deviceID domain.DeviceID) error {
+	status := domain.TaskStatusCompleted
+	if !state.TerminalSuccess {
+		status = domain.TaskStatusFailed
+	}
+	task.Status = status
+	task.UpdatedAt = time.Now()
+	if err := o.tasks.Save(ctx, task); err != nil {
+		return fmt.Errorf("save terminal task: %w", err)
+	}
+	o.log.Info("workflow terminal",
+		"taskId", task.ID,
+		"deviceId", deviceID,
+		"success", state.TerminalSuccess,
+	)
+	if o.onTaskTerminal != nil {
+		// Run async so the terminal callback (e.g. device re-assignment)
+		// does not block or deadlock the current orchestrator lane.
+		go o.onTaskTerminal(context.Background(), task)
+	}
 	return nil
 }
 

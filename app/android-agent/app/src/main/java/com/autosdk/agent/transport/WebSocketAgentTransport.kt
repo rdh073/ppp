@@ -127,9 +127,9 @@ class WebSocketAgentTransport(
         socket.send(json.encodeToString(request))
     }
 
-    suspend fun sendNotification(
+    override suspend fun sendNotification(
         method: String,
-        params: JsonElement = JsonNull,
+        params: JsonElement,
     ): Boolean {
         val socket = webSocket ?: run {
             logWarn("sendNotification: no active WebSocket for method=$method")

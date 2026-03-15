@@ -76,6 +76,18 @@ func (s *FileTaskStore) ListByDevice(_ context.Context, deviceID domain.DeviceID
 	return out, nil
 }
 
+func (s *FileTaskStore) ListActiveByDevice(_ context.Context, deviceID domain.DeviceID) ([]*domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*domain.Task
+	for _, task := range s.tasks {
+		if task.AssignedDevice == deviceID && !task.Status.IsTerminal() {
+			out = append(out, cloneTask(task))
+		}
+	}
+	return out, nil
+}
+
 func (s *FileTaskStore) persistLocked() error {
 	snapshot := make(map[domain.TaskID]*domain.Task, len(s.tasks))
 	for id, task := range s.tasks {

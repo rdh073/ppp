@@ -6,6 +6,24 @@ import java.time.Instant
 import java.util.UUID
 
 /**
+ * Returns true when a node should be included in the snapshot.
+ *
+ * - [visible] && [hasArea]: normal visible node occupying screen space.
+ * - [hasId]: resource ID present — server can target it even if temporarily off-screen.
+ * - [hasText]: carries text or content description — useful for text-based selectors.
+ *
+ * Invisible, zero-area nodes with no ID or text are pure layout containers
+ * that carry no information the server can act on. They are excluded to
+ * keep the snapshot compact, but their children are still traversed.
+ */
+internal fun shouldIncludeNode(
+    visible: Boolean,
+    hasArea: Boolean,
+    hasId: Boolean,
+    hasText: Boolean,
+): Boolean = (visible && hasArea) || hasId || hasText
+
+/**
  * Builds a [UiSnapshot] by traversing one or more live accessibility node trees.
  *
  * Multiple roots are accepted to support multi-window scenarios: when a system dialog
@@ -30,6 +48,7 @@ object SnapshotBuilder {
         deviceId: String,
         packageName: String?,
         activityName: String?,
+        hasSystemWindow: Boolean = false,
     ): UiSnapshot {
         val snapshotId = UUID.randomUUID().toString()
         val targets = mutableListOf<UiTarget>()
@@ -39,14 +58,30 @@ object SnapshotBuilder {
             root.recycle()
         }
 
+        val screenState = when {
+            targets.any { it.uiRole == "loading" && it.enabled } -> "loading"
+            hasSystemWindow -> "dialog"
+            else -> "ready"
+        }
+        val semanticProjection =
+            buildSemanticProjection(
+                rawTargets = targets,
+                packageName = packageName,
+                activityName = activityName,
+                screenState = screenState,
+            )
+        val focusedTargetId = targets.firstOrNull { it.focused }?.targetId
+
         return UiSnapshot(
             snapshotId = snapshotId,
             deviceId = deviceId,
             packageName = packageName,
             activityName = activityName,
-            screenState = null, // classified by the server's observation domain
+            screenState = screenState,
+            focusedTargetId = focusedTargetId,
+            semantic = semanticProjection.semantic,
             capturedAt = Instant.now().toString(),
-            targets = targets,
+            targets = semanticProjection.targets,
         )
     }
 
@@ -63,11 +98,7 @@ object SnapshotBuilder {
         val hasId = !node.viewIdResourceName.isNullOrBlank()
         val hasText = !node.text.isNullOrBlank() || !node.contentDescription.isNullOrBlank()
 
-        // Drop invisible/zero-area nodes that carry nothing the server can act on.
-        // Keep anything with a resourceId (findable by server even if temporarily off-screen)
-        // or anything visible with area (normal case).
-        val include = visible && hasArea || hasId || hasText
-        if (!include) {
+        if (!shouldIncludeNode(visible, hasArea, hasId, hasText)) {
             // Still recurse — a visible child may live under an invisible container.
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue
@@ -83,10 +114,25 @@ object SnapshotBuilder {
         val actionable = node.isClickable || node.isLongClickable ||
                 node.isCheckable || node.isEditable || node.isFocusable
 
+        val uiRole = classifyUiRole(
+            className = node.className?.toString(),
+            isEditable = node.isEditable,
+            isClickable = node.isClickable,
+            isCheckable = node.isCheckable,
+            isScrollable = node.isScrollable,
+        )
+        val label = if (uiRole == "input" || uiRole == "checkbox" || uiRole == "switch" || uiRole == "radio")
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        else null
+
         targets.add(
             UiTarget(
                 targetId = targetId,
                 role = node.className?.toString()?.substringAfterLast('.'),
+                uiRole = uiRole,
+                label = label,
+                semanticKey = null,
+                formKey = null,
                 text = node.text?.toString()?.takeIf { it.isNotBlank() },
                 contentDesc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() },
                 resourceId = node.viewIdResourceName?.takeIf { it.isNotBlank() },

@@ -1,5 +1,7 @@
 package com.autosdk.agent.state
 
+import kotlinx.serialization.json.JsonObject
+
 sealed interface AgentEffect {
     data object ConnectSocket : AgentEffect
 
@@ -26,4 +28,6 @@ sealed interface AgentEffect {
     data object ClearInflightCommand : AgentEffect
 
     data class Log(val message: String) : AgentEffect
+
+    data class PublishUiEvent(val method: String, val params: JsonObject) : AgentEffect
 }

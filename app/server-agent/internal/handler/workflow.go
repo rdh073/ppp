@@ -73,6 +73,10 @@ func (h *WorkflowHandler) put(w http.ResponseWriter, r *http.Request, name strin
 	if def.Name == "" {
 		def.Name = name
 	}
+	if err := workflow.Validate(&def); err != nil {
+		http.Error(w, "invalid workflow: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.defs.Put(r.Context(), name, &def); err != nil {
 		h.log.Error("workflow put failed", "name", name, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

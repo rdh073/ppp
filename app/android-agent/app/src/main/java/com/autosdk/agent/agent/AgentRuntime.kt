@@ -228,15 +228,7 @@ class AgentRuntime(
     }
 
     private suspend fun handleCapabilitiesGet(req: JsonRpcRequest) {
-        transport.sendSuccess(req.id, buildJsonArray {
-            capabilities.forEach { cap ->
-                addJsonObject {
-                    put("name", cap["name"] as String)
-                    put("available", cap["available"] as Boolean)
-                    (cap["reason"] as? String)?.takeIf { it.isNotBlank() }?.let { put("reason", it) }
-                }
-            }
-        })
+        transport.sendSuccess(req.id, AgentCapabilities.capabilitiesToJson(capabilities))
     }
 
     private suspend fun sendTrackedSuccess(
@@ -258,21 +250,121 @@ class AgentRuntime(
 
     // ---- serialisation helpers ----
 
-    private fun snapshotToJson(snapshot: UiSnapshot): JsonElement = buildJsonObject {
+    private fun snapshotToJson(snapshot: UiSnapshot): JsonElement =
+        UiSnapshotSerializer.toJson(snapshot)
+
+    private fun targetToJson(target: UiTarget): JsonElement =
+        UiSnapshotSerializer.targetToJson(target)
+
+    // ---- parsing helpers ----
+
+    private fun parseSelector(obj: JsonObject): Selector? =
+        AgentProtocolDeserializer.parseSelector(obj)
+
+    private fun parseAction(obj: JsonObject): AutomationAction? =
+        AgentProtocolDeserializer.parseAction(obj)
+}
+
+// ---- extension ----
+
+private fun ActionResult.Failed.toErrorCode(): Int = when (failureClass) {
+    "target_not_found" -> JsonRpcErrorCode.TARGET_NOT_FOUND
+    "target_not_actionable" -> JsonRpcErrorCode.TARGET_NOT_ACTIONABLE
+    "capability_unavailable" -> JsonRpcErrorCode.CAPABILITY_UNAVAILABLE
+    "input_rejected" -> JsonRpcErrorCode.INPUT_REJECTED
+    "device_unavailable" -> JsonRpcErrorCode.DEVICE_UNAVAILABLE
+    else -> JsonRpcErrorCode.INTERNAL_ERROR
+}
+
+private fun logInfo(message: String) {
+    runCatching { Log.i(TAG, message) }
+}
+
+private fun logDebug(message: String) {
+    runCatching { Log.d(TAG, message) }
+}
+
+private fun logError(
+    message: String,
+    error: Throwable,
+) {
+    runCatching { Log.e(TAG, message, error) }
+}
+
+private fun logWarn(message: String) {
+    runCatching { Log.w(TAG, message) }
+}
+
+// ---- serializers ----
+
+/**
+ * Serializes [UiSnapshot] and [UiTarget] to JSON for the agent wire protocol.
+ * Extracted so snapshot serialization can be tested without constructing a full runtime.
+ */
+internal object UiSnapshotSerializer {
+    fun toJson(snapshot: UiSnapshot): JsonElement = buildJsonObject {
         put("snapshotId", snapshot.snapshotId)
         put("deviceId", snapshot.deviceId)
         snapshot.packageName?.let { put("packageName", it) }
         snapshot.activityName?.let { put("activityName", it) }
         snapshot.screenState?.let { put("screenState", it) }
+        snapshot.focusedTargetId?.let { put("focusedTargetId", it) }
+        put(
+            "semantic",
+            buildJsonObject {
+                put("activeUiKey", snapshot.semantic.activeUiKey)
+                put("baseScreenKey", snapshot.semantic.baseScreenKey)
+                snapshot.semantic.overlayKey?.let { put("overlayKey", it) }
+                put("uiReady", snapshot.semantic.uiReady)
+                put("semanticDigest", snapshot.semantic.semanticDigest)
+                snapshot.semantic.focusedTargetKey?.let { put("focusedTargetKey", it) }
+                put(
+                    "forms",
+                    buildJsonArray {
+                        snapshot.semantic.forms.forEach { form ->
+                            add(
+                                buildJsonObject {
+                                    put("formKey", form.formKey)
+                                    put("fieldKeys", buildJsonArray {
+                                        form.fieldKeys.forEach { add(it) }
+                                    })
+                                    form.focusedFieldKey?.let { put("focusedFieldKey", it) }
+                                    put("ready", form.ready)
+                                },
+                            )
+                        }
+                    },
+                )
+                put(
+                    "buttons",
+                    buildJsonArray {
+                        snapshot.semantic.buttons.forEach { button ->
+                            add(
+                                buildJsonObject {
+                                    put("buttonKey", button.buttonKey)
+                                    put("enabled", button.enabled)
+                                    put("visible", button.visible)
+                                    put("primary", button.primary)
+                                },
+                            )
+                        }
+                    },
+                )
+            },
+        )
         put("capturedAt", snapshot.capturedAt)
         put("targets", buildJsonArray {
             snapshot.targets.forEach { add(targetToJson(it)) }
         })
     }
 
-    private fun targetToJson(target: UiTarget): JsonElement = buildJsonObject {
+    fun targetToJson(target: UiTarget): JsonElement = buildJsonObject {
         put("targetId", target.targetId)
         target.role?.let { put("role", it) }
+        put("uiRole", target.uiRole)
+        target.label?.let { put("label", it) }
+        target.semanticKey?.let { put("semanticKey", it) }
+        target.formKey?.let { put("formKey", it) }
         target.text?.let { put("text", it) }
         target.resourceId?.let { put("resourceId", it) }
         target.packageName?.let { put("packageName", it) }
@@ -286,15 +378,20 @@ class AgentRuntime(
         put("password", target.password)
         // contentDesc omitted — not in the contracts UiTargetSchema wire format.
     }
+}
 
-    // ---- parsing helpers ----
-
-    private fun parseSelector(obj: JsonObject): Selector? {
+/**
+ * Deserializes selector and action objects from the agent wire protocol.
+ * Extracted so protocol parsing can be tested without constructing a full runtime.
+ */
+internal object AgentProtocolDeserializer {
+    fun parseSelector(obj: JsonObject): Selector? {
         val kind = obj["kind"]?.jsonPrimitive?.contentOrNull ?: return null
         val value = obj["value"]?.jsonPrimitive?.contentOrNull ?: return null
         val selectorKind = when (kind) {
             "text" -> SelectorKind.TEXT
             "resource_id" -> SelectorKind.RESOURCE_ID
+            "semantic_key" -> SelectorKind.SEMANTIC_KEY
             "target_id" -> SelectorKind.TARGET_ID
             "content_desc" -> SelectorKind.CONTENT_DESC
             "bounds" -> SelectorKind.BOUNDS
@@ -305,7 +402,7 @@ class AgentRuntime(
         return Selector(selectorKind, value)
     }
 
-    private fun parseAction(obj: JsonObject): AutomationAction? {
+    fun parseAction(obj: JsonObject): AutomationAction? {
         val kind = obj["kind"]?.jsonPrimitive?.contentOrNull ?: return null
         return when (kind) {
             "click" -> AutomationAction.Click(
@@ -359,34 +456,4 @@ class AgentRuntime(
             else -> null
         }
     }
-}
-
-// ---- extension ----
-
-private fun ActionResult.Failed.toErrorCode(): Int = when (failureClass) {
-    "target_not_found" -> JsonRpcErrorCode.TARGET_NOT_FOUND
-    "target_not_actionable" -> JsonRpcErrorCode.TARGET_NOT_ACTIONABLE
-    "capability_unavailable" -> JsonRpcErrorCode.CAPABILITY_UNAVAILABLE
-    "input_rejected" -> JsonRpcErrorCode.INPUT_REJECTED
-    "device_unavailable" -> JsonRpcErrorCode.DEVICE_UNAVAILABLE
-    else -> JsonRpcErrorCode.INTERNAL_ERROR
-}
-
-private fun logInfo(message: String) {
-    runCatching { Log.i(TAG, message) }
-}
-
-private fun logDebug(message: String) {
-    runCatching { Log.d(TAG, message) }
-}
-
-private fun logError(
-    message: String,
-    error: Throwable,
-) {
-    runCatching { Log.e(TAG, message, error) }
-}
-
-private fun logWarn(message: String) {
-    runCatching { Log.w(TAG, message) }
 }

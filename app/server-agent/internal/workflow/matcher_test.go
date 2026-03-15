@@ -15,8 +15,12 @@ func makeEvent(kind domain.EventKind, payload string) domain.Event {
 	}
 }
 
-const androidKind domain.EventKind = "android.window.state_changed"
-const otherKind domain.EventKind = "android.screen.changed"
+const androidKind domain.EventKind = domain.EventKindScreenChanged
+const otherKind domain.EventKind = domain.EventKindAppForeground
+
+func boolPtr(v bool) *bool {
+	return &v
+}
 
 // TestMatchEvent_EmptyMatchesAll verifies that an empty EventMatch matches any event.
 func TestMatchEvent_EmptyMatchesAll(t *testing.T) {
@@ -115,6 +119,71 @@ func TestMatchEvent_TextContains(t *testing.T) {
 	}
 	if workflow.MatchEvent(m2, event) {
 		t.Error("EventMatch with non-matching TextContains should not match")
+	}
+}
+
+func TestMatchEvent_UI_Match(t *testing.T) {
+	event := makeEvent(domain.EventKindScreenChanged, `{
+		"packageName": "cn.wps.moffice_eng",
+		"className": "cn.wps.moffice.MainActivity",
+		"ui": {
+			"activeUiKey": "wps.editor.ready",
+			"baseScreenKey": "wps.editor",
+			"overlayKey": "export.sheet",
+			"uiReady": true,
+			"focusedTargetKey": "rename.title",
+			"forms": [
+				{"formKey": "rename.document", "ready": true}
+			],
+			"buttons": [
+				{"buttonKey": "export.pdf.confirm", "enabled": true, "visible": true, "primary": true}
+			]
+		}
+	}`)
+
+	match := domain.EventMatch{
+		Kind: domain.EventKindScreenChanged,
+		UI: &domain.UiMatch{
+			ActiveUIKey:      "wps.editor.ready",
+			BaseScreenKey:    "wps.editor",
+			OverlayKey:       "export.sheet",
+			UIReady:          boolPtr(true),
+			FormKey:          "rename.document",
+			FormReady:        boolPtr(true),
+			ButtonKey:        "export.pdf.confirm",
+			ButtonEnabled:    boolPtr(true),
+			FocusedTargetKey: "rename.title",
+		},
+	}
+
+	if !workflow.MatchEvent(match, event) {
+		t.Fatal("semantic UI event should match")
+	}
+}
+
+func TestMatchEvent_UI_Mismatch(t *testing.T) {
+	event := makeEvent(domain.EventKindScreenChanged, `{
+		"ui": {
+			"activeUiKey": "wps.editor.ready",
+			"uiReady": true,
+			"buttons": [
+				{"buttonKey": "export.pdf.confirm", "enabled": false, "visible": true, "primary": true}
+			]
+		}
+	}`)
+
+	match := domain.EventMatch{
+		Kind: domain.EventKindScreenChanged,
+		UI: &domain.UiMatch{
+			ActiveUIKey:   "wps.editor.ready",
+			UIReady:       boolPtr(true),
+			ButtonKey:     "export.pdf.confirm",
+			ButtonEnabled: boolPtr(true),
+		},
+	}
+
+	if workflow.MatchEvent(match, event) {
+		t.Fatal("semantic UI mismatch should not match")
 	}
 }
 
@@ -228,6 +297,81 @@ func TestSnapshotMatchesExpect_EmptyRaw(t *testing.T) {
 	}
 }
 
+func TestSnapshotMatchesExpect_UI_Match(t *testing.T) {
+	raw := json.RawMessage(`{
+		"snapshotAfter": {
+			"packageName": "cn.wps.moffice_eng",
+			"activityName": "cn.wps.moffice.MainActivity",
+			"targets": [
+				{"text": "Export", "packageName": "cn.wps.moffice_eng"},
+				{"label": "Confirm export", "packageName": "cn.wps.moffice_eng"}
+			],
+			"semantic": {
+				"activeUiKey": "wps.export.pdf.dialog",
+				"baseScreenKey": "wps.editor",
+				"overlayKey": "wps.export.pdf.dialog",
+				"uiReady": true,
+				"focusedTargetKey": "export.filename",
+				"forms": [
+					{"formKey": "export.pdf", "ready": true}
+				],
+				"buttons": [
+					{"buttonKey": "export.pdf.confirm", "enabled": true, "visible": true, "primary": true}
+				]
+			}
+		}
+	}`)
+
+	exp := domain.ExpectDef{
+		Package:      "cn.wps.moffice_eng",
+		TextContains: "Confirm export",
+		UI: &domain.UiMatch{
+			ActiveUIKey:      "wps.export.pdf.dialog",
+			BaseScreenKey:    "wps.editor",
+			OverlayKey:       "wps.export.pdf.dialog",
+			UIReady:          boolPtr(true),
+			FormKey:          "export.pdf",
+			FormReady:        boolPtr(true),
+			ButtonKey:        "export.pdf.confirm",
+			ButtonEnabled:    boolPtr(true),
+			FocusedTargetKey: "export.filename",
+		},
+	}
+
+	if !workflow.SnapshotMatchesExpect(raw, exp) {
+		t.Fatal("snapshot semantic UI should match")
+	}
+}
+
+func TestSnapshotMatchesExpect_UI_Mismatch(t *testing.T) {
+	raw := json.RawMessage(`{
+		"snapshotAfter": {
+			"packageName": "cn.wps.moffice_eng",
+			"activityName": "cn.wps.moffice.MainActivity",
+			"semantic": {
+				"activeUiKey": "wps.export.pdf.dialog",
+				"uiReady": false,
+				"buttons": [
+					{"buttonKey": "export.pdf.confirm", "enabled": false, "visible": true, "primary": true}
+				]
+			}
+		}
+	}`)
+
+	exp := domain.ExpectDef{
+		UI: &domain.UiMatch{
+			ActiveUIKey:   "wps.export.pdf.dialog",
+			UIReady:       boolPtr(true),
+			ButtonKey:     "export.pdf.confirm",
+			ButtonEnabled: boolPtr(true),
+		},
+	}
+
+	if workflow.SnapshotMatchesExpect(raw, exp) {
+		t.Fatal("snapshot semantic mismatch should not match")
+	}
+}
+
 // TestMatchExpect_Basic verifies MatchExpect has identical semantics to MatchEvent.
 func TestMatchExpect_Basic(t *testing.T) {
 	event := makeEvent(androidKind, `{
@@ -265,5 +409,31 @@ func TestMatchExpect_Basic(t *testing.T) {
 	}
 	if !workflow.MatchExpect(e2, event) {
 		t.Error("ExpectDef should match text found in activeWindowTitle")
+	}
+}
+
+func TestMatchExpect_UI(t *testing.T) {
+	event := makeEvent(otherKind, `{
+		"ui": {
+			"activeUiKey": "wps.editor.ready",
+			"uiReady": true,
+			"buttons": [
+				{"buttonKey": "editor.toolbar.export", "enabled": true, "visible": true, "primary": true}
+			]
+		}
+	}`)
+
+	exp := domain.ExpectDef{
+		Kind: otherKind,
+		UI: &domain.UiMatch{
+			ActiveUIKey:   "wps.editor.ready",
+			UIReady:       boolPtr(true),
+			ButtonKey:     "editor.toolbar.export",
+			ButtonEnabled: boolPtr(true),
+		},
+	}
+
+	if !workflow.MatchExpect(exp, event) {
+		t.Fatal("semantic UI expect should match")
 	}
 }

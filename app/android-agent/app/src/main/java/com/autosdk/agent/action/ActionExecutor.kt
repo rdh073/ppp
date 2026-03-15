@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.autosdk.agent.observation.SnapshotBuilder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -22,6 +24,13 @@ private const val TAG = "ActionExecutor"
  *
  * All methods are synchronous and should be called from a coroutine context
  * that tolerates blocking (e.g. Dispatchers.IO).
+ *
+ * ### Node recycling ownership
+ * - Nodes returned from [withNode] are recycled by [withNode]'s `try/finally` block.
+ *   The [block] lambda must not recycle the node it receives.
+ * - Nodes returned from [findSelfOrAncestor] are owned by the caller; the Click and
+ *   LongPress handlers recycle them in their own `finally` blocks when the found
+ *   node differs from the starting node (i.e. an ancestor was climbed to).
  */
 class ActionExecutor(private val service: AccessibilityService) {
 
@@ -178,13 +187,13 @@ class ActionExecutor(private val service: AccessibilityService) {
      * Finds the first accessibility node matching [selector] in the live tree.
      * Caller is responsible for recycling the returned node.
      *
-     * For TEXT / RESOURCE_ID / CONTENT_DESC selectors the search spans ALL
+     * For TEXT / RESOURCE_ID / CONTENT_DESC / SEMANTIC_KEY selectors the search spans ALL
      * accessibility windows so that nodes in non-focused floating windows
      * (e.g. SubSettings in Waydroid freeform mode) are included.
      */
     fun findNode(selector: Selector): AccessibilityNodeInfo? {
         return when (selector.kind) {
-            SelectorKind.TEXT, SelectorKind.RESOURCE_ID, SelectorKind.CONTENT_DESC ->
+            SelectorKind.TEXT, SelectorKind.RESOURCE_ID, SelectorKind.CONTENT_DESC, SelectorKind.SEMANTIC_KEY ->
                 findInAllWindows(selector)
 
             else -> {
@@ -204,32 +213,83 @@ class ActionExecutor(private val service: AccessibilityService) {
 
     /**
      * Searches all accessibility windows (not just the focused one) for
-     * TEXT / RESOURCE_ID / CONTENT_DESC selectors.
+     * TEXT / RESOURCE_ID / CONTENT_DESC / SEMANTIC_KEY selectors.
      */
     private fun findInAllWindows(selector: Selector): AccessibilityNodeInfo? {
         val windows = service.windows?.takeIf { it.isNotEmpty() }
             ?: return service.rootInActiveWindow?.let { root ->
-                val node = searchTextLike(root, selector)
-                root.recycle()
+                val node = searchAcrossSnapshot(root, selector)
+                if (node == null) {
+                    root.recycle()
+                }
                 node
             }
         for (window in windows) {
             val root = window.root ?: continue
-            val node = searchTextLike(root, selector)
+            val node = searchAcrossSnapshot(root, selector)
+            if (node != null) {
+                return node
+            }
             root.recycle()
-            if (node != null) return node
         }
         return null
     }
 
-    private fun searchTextLike(root: AccessibilityNodeInfo, selector: Selector): AccessibilityNodeInfo? =
+    private fun searchAcrossSnapshot(root: AccessibilityNodeInfo, selector: Selector): AccessibilityNodeInfo? =
         when (selector.kind) {
-            SelectorKind.TEXT, SelectorKind.CONTENT_DESC ->
-                root.findAccessibilityNodeInfosByText(selector.value).firstOrNull()
+            SelectorKind.TEXT ->
+                findNodeByText(root, selector.value)
+            SelectorKind.CONTENT_DESC ->
+                findNodeByContentDescription(root, selector.value)
             SelectorKind.RESOURCE_ID ->
-                root.findAccessibilityNodeInfosByViewId(selector.value).firstOrNull()
+                findNodeByResourceId(root, selector.value)
+            SelectorKind.SEMANTIC_KEY ->
+                findNodeBySemanticKey(root, selector.value)
             else -> null
         }
+
+    private fun findNodeBySemanticKey(
+        root: AccessibilityNodeInfo,
+        semanticKey: String,
+    ): AccessibilityNodeInfo? {
+        val windowRoots =
+            service.windows
+                ?.filter { win ->
+                    win.type == AccessibilityWindowInfo.TYPE_APPLICATION ||
+                        win.type == AccessibilityWindowInfo.TYPE_SYSTEM
+                }
+                ?.mapNotNull { it.root }
+                ?.takeIf { it.isNotEmpty() }
+                ?: listOf(root)
+        val snapshotRoots = windowRoots.map { AccessibilityNodeInfo.obtain(it) }
+
+        val foregroundPkg = windowRoots.firstOrNull()?.packageName?.toString()
+        val hasSystemWindow = service.windows?.any { it.type == AccessibilityWindowInfo.TYPE_SYSTEM } == true
+        val snapshot =
+            SnapshotBuilder.build(
+                roots = snapshotRoots,
+                deviceId = "",
+                packageName = foregroundPkg,
+                activityName = null,
+                hasSystemWindow = hasSystemWindow,
+            )
+
+        val target = snapshot.targets.firstOrNull { it.semanticKey == semanticKey } ?: return null
+
+        return when {
+            !target.resourceId.isNullOrBlank() ->
+                searchAcrossSnapshot(root, Selector(SelectorKind.RESOURCE_ID, target.resourceId))
+
+            !target.label.isNullOrBlank() ->
+                searchAcrossSnapshot(root, Selector(SelectorKind.CONTENT_DESC, target.label))
+
+            !target.text.isNullOrBlank() ->
+                searchAcrossSnapshot(root, Selector(SelectorKind.TEXT, target.text))
+
+            else ->
+                findNodeByTargetId(root, target.targetId)
+        }
+    }
 
     // ---- private helpers ----
 
@@ -377,6 +437,48 @@ class ActionExecutor(private val service: AccessibilityService) {
         for (i in 0 until root.childCount) {
             val child = root.getChild(i) ?: continue
             val result = findNodeByPackageName(child, packageName)
+            if (result != null) {
+                if (result !== child) child.recycle()
+                return result
+            }
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findNodeByContentDescription(root: AccessibilityNodeInfo, contentDescription: String): AccessibilityNodeInfo? {
+        if (root.contentDescription?.toString() == contentDescription) return root
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            val result = findNodeByContentDescription(child, contentDescription)
+            if (result != null) {
+                if (result !== child) child.recycle()
+                return result
+            }
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findNodeByText(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+        if (root.text?.toString() == text) return root
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            val result = findNodeByText(child, text)
+            if (result != null) {
+                if (result !== child) child.recycle()
+                return result
+            }
+            child.recycle()
+        }
+        return null
+    }
+
+    private fun findNodeByResourceId(root: AccessibilityNodeInfo, resourceId: String): AccessibilityNodeInfo? {
+        if (root.viewIdResourceName == resourceId) return root
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            val result = findNodeByResourceId(child, resourceId)
             if (result != null) {
                 if (result !== child) child.recycle()
                 return result

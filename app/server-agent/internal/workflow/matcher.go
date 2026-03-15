@@ -11,12 +11,13 @@ import (
 // for android.* notification events. Fields are optional; missing fields are
 // treated as empty strings.
 type deviceEventPayload struct {
-	EventType          string   `json:"eventType"`
-	PackageName        string   `json:"packageName"`
-	ClassName          string   `json:"className"`
-	Text               []string `json:"text"`
-	ContentDescription string   `json:"contentDescription"`
-	ActiveWindowTitle  string   `json:"activeWindowTitle"`
+	EventType          string                  `json:"eventType"`
+	PackageName        string                  `json:"packageName"`
+	ClassName          string                  `json:"className"`
+	Text               []string                `json:"text"`
+	ContentDescription string                  `json:"contentDescription"`
+	ActiveWindowTitle  string                  `json:"activeWindowTitle"`
+	UI                 *domain.UiSemanticState `json:"ui"`
 }
 
 func parsePayload(event domain.Event) deviceEventPayload {
@@ -31,21 +32,27 @@ func parsePayload(event domain.Event) deviceEventPayload {
 // All non-empty fields in m must match (AND semantics).
 // Empty EventMatch{} matches any event.
 func MatchEvent(m domain.EventMatch, event domain.Event) bool {
-	return matchFields(event, m.Kind, m.Package, m.ClassSuffix, m.TextContains)
+	return matchDeviceEvent(event, m.Kind, m.Package, m.ClassSuffix, m.TextContains, m.UI)
 }
 
 // MatchExpect reports whether event satisfies the expect condition.
 // Semantics identical to MatchEvent.
 func MatchExpect(e domain.ExpectDef, event domain.Event) bool {
-	return matchFields(event, e.Kind, e.Package, e.ClassSuffix, e.TextContains)
+	return matchDeviceEvent(event, e.Kind, e.Package, e.ClassSuffix, e.TextContains, e.UI)
 }
 
-// matchFields is the shared AND-matching kernel used by both MatchEvent and MatchExpect.
-func matchFields(event domain.Event, kind domain.EventKind, pkg, classSuffix, textContains string) bool {
+// matchDeviceEvent is the shared AND-matching kernel used by both MatchEvent
+// and MatchExpect.
+func matchDeviceEvent(
+	event domain.Event,
+	kind domain.EventKind,
+	pkg, classSuffix, textContains string,
+	ui *domain.UiMatch,
+) bool {
 	if kind != "" && kind != event.Kind {
 		return false
 	}
-	if pkg == "" && classSuffix == "" && textContains == "" {
+	if pkg == "" && classSuffix == "" && textContains == "" && uiMatchEmpty(ui) {
 		return true
 	}
 	p := parsePayload(event)
@@ -58,65 +65,8 @@ func matchFields(event domain.Event, kind domain.EventKind, pkg, classSuffix, te
 	if textContains != "" && !containsText(p, textContains) {
 		return false
 	}
-	return true
-}
-
-// SnapshotMatchesExpect checks whether the snapshotAfter embedded in raw (the
-// device.execute response payload) already satisfies exp.
-//
-// Only the state-observable fields (Package, ClassSuffix, TextContains) are
-// evaluated; Kind is an event type, not derivable from a snapshot, so a
-// Kind-only ExpectDef always returns false.
-//
-// Returns false on any parse error or when raw is empty.
-func SnapshotMatchesExpect(raw json.RawMessage, exp domain.ExpectDef) bool {
-	if exp.Package == "" && exp.ClassSuffix == "" && exp.TextContains == "" {
+	if !matchSemanticUI(p.UI, ui) {
 		return false
-	}
-	var result struct {
-		SnapshotAfter struct {
-			PackageName  string `json:"packageName"`
-			ActivityName string `json:"activityName"`
-			Targets      []struct {
-				Text        string `json:"text"`
-				PackageName string `json:"packageName"`
-			} `json:"targets"`
-		} `json:"snapshotAfter"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return false
-	}
-	s := result.SnapshotAfter
-	if exp.Package != "" && s.PackageName != exp.Package {
-		// Fallback: some accessibility implementations (e.g. Waydroid) report the
-		// system UI overlay as the top-level packageName even when the target app
-		// is in the foreground. Check whether any target belongs to the expected
-		// package as a proxy for "this app is on screen".
-		found := false
-		for _, t := range s.Targets {
-			if t.PackageName == exp.Package {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	if exp.ClassSuffix != "" && !strings.HasSuffix(s.ActivityName, exp.ClassSuffix) {
-		return false
-	}
-	if exp.TextContains != "" {
-		found := false
-		for _, t := range s.Targets {
-			if strings.Contains(t.Text, exp.TextContains) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
 	}
 	return true
 }

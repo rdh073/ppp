@@ -166,6 +166,27 @@ class ActionExecutorTest {
         assertEquals(ActionResult.Ok, result)
         assertEquals(listOf(AccessibilityNodeInfo.ACTION_LONG_CLICK), performedActions)
     }
+
+    @Test
+    fun `semantic key resolves projected button target`() {
+        val fixture = ExecutorFixture()
+        val button = fixture.node(text = "Save", clickable = true, resourceId = "com.example:id/save_button")
+        fixture.attach(fixture.root, button)
+
+        val performedActions = mutableListOf<Int>()
+        shadowOf(button).setOnPerformActionListener { action, _ ->
+            performedActions += action
+            true
+        }
+
+        val result =
+            fixture.executor.execute(
+                AutomationAction.Click(Selector(SelectorKind.SEMANTIC_KEY, "button.save_button")),
+            )
+
+        assertEquals(ActionResult.Ok, result)
+        assertEquals(listOf(AccessibilityNodeInfo.ACTION_CLICK), performedActions)
+    }
 }
 
 private class ExecutorFixture {
@@ -182,10 +203,18 @@ private class ExecutorFixture {
         clickable: Boolean = false,
         longClickable: Boolean = false,
         enabled: Boolean = true,
+        resourceId: String? = null,
+        contentDescription: String? = null,
     ): AccessibilityNodeInfo =
         AccessibilityNodeInfo.obtain().apply {
             if (text != null) {
                 setText(text)
+            }
+            if (contentDescription != null) {
+                this.contentDescription = contentDescription
+            }
+            if (resourceId != null) {
+                viewIdResourceName = resourceId
             }
             setClickable(clickable)
             setLongClickable(longClickable)
