@@ -1,5 +1,12 @@
 package domain
 
+import (
+	"encoding/json"
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
+
 // WorkflowDef is a YAML-serialisable step graph.
 // Each step declares: what event activates it (Trigger), what typed command
 // to issue (Action), what event confirms success (Expect), and where to route
@@ -52,9 +59,53 @@ type StepDef struct {
 //	  outputs:
 //	    fullName: username_full
 //	  optional: false
+// StringOrJSONMap is a map[string]string whose YAML unmarshaler accepts both
+// plain string values and inline YAML objects/sequences.
+// Non-string nodes are JSON-marshalled before being stored, so toolcall_node.go
+// and Interpolate() work unchanged — they always see a string-map.
+//
+// Example YAML (both forms are valid):
+//
+//	params:
+//	  greeting: "hello {{input.name}}"          # string
+//	  schema:                                   # inline object → stored as JSON string
+//	    type: object
+//	    required: [id]
+type StringOrJSONMap map[string]string
+
+// UnmarshalYAML implements yaml.Unmarshaler for yaml.v3.
+func (m *StringOrJSONMap) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("params must be a YAML mapping, got kind %d", value.Kind)
+	}
+	result := make(StringOrJSONMap, len(value.Content)/2)
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		var key string
+		if err := value.Content[i].Decode(&key); err != nil {
+			return fmt.Errorf("decode params key: %w", err)
+		}
+		val := value.Content[i+1]
+		if val.Kind == yaml.ScalarNode {
+			result[key] = val.Value
+		} else {
+			var v any
+			if err := val.Decode(&v); err != nil {
+				return fmt.Errorf("decode params.%s: %w", key, err)
+			}
+			b, err := json.Marshal(v)
+			if err != nil {
+				return fmt.Errorf("encode params.%s: %w", key, err)
+			}
+			result[key] = string(b)
+		}
+	}
+	*m = result
+	return nil
+}
+
 type ToolCallDef struct {
-	ToolName string            `yaml:"tool_name"          json:"tool_name"`
-	Params   map[string]string `yaml:"params,omitempty"   json:"params,omitempty"`
+	ToolName string          `yaml:"tool_name"          json:"tool_name"`
+	Params   StringOrJSONMap `yaml:"params,omitempty"   json:"params,omitempty"`
 	// Outputs maps top-level JSON keys in the tool result to WorkflowState.Inputs keys.
 	Outputs map[string]string `yaml:"outputs,omitempty"  json:"outputs,omitempty"`
 	// Optional: if true, a tool invocation failure is silently skipped (OnSuccess path).

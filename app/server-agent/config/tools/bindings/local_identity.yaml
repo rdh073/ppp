@@ -1,6 +1,6 @@
 bindings:
-  - id: local_identity.generate_name
-    tool: identity.generate_indonesian_name
+  - id: local_identity.generate_persona
+    tool: identity.generate_persona
     paramsTemplate: |
       {}
     successArtifacts:
@@ -12,20 +12,10 @@ bindings:
         fromJsonPointer: /lastName
       - artifact: profile_gender
         fromJsonPointer: /gender
-
-  - id: local_identity.generate_email
-    tool: identity.generate_email
-    paramsTemplate: |
-      {
-        "fullName": {{ json (artifact "profile_full_name") }}
-      }
-    successArtifacts:
       - artifact: profile_email
         fromJsonPointer: /email
-      - artifact: profile_email_local_part
-        fromJsonPointer: /localPart
-      - artifact: profile_email_domain
-        fromJsonPointer: /domain
+      - artifact: profile_username
+        fromJsonPointer: /username
 
   - id: local_identity.generate_password
     tool: credential.generate_password

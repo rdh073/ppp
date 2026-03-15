@@ -1,0 +1,43 @@
+name: identity.generate_persona
+# Chain of Responsibility: try anthropic → openai → builtin (generic LLM).
+# The first available (non-disabled) provider handles the call.
+# fallback: on_disabled means a non-configured provider is silently skipped;
+# a real invocation error from a configured provider stops the chain.
+providers:
+  - provider: anthropic-native
+    providerToolName: anthropic.messages.json
+  - provider: openai-native
+    providerToolName: openai.chat.completions.json
+  - provider: builtin
+    providerToolName: openai.chat.completions.json
+fallback: on_disabled
+description: >
+  Generates a realistic Indonesian-style persona (name, gender, email, username)
+  using an LLM. Returns fullName, firstName, lastName, gender, email, and username.
+  Does not generate a password — chain credential.generate_password separately.
+deterministic: false
+timeout: 8s
+retryBudget: 1
+modelPolicy: backend_workflow_json
+promptFile: prompts/identity.generate_persona.prompt.tmpl
+inputSchema:
+  type: object
+  properties:
+    gender:
+      enum: [male, female]
+outputSchema:
+  type: object
+  required: [fullName, firstName, lastName, gender, email, username]
+  properties:
+    fullName:
+      type: string
+    firstName:
+      type: string
+    lastName:
+      type: string
+    gender:
+      enum: [male, female]
+    email:
+      type: string
+    username:
+      type: string

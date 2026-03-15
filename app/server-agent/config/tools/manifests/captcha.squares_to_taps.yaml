@@ -3,7 +3,7 @@ provider: builtin
 providerToolName: captcha.squares_to_taps
 description: >
   Translates 1-indexed grid square numbers into absolute screen tap coordinates.
-  Assumes a square grid (rows = cols). Returns up to 9 tap slots (tap0..tap8);
+  Assumes a square grid (rows = cols). Returns up to 16 tap slots (tap0..tap15);
   unused slots are empty strings. Android agent treats empty coordinate as no-op.
 deterministic: true
 timeout: 250ms
@@ -22,7 +22,7 @@ inputSchema:
       minLength: 2
 outputSchema:
   type: object
-  required: [tap0, tap1, tap2, tap3, tap4, tap5, tap6, tap7, tap8, count]
+  required: [tap0, tap1, tap2, tap3, tap4, tap5, tap6, tap7, tap8, tap9, tap10, tap11, tap12, tap13, tap14, tap15, count]
   properties:
     tap0:
       type: string
@@ -41,6 +41,20 @@ outputSchema:
     tap7:
       type: string
     tap8:
+      type: string
+    tap9:
+      type: string
+    tap10:
+      type: string
+    tap11:
+      type: string
+    tap12:
+      type: string
+    tap13:
+      type: string
+    tap14:
+      type: string
+    tap15:
       type: string
     count:
       type: string

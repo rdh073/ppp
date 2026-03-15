@@ -3,9 +3,9 @@
 # Override chain (lowest → highest priority):
 #   built-in defaults  →  this file  →  environment variables  →  CLI flags
 #
-# Secrets are NOT stored here. Pass them via environment variables only:
-#   AUTO_REDIS_PASSWORD       — Redis authentication password
-#   AUTO_TOOL_LLM_API_KEY     — Bearer token for the LLM tool endpoint
+# Secrets: prefer environment variables for production deployments.
+#   AUTO_REDIS_PASSWORD       — Redis authentication password (env only)
+#   AUTO_TOOL_LLM_API_KEY     — Bearer token for the LLM tool endpoint (env overrides tools.llm.api_key)
 #
 # Usage:
 #   go run ./cmd/server -config ./config/server.toml
@@ -102,4 +102,4 @@
 # OpenAI-compatible chat-completions endpoint.
 # api_url = "https://api.openai.com/v1/chat/completions"
 # model   = "gpt-4o"
-# API key: AUTO_TOOL_LLM_API_KEY environment variable only.
+# api_key = ""   # overridden by AUTO_TOOL_LLM_API_KEY env var (env takes precedence)

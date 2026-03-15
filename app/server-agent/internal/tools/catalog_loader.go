@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,22 +49,40 @@ type providerConfig struct {
 	Timeout       string `yaml:"timeout"`
 }
 
+// manifestChainEntry is one link in a manifest-level provider chain.
+// Each entry selects a provider and the providerToolName that provider
+// should receive, allowing heterogeneous protocols (e.g. anthropic + openai)
+// within the same logical chain.
+type manifestChainEntry struct {
+	Provider         string `yaml:"provider"`
+	ProviderToolName string `yaml:"providerToolName"`
+}
+
+// catalogChainEntry is the normalized form of manifestChainEntry stored inside
+// catalogToolManifest after provider IDs and tool names have been validated.
+type catalogChainEntry struct {
+	ProviderID       string
+	ProviderToolName string
+}
+
 type toolManifestConfig struct {
-	Name             string   `yaml:"name"`
-	Provider         string   `yaml:"provider"`
-	ProviderToolName string   `yaml:"providerToolName"`
-	Description      string   `yaml:"description"`
-	Deterministic    *bool    `yaml:"deterministic"`
-	Timeout          string   `yaml:"timeout"`
-	RetryBudget      *int     `yaml:"retryBudget"`
-	InputSchema      any      `yaml:"inputSchema"`
-	InputSchemaFile  string   `yaml:"inputSchemaFile"`
-	OutputSchema     any      `yaml:"outputSchema"`
-	OutputSchemaFile string   `yaml:"outputSchemaFile"`
-	PromptFile       string   `yaml:"promptFile"`
-	SystemPromptFile string   `yaml:"systemPromptFile"`
-	ModelPolicy      string   `yaml:"modelPolicy"`
-	Tags             []string `yaml:"tags"`
+	Name             string               `yaml:"name"`
+	Provider         string               `yaml:"provider"`          // single-provider mode
+	ProviderToolName string               `yaml:"providerToolName"`  // single-provider mode
+	Providers        []manifestChainEntry `yaml:"providers"`         // chain mode (overrides Provider/ProviderToolName)
+	Fallback         string               `yaml:"fallback"`          // "on_disabled" (default) | "on_error"
+	Description      string               `yaml:"description"`
+	Deterministic    *bool                `yaml:"deterministic"`
+	Timeout          string               `yaml:"timeout"`
+	RetryBudget      *int                 `yaml:"retryBudget"`
+	InputSchema      any                  `yaml:"inputSchema"`
+	InputSchemaFile  string               `yaml:"inputSchemaFile"`
+	OutputSchema     any                  `yaml:"outputSchema"`
+	OutputSchemaFile string               `yaml:"outputSchemaFile"`
+	PromptFile       string               `yaml:"promptFile"`
+	SystemPromptFile string               `yaml:"systemPromptFile"`
+	ModelPolicy      string               `yaml:"modelPolicy"`
+	Tags             []string             `yaml:"tags"`
 }
 
 type bindingCatalogFile struct {
@@ -92,6 +111,10 @@ type catalogToolManifest struct {
 	PromptTemplate string
 	SystemPrompt   string
 	ModelPolicy    string
+	// ProviderChain is non-empty when the manifest declared providers: list.
+	// LoadCatalog uses buildChainToolDefinition instead of a single provider.Build().
+	ProviderChain []catalogChainEntry
+	ChainFallback string // "on_disabled" | "on_error"
 }
 
 type builtinProvider struct {
@@ -166,13 +189,35 @@ func LoadCatalog(ctx context.Context, dir string, log *slog.Logger, modelCfg Mod
 	defs := make([]ToolDefinition, 0, len(manifests))
 	toolNames := make(map[string]struct{}, len(manifests))
 	for _, manifest := range manifests {
-		provider, ok := providers[manifest.Manifest.Provider]
-		if !ok {
-			return nil, fmt.Errorf("tool %s references unknown provider %s", manifest.Manifest.Name, manifest.Manifest.Provider)
-		}
-		def, err := provider.Build(ctx, manifest)
-		if err != nil {
-			return nil, fmt.Errorf("build tool %s: %w", manifest.Manifest.Name, err)
+		var def ToolDefinition
+		if len(manifest.ProviderChain) > 0 {
+			memberDefs := make([]ToolDefinition, 0, len(manifest.ProviderChain))
+			for _, entry := range manifest.ProviderChain {
+				provider, ok := providers[entry.ProviderID]
+				if !ok {
+					return nil, fmt.Errorf("tool %s chain member references unknown provider %s", manifest.Manifest.Name, entry.ProviderID)
+				}
+				// Clone the manifest with the member-specific providerToolName.
+				memberManifest := manifest
+				memberManifest.Manifest.ProviderToolName = entry.ProviderToolName
+				memberManifest.ProviderChain = nil // prevent recursive chain
+				memberDef, err := provider.Build(ctx, memberManifest)
+				if err != nil {
+					return nil, fmt.Errorf("build tool %s chain member %s: %w", manifest.Manifest.Name, entry.ProviderID, err)
+				}
+				memberDefs = append(memberDefs, memberDef)
+			}
+			def = buildChainToolDefinition(manifest.Manifest, memberDefs, manifest.ChainFallback)
+		} else {
+			provider, ok := providers[manifest.Manifest.Provider]
+			if !ok {
+				return nil, fmt.Errorf("tool %s references unknown provider %s", manifest.Manifest.Name, manifest.Manifest.Provider)
+			}
+			var err error
+			def, err = provider.Build(ctx, manifest)
+			if err != nil {
+				return nil, fmt.Errorf("build tool %s: %w", manifest.Manifest.Name, err)
+			}
 		}
 		defs = append(defs, def)
 		toolNames[manifest.Manifest.Name] = struct{}{}
@@ -387,11 +432,14 @@ func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManif
 	if strings.TrimSpace(cfg.Name) == "" {
 		return catalogToolManifest{}, fmt.Errorf("name required")
 	}
-	if strings.TrimSpace(cfg.Provider) == "" {
-		return catalogToolManifest{}, fmt.Errorf("provider required")
-	}
-	if strings.TrimSpace(cfg.ProviderToolName) == "" {
-		return catalogToolManifest{}, fmt.Errorf("providerToolName required")
+	isChain := len(cfg.Providers) > 0
+	if !isChain {
+		if strings.TrimSpace(cfg.Provider) == "" {
+			return catalogToolManifest{}, fmt.Errorf("provider required")
+		}
+		if strings.TrimSpace(cfg.ProviderToolName) == "" {
+			return catalogToolManifest{}, fmt.Errorf("providerToolName required")
+		}
 	}
 	timeout, err := parseDurationString(cfg.Timeout)
 	if err != nil {
@@ -413,10 +461,14 @@ func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManif
 	if err != nil {
 		return catalogToolManifest{}, fmt.Errorf("system prompt file: %w", err)
 	}
+	provider := strings.TrimSpace(cfg.Provider)
+	if isChain && provider == "" {
+		provider = "chain"
+	}
 	manifest := ToolManifest{
 		Name:             strings.TrimSpace(cfg.Name),
-		Provider:         strings.TrimSpace(cfg.Provider),
-		ProviderToolName: strings.TrimSpace(cfg.ProviderToolName),
+		Provider:         provider,
+		ProviderToolName: strings.TrimSpace(cfg.ProviderToolName), // empty for chain
 		Description:      strings.TrimSpace(cfg.Description),
 		Timeout:          timeout,
 		InputSchema:      inputSchema,
@@ -429,11 +481,31 @@ func normalizeToolManifest(dir string, cfg toolManifestConfig) (catalogToolManif
 	if cfg.RetryBudget != nil {
 		manifest.RetryBudget = *cfg.RetryBudget
 	}
+
+	var providerChain []catalogChainEntry
+	if isChain {
+		providerChain = make([]catalogChainEntry, len(cfg.Providers))
+		for i, entry := range cfg.Providers {
+			if strings.TrimSpace(entry.Provider) == "" {
+				return catalogToolManifest{}, fmt.Errorf("chain entry %d: provider required", i)
+			}
+			if strings.TrimSpace(entry.ProviderToolName) == "" {
+				return catalogToolManifest{}, fmt.Errorf("chain entry %d: providerToolName required", i)
+			}
+			providerChain[i] = catalogChainEntry{
+				ProviderID:       strings.TrimSpace(entry.Provider),
+				ProviderToolName: strings.TrimSpace(entry.ProviderToolName),
+			}
+		}
+	}
+
 	return catalogToolManifest{
 		Manifest:       manifest,
 		PromptTemplate: promptTemplate,
 		SystemPrompt:   systemPrompt,
 		ModelPolicy:    strings.TrimSpace(cfg.ModelPolicy),
+		ProviderChain:  providerChain,
+		ChainFallback:  strings.TrimSpace(cfg.Fallback),
 	}, nil
 }
 
@@ -834,6 +906,55 @@ func (p *httpProvider) Build(ctx context.Context, manifest catalogToolManifest) 
 			return p.invoke(ctx, merged.ProviderToolName, params)
 		},
 	}, nil
+}
+
+// buildChainToolDefinition implements the Chain of Responsibility pattern:
+// members are tried in order; the fallback policy controls when the chain
+// advances to the next member.
+//
+//   - fallback "on_disabled" (default): advance only when a member returns ErrToolDisabled
+//   - fallback "on_error":              advance on any error
+//
+// The chain's manifest (name, schema, timeout, retryBudget) is authoritative;
+// individual member manifests are used only for handler dispatch.
+func buildChainToolDefinition(manifest ToolManifest, members []ToolDefinition, fallback string) ToolDefinition {
+	validateParams, _ := compileSchemaValidator(manifest.InputSchema)
+	validateResult, _ := compileSchemaValidator(manifest.OutputSchema)
+
+	shouldAdvance := func(err error) bool {
+		if fallback == "on_error" {
+			return true
+		}
+		return errors.Is(err, ErrToolDisabled) // default: on_disabled
+	}
+
+	handlers := make([]func(context.Context, json.RawMessage) (json.RawMessage, error), len(members))
+	for i, m := range members {
+		handlers[i] = m.Handler
+	}
+
+	return ToolDefinition{
+		Manifest:       manifest,
+		ValidateParams: validateParams,
+		ValidateResult: validateResult,
+		Handler: func(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+			var lastErr error
+			for _, h := range handlers {
+				result, err := h(ctx, params)
+				if err == nil {
+					return result, nil
+				}
+				if !shouldAdvance(err) {
+					return nil, err
+				}
+				lastErr = err
+			}
+			if lastErr != nil {
+				return nil, fmt.Errorf("all chain members exhausted: %w", lastErr)
+			}
+			return nil, fmt.Errorf("%w: no chain members", ErrToolDisabled)
+		},
+	}
 }
 
 func disabledToolDefinition(manifest ToolManifest, reason string) (ToolDefinition, error) {

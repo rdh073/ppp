@@ -1,7 +1,23 @@
 name: content.generate_welcome_email
-provider: builtin
-providerToolName: openai.chat.completions.json
-description: Generates a short welcome email body from profile fields
+# Chain of Responsibility: try openai → deepseek → anthropic → gemini → builtin.
+# The first available (non-disabled) provider handles the call.
+# fallback: on_disabled means a non-configured provider is silently skipped;
+# a real invocation error from a configured provider stops the chain.
+providers:
+  - provider: openai-native
+    providerToolName: openai.chat.completions.json
+  - provider: deepseek-native
+    providerToolName: deepseek.chat.completions.json
+  - provider: anthropic-native
+    providerToolName: anthropic.messages.json
+  - provider: gemini-native
+    providerToolName: gemini.generate_content.json
+  - provider: builtin
+    providerToolName: openai.chat.completions.json
+fallback: on_disabled
+description: >
+  Generates a short welcome email (subject + body) from profile fields
+  using an LLM. Returns subject, body, language, and tone.
 deterministic: false
 timeout: 8s
 retryBudget: 1

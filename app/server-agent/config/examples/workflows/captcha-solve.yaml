@@ -40,7 +40,14 @@ steps:
           Identify which numbered squares contain {{input.captcha_target}}.
           Squares are numbered 1-16, row-major (left-to-right, top-to-bottom) in
           a 4×4 grid. Return only a JSON object {"squares": [<numbers>]}.
-        outputSchema: '{"type":"object","required":["squares"],"properties":{"squares":{"type":"array","items":{"type":"integer"}}}}'
+        outputSchema:
+          type: object
+          required: [squares]
+          properties:
+            squares:
+              type: array
+              items:
+                type: integer
       outputs:
         squares: detected_squares
     on_success: compute_taps
@@ -65,11 +72,18 @@ steps:
         tap6: tap6
         tap7: tap7
         tap8: tap8
+        tap9: tap9
+        tap10: tap10
+        tap11: tap11
+        tap12: tap12
+        tap13: tap13
+        tap14: tap14
+        tap15: tap15
         count: tap_count
     on_success: click_0
     on_failure: terminal
 
-  # ── Steps 3-11: tap each square (empty value = no-op) ─────────────────────
+  # ── Steps 3-18: tap each square (empty value = no-op) ─────────────────────
   click_0:
     trigger: {}
     action:
@@ -157,10 +171,80 @@ steps:
       target:
         kind: coordinate
         value: "{{input.tap8}}"
+    on_success: click_9
+    on_failure: terminal
+
+  click_9:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap9}}"
+    on_success: click_10
+    on_failure: terminal
+
+  click_10:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap10}}"
+    on_success: click_11
+    on_failure: terminal
+
+  click_11:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap11}}"
+    on_success: click_12
+    on_failure: terminal
+
+  click_12:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap12}}"
+    on_success: click_13
+    on_failure: terminal
+
+  click_13:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap13}}"
+    on_success: click_14
+    on_failure: terminal
+
+  click_14:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap14}}"
+    on_success: click_15
+    on_failure: terminal
+
+  click_15:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap15}}"
     on_success: submit
     on_failure: terminal
 
-  # ── Step 12: tap the submit / verify button ────────────────────────────────
+  # ── Step 19: tap the submit / verify button ────────────────────────────────
   submit:
     trigger: {}
     action:

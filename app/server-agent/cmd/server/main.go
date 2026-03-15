@@ -132,7 +132,7 @@ func main() {
 	// --- tool catalog ---
 	toolCatalog, err := toolcatalog.LoadCatalog(context.Background(), cfg.Server.ToolDir, log, toolcatalog.ModelToolConfig{
 		APIURL: cfg.Tools.LLM.APIURL,
-		APIKey: os.Getenv("AUTO_TOOL_LLM_API_KEY"),
+		APIKey: cfg.Tools.LLM.APIKey,
 		Model:  cfg.Tools.LLM.Model,
 	})
 	if err != nil {
@@ -224,6 +224,7 @@ func main() {
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
+	deviceHandler := handler.NewDeviceHandler(reg, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)
@@ -235,6 +236,8 @@ func main() {
 	// --- HTTP mux ---
 	mux := http.NewServeMux()
 	mux.Handle("/ws/agent", agentServer)
+	mux.Handle("/devices", deviceHandler)
+	mux.Handle("/devices/", deviceHandler)
 	mux.Handle("/tasks", taskHandler)
 	mux.Handle("/tasks/", taskHandler)
 	mux.Handle("/workflows", workflowHandler)

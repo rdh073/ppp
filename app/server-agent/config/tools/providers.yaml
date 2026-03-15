@@ -4,6 +4,7 @@ providers:
   - id: openai-native
     kind: openai
     optional: true
+    apiURL: https://api.openai.com/v1/chat/completions
     apiURLEnv: AUTO_TOOL_OPENAI_API_URL
     apiKeyEnv: AUTO_TOOL_OPENAI_API_KEY
     modelEnv: AUTO_TOOL_OPENAI_MODEL
@@ -11,15 +12,37 @@ providers:
   - id: deepseek-native
     kind: deepseek
     optional: true
+    apiURL: https://api.deepseek.com/chat/completions
     apiURLEnv: AUTO_TOOL_DEEPSEEK_API_URL
     apiKeyEnv: AUTO_TOOL_DEEPSEEK_API_KEY
     modelEnv: AUTO_TOOL_DEEPSEEK_MODEL
     timeout: 10s
+  - id: anthropic-native
+    kind: anthropic
+    optional: true
+    apiURL: https://api.anthropic.com/v1/messages
+    apiURLEnv: AUTO_TOOL_ANTHROPIC_API_URL
+    apiKeyEnv: AUTO_TOOL_ANTHROPIC_API_KEY
+    modelEnv: AUTO_TOOL_ANTHROPIC_MODEL
+    apiVersion: 2023-06-01
+    apiVersionEnv: AUTO_TOOL_ANTHROPIC_API_VERSION
+    timeout: 10s
+  - id: gemini-native
+    kind: gemini
+    optional: true
+    apiURL: https://generativelanguage.googleapis.com/v1beta
+    apiURLEnv: AUTO_TOOL_GEMINI_API_URL
+    apiKeyEnv: AUTO_TOOL_GEMINI_API_KEY
+    modelEnv: AUTO_TOOL_GEMINI_MODEL
+    timeout: 10s
   - id: anthropic-vision-native
     kind: anthropic-vision
     optional: true
+    apiURL: https://api.anthropic.com/v1/messages
+    apiURLEnv: AUTO_TOOL_ANTHROPIC_API_URL
     apiKeyEnv: AUTO_TOOL_ANTHROPIC_API_KEY
     modelEnv: AUTO_TOOL_ANTHROPIC_MODEL
+    apiVersion: 2023-06-01
     apiVersionEnv: AUTO_TOOL_ANTHROPIC_API_VERSION
     timeout: 30s
   - id: example-http

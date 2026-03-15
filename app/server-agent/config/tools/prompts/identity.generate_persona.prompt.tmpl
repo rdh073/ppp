@@ -1,0 +1,23 @@
+You are a data-generation service. Return JSON only — no markdown, no explanation, no code block.
+
+Generate one realistic Indonesian-style persona.
+{{- if index .Params "gender" }}
+Gender: {{ index .Params "gender" }}
+{{- else }}
+Choose gender randomly: male or female.
+{{- end }}
+
+Rules:
+- firstName: a common Indonesian given name matching the chosen gender
+- lastName: a common Indonesian surname; may be one or two words (e.g. "Santoso" or "Pratama Wijaya")
+- fullName: firstName + " " + lastName
+- gender: exactly "male" or "female"
+- email: lowercase, derived from fullName (replace spaces with dots, strip special chars),
+  followed by "@" and one of: gmail.com, yahoo.co.id, outlook.com — chosen at random.
+  Example: budi.santoso@gmail.com
+- username: lowercase alphanumeric with optional dots or underscores, derived from
+  firstName + lastName. May include 2-digit birth-year suffix. No spaces.
+  Example: budi.santoso or rizky_pw92
+
+Return exactly this JSON object and nothing else:
+{"fullName":"...","firstName":"...","lastName":"...","gender":"...","email":"...","username":"..."}

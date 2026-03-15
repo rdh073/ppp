@@ -1,9 +1,0 @@
-providers:
-  - id: gemini-native
-    kind: gemini
-    optional: true
-    apiURL: https://generativelanguage.googleapis.com/v1beta
-    apiURLEnv: AUTO_TOOL_GEMINI_API_URL
-    apiKeyEnv: AUTO_TOOL_GEMINI_API_KEY
-    modelEnv: AUTO_TOOL_GEMINI_MODEL
-    timeout: 10s

@@ -127,23 +127,15 @@ Tool catalog runtime:
   - server: `cmd/tool-provider-example`
   - example catalog: `config/examples/http-provider`
   - override `AUTO_TOOL_EXAMPLE_BASE_URL` if the example provider is not listening on `http://127.0.0.1:3310`
-  - default `config/tools` also ships `identity.generate_alias_email` and `example_remote.generate_alias_email` behind an optional `example-http` provider
-  - default `config/tools` also ships `content.generate_welcome_email.openai` behind an optional `openai-native` provider
-  - default `config/tools` also ships `content.generate_welcome_email.deepseek` behind an optional `deepseek-native` provider
+  - default `config/tools` ships `identity.generate_alias_email` and `example_remote.generate_alias_email` behind an optional `example-http` provider
   - the default catalog keeps that tool visible but disabled until `AUTO_TOOL_EXAMPLE_BASE_URL` is set and discovery succeeds
-  - the default catalog keeps `content.generate_welcome_email.openai` visible but disabled until `AUTO_TOOL_OPENAI_API_KEY` and `AUTO_TOOL_OPENAI_MODEL` are set
-  - the default catalog keeps `content.generate_welcome_email.deepseek` visible but disabled until `AUTO_TOOL_DEEPSEEK_API_KEY` and `AUTO_TOOL_DEEPSEEK_MODEL` are set
   - note: the example catalog is intentionally minimal and is not a drop-in replacement for `config/tools`
-- shipped real-LLM env examples:
-  - `config/examples/llm-providers/openai.env.example`
-  - `config/examples/llm-providers/anthropic.env.example`
-  - `config/examples/llm-providers/gemini.env.example`
-  - `config/examples/llm-providers/deepseek.env.example`
-  - native catalog examples:
-    - `config/examples/llm-providers/catalogs/openai`
-    - `config/examples/llm-providers/catalogs/anthropic`
-    - `config/examples/llm-providers/catalogs/gemini`
-    - `config/examples/llm-providers/catalogs/deepseek`
+- LLM provider env vars (set any combination; chain picks the first configured provider):
+  - OpenAI: `AUTO_TOOL_OPENAI_API_KEY`, `AUTO_TOOL_OPENAI_MODEL` (optionally `AUTO_TOOL_OPENAI_API_URL` to override endpoint)
+  - DeepSeek: `AUTO_TOOL_DEEPSEEK_API_KEY`, `AUTO_TOOL_DEEPSEEK_MODEL`
+  - Anthropic: `AUTO_TOOL_ANTHROPIC_API_KEY`, `AUTO_TOOL_ANTHROPIC_MODEL`
+  - Gemini: `AUTO_TOOL_GEMINI_API_KEY`, `AUTO_TOOL_GEMINI_MODEL`
+  - Builtin (last resort): `AUTO_TOOL_LLM_API_URL`, `AUTO_TOOL_LLM_API_KEY`, `AUTO_TOOL_LLM_MODEL`
 
 Runtime persistence:
 - `go run ./cmd/server -data-dir ./var`
@@ -176,9 +168,8 @@ Notes:
 - Workflows may queue `pending_tool_binding` as the preferred tool invocation contract; legacy `pending_tool` and `pending_tool_params` remain supported for compatibility.
 - Tasks may carry `inputArtifacts` on create; missing workflow-state bootstrap now seeds those artifacts into the first checkpoint and into startup-recovery bootstrap.
 - Binding-aware `ToolCallNode` maps tool results directly into workflow artifacts and still emits raw `tool.result` for audit and replay.
-- Model-backed tools are optional; if `AUTO_TOOL_LLM_API_URL` or `AUTO_TOOL_LLM_MODEL` is unset, prompt-backed tools such as `content.generate_welcome_email` stay visible to workflows but return disabled so workflow-level deterministic fallback can take over.
-- The default catalog also ships `content.generate_welcome_email.openai` behind the native `openai` provider kind; it stays visible but disabled until `AUTO_TOOL_OPENAI_API_KEY` and `AUTO_TOOL_OPENAI_MODEL` are set.
-- The default catalog also ships `content.generate_welcome_email.deepseek` behind the native `deepseek` provider kind; it stays visible but disabled until `AUTO_TOOL_DEEPSEEK_API_KEY` and `AUTO_TOOL_DEEPSEEK_MODEL` are set.
+- LLM-backed tools use a Chain of Responsibility across providers (e.g. `content.generate_welcome_email` tries openai → deepseek → anthropic → gemini → builtin in order). Each provider is optional; unconfigured providers are silently skipped (`fallback: on_disabled`). The chain tool stays visible but returns `ErrToolDisabled` when all providers are unconfigured.
+- Adding a new LLM-backed tool costs exactly: 1 manifest YAML (with `providers:` chain) + 1 prompt template. No per-provider variant files, no separate catalog directories.
 - Shipped built-in workflow names now include:
   - `local-identity-profile`
   - `local-identity-welcome-email`

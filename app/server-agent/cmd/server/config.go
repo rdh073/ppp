@@ -104,7 +104,7 @@ type ToolsConfig struct {
 type LLMToolConfig struct {
 	APIURL string `toml:"api_url"`
 	Model  string `toml:"model"`
-	// APIKey: AUTO_TOOL_LLM_API_KEY env var only.
+	APIKey string `toml:"api_key"` // overridden by AUTO_TOOL_LLM_API_KEY env var
 }
 
 // DefaultConfig returns a Config populated with the same built-in defaults
@@ -314,6 +314,9 @@ func (c *Config) applyEnvOverrides() error {
 	}
 	if v := envTrimmed("AUTO_TOOL_LLM_MODEL"); v != "" {
 		c.Tools.LLM.Model = v
+	}
+	if v := envTrimmed("AUTO_TOOL_LLM_API_KEY"); v != "" {
+		c.Tools.LLM.APIKey = v
 	}
 	return nil
 }

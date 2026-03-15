@@ -15,8 +15,6 @@ func TestLocalToolRegistry_ContainsExpectedTools(t *testing.T) {
 	registry := tools.NewLocalToolRegistry()
 
 	for _, toolName := range []string{
-		"identity.generate_indonesian_name",
-		"identity.generate_email",
 		"credential.generate_password",
 		"identity.generate_birth_date",
 		"captcha.squares_to_taps",
@@ -27,63 +25,19 @@ func TestLocalToolRegistry_ContainsExpectedTools(t *testing.T) {
 	}
 }
 
-func TestGenerateIndonesianName_Invoke(t *testing.T) {
+func TestLocalToolRegistry_RemovedTools(t *testing.T) {
 	registry := tools.NewLocalToolRegistry()
 
-	raw, err := registry.Invoke(context.Background(), "identity.generate_indonesian_name", json.RawMessage(`{"gender":"female"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var result struct {
-		FullName  string `json:"fullName"`
-		FirstName string `json:"firstName"`
-		LastName  string `json:"lastName"`
-		Gender    string `json:"gender"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Gender != "female" {
-		t.Fatalf("expected female gender, got %q", result.Gender)
-	}
-	if result.FullName == "" || result.FirstName == "" || result.LastName == "" {
-		t.Fatal("expected generated name fields to be populated")
+	for _, toolName := range []string{
+		"identity.generate_indonesian_name",
+		"identity.generate_email",
+	} {
+		if _, ok := registry.Manifest(toolName); ok {
+			t.Fatalf("tool %s should have been removed (now LLM-backed)", toolName)
+		}
 	}
 }
 
-func TestGenerateEmail_Invoke(t *testing.T) {
-	registry := tools.NewLocalToolRegistry()
-
-	raw, err := registry.Invoke(context.Background(), "identity.generate_email", json.RawMessage(`{"fullName":"Ayu Lestari","domain":"example.id"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var result struct {
-		Email     string `json:"email"`
-		LocalPart string `json:"localPart"`
-		Domain    string `json:"domain"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.LocalPart != "ayu.lestari" {
-		t.Fatalf("expected localPart ayu.lestari, got %q", result.LocalPart)
-	}
-	if result.Email != "ayu.lestari@example.id" {
-		t.Fatalf("unexpected email: %q", result.Email)
-	}
-}
-
-func TestGenerateEmail_InvalidParams(t *testing.T) {
-	registry := tools.NewLocalToolRegistry()
-
-	_, err := registry.Invoke(context.Background(), "identity.generate_email", json.RawMessage(`{}`))
-	if !errors.Is(err, tools.ErrToolInvalidParams) {
-		t.Fatalf("expected ErrToolInvalidParams, got %v", err)
-	}
-}
 
 func TestGeneratePassword_Invoke(t *testing.T) {
 	registry := tools.NewLocalToolRegistry()
@@ -217,6 +171,37 @@ func TestSquaresToTaps_MultipleSquares(t *testing.T) {
 	}
 	if result.Count != "3" {
 		t.Fatalf("expected count=3, got %q", result.Count)
+	}
+}
+
+func TestSquaresToTaps_All16Squares(t *testing.T) {
+	registry := tools.NewLocalToolRegistry()
+
+	// 4x4 grid [0,0,400,400] — all 16 squares, each cell 100x100.
+	// Square N: row=(N-1)/4, col=(N-1)%4 → center at (col*100+50, row*100+50).
+	raw, err := registry.Invoke(context.Background(), "captcha.squares_to_taps",
+		json.RawMessage(`{"squares":"[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]","cols":"4","gridBounds":"[0,0,400,400]"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result struct {
+		Tap0  string `json:"tap0"`
+		Tap15 string `json:"tap15"`
+		Count string `json:"count"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Tap0 != "50,50" {
+		t.Fatalf("expected tap0=50,50, got %q", result.Tap0)
+	}
+	// Square 16: row=3,col=3 → center (350,350).
+	if result.Tap15 != "350,350" {
+		t.Fatalf("expected tap15=350,350, got %q", result.Tap15)
+	}
+	if result.Count != "16" {
+		t.Fatalf("expected count=16, got %q", result.Count)
 	}
 }
 
