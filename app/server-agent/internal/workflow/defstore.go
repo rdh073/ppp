@@ -2,11 +2,16 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 )
+
+// ErrWorkflowDefNotFound is returned when a named workflow definition does not
+// exist. The orchestrator treats this as a fatal, non-retryable task failure.
+var ErrWorkflowDefNotFound = errors.New("workflow def not found")
 
 // DefStore is the read/write interface for WorkflowDef storage.
 type DefStore interface {
@@ -30,7 +35,7 @@ func (s *MemoryDefStore) Get(_ context.Context, name string) (*domain.WorkflowDe
 	defer s.mu.RUnlock()
 	d, ok := s.defs[name]
 	if !ok {
-		return nil, fmt.Errorf("workflow def %q not found", name)
+		return nil, fmt.Errorf("workflow def %q: %w", name, ErrWorkflowDefNotFound)
 	}
 	return d, nil
 }

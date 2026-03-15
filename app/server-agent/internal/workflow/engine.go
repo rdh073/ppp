@@ -414,7 +414,7 @@ func (e *Engine) resolveDef(ctx context.Context, name string) (*domain.WorkflowD
 	if d, err := e.defs.Get(ctx, "default"); err == nil {
 		return d, nil
 	}
-	return nil, fmt.Errorf("workflow def %q not found", name)
+	return nil, fmt.Errorf("workflow def %q: %w", name, ErrWorkflowDefNotFound)
 }
 
 // --- helpers ---

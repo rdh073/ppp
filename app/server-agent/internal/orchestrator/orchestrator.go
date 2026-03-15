@@ -164,6 +164,17 @@ func (o *Orchestrator) processForTask(ctx context.Context, e domain.Event, task 
 
 	newState, terminal, err := o.engine.ProcessEvent(ctx, state, task.WorkflowName, task, e)
 	if err != nil {
+		if errors.Is(err, workflow.ErrWorkflowDefNotFound) {
+			// Workflow def is unresolvable — permanently fail the task so subsequent
+			// device events don't keep retrying an unbounded bootstrap loop.
+			task.Status = domain.TaskStatusFailed
+			task.UpdatedAt = time.Now()
+			if saveErr := o.tasks.Save(ctx, task); saveErr != nil {
+				o.log.Error("save failed task after bootstrap error", "taskId", task.ID, "err", saveErr)
+			} else if o.onTaskTerminal != nil {
+				go o.onTaskTerminal(context.Background(), task)
+			}
+		}
 		return fmt.Errorf("engine: %w", err)
 	}
 	if newState == nil {

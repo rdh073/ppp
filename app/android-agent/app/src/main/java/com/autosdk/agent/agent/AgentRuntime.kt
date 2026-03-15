@@ -299,6 +299,7 @@ class AgentRuntime(
             "content_desc" -> SelectorKind.CONTENT_DESC
             "bounds" -> SelectorKind.BOUNDS
             "package_name" -> SelectorKind.PACKAGE_NAME
+            "coordinate" -> SelectorKind.COORDINATE
             else -> return null
         }
         return Selector(selectorKind, value)

@@ -1,0 +1,176 @@
+# Declarative workflow for solving a grid-selection CAPTCHA.
+#
+# Load with:  go run ./cmd/server -workflow-dir config/examples/workflows
+# Create task:
+#   POST /tasks {
+#     "goal": "solve captcha",
+#     "workflowName": "captcha-solve",
+#     "inputArtifacts": {
+#       "screenshot_base64": "<base64-encoded PNG>",
+#       "grid_bounds":       "[left,top,right,bottom]",
+#       "captcha_target":    "traffic lights",
+#       "submit_text":       "Verify"
+#     }
+#   }
+#
+# Required input artifacts:
+#   screenshot_base64  — base64-encoded PNG of the CAPTCHA screen
+#   grid_bounds        — pixel bounds of the selection grid, e.g. "[0,400,1080,1480]"
+#   captcha_target     — object to identify, e.g. "traffic lights"
+#
+# Optional input artifacts:
+#   cols          — grid columns (default "4"); rows = cols (square grid)
+#   submit_text   — label of the confirm button (default "Verify")
+
+name: captcha-solve
+version: 2
+
+entry: analyze
+
+steps:
+
+  # ── Step 1: ask vision model which squares to tap ──────────────────────────
+  analyze:
+    trigger: {}
+    tool_call:
+      tool_name: vision.analyze
+      params:
+        imageBase64: "{{input.screenshot_base64}}"
+        prompt: >
+          Identify which numbered squares contain {{input.captcha_target}}.
+          Squares are numbered 1-16, row-major (left-to-right, top-to-bottom) in
+          a 4×4 grid. Return only a JSON object {"squares": [<numbers>]}.
+        outputSchema: '{"type":"object","required":["squares"],"properties":{"squares":{"type":"array","items":{"type":"integer"}}}}'
+      outputs:
+        squares: detected_squares
+    on_success: compute_taps
+    on_failure: terminal
+
+  # ── Step 2: convert square numbers to pixel coordinates ────────────────────
+  compute_taps:
+    trigger: {}
+    tool_call:
+      tool_name: captcha.squares_to_taps
+      params:
+        squares: "{{input.detected_squares}}"
+        cols: "4"
+        gridBounds: "{{input.grid_bounds}}"
+      outputs:
+        tap0: tap0
+        tap1: tap1
+        tap2: tap2
+        tap3: tap3
+        tap4: tap4
+        tap5: tap5
+        tap6: tap6
+        tap7: tap7
+        tap8: tap8
+        count: tap_count
+    on_success: click_0
+    on_failure: terminal
+
+  # ── Steps 3-11: tap each square (empty value = no-op) ─────────────────────
+  click_0:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap0}}"
+    on_success: click_1
+    on_failure: terminal
+
+  click_1:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap1}}"
+    on_success: click_2
+    on_failure: terminal
+
+  click_2:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap2}}"
+    on_success: click_3
+    on_failure: terminal
+
+  click_3:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap3}}"
+    on_success: click_4
+    on_failure: terminal
+
+  click_4:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap4}}"
+    on_success: click_5
+    on_failure: terminal
+
+  click_5:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap5}}"
+    on_success: click_6
+    on_failure: terminal
+
+  click_6:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap6}}"
+    on_success: click_7
+    on_failure: terminal
+
+  click_7:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap7}}"
+    on_success: click_8
+    on_failure: terminal
+
+  click_8:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "{{input.tap8}}"
+    on_success: submit
+    on_failure: terminal
+
+  # ── Step 12: tap the submit / verify button ────────────────────────────────
+  submit:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "{{input.submit_text}}"
+    expect:
+      kind: android.window.state_changed
+    timeout: 10s
+    max_retry: 2
+    on_success: terminal
+    on_failure: terminal

@@ -6,12 +6,17 @@ Go control plane for the ppp agent system. See `plans/server-agent-architecture.
 
 ```bash
 # Run (from app/server-agent/)
-go run ./cmd/server            # default :3000
-go run ./cmd/server -addr :8080
+go run ./cmd/server                                              # default :3000
+go run ./cmd/server -config ./config/server.toml.example        # load config file
+go run ./cmd/server -addr :8080                                  # override listen addr
 go run ./cmd/server -tool-dir ./config/tools
-go run ./cmd/server -workflow-dir ./config/examples/workflows   # load YAML workflow defs
+go run ./cmd/server -workflow-dir ./config/examples/workflows    # load YAML workflow defs
 go run ./cmd/tool-provider-example
 go run ./cmd/server -tool-dir ./config/examples/http-provider
+
+# Config override chain (lowest → highest priority):
+#   built-in defaults  →  -config file  →  env vars  →  CLI flags
+# Annotated example: config/server.toml.example
 
 # Build binary
 go build -o bin/server-agent ./cmd/server

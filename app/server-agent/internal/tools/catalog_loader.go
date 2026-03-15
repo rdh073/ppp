@@ -282,6 +282,12 @@ func loadProviders(ctx context.Context, dir string, log *slog.Logger, modelCfg M
 				return nil, err
 			}
 			providers[cfg.ID] = provider
+		case "anthropic-vision":
+			provider, err := newVisionModelProvider(cfg, log)
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = provider
 		default:
 			return nil, fmt.Errorf("unsupported provider kind %s", cfg.Kind)
 		}

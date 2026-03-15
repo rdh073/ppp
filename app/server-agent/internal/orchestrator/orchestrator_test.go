@@ -367,4 +367,52 @@ func TestProcessEvent_EngineError_RecordsDeadLetter(t *testing.T) {
 	if deadLetters[0].EventID != "ev-dead-letter" {
 		t.Fatalf("unexpected dead letter event id: %q", deadLetters[0].EventID)
 	}
+
+	// The task must be failed — not left stuck in running.
+	updated, err := tasks.Get(context.Background(), "task-dead-letter")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if updated.Status != domain.TaskStatusFailed {
+		t.Errorf("expected task status failed after missing workflow def, got %s", updated.Status)
+	}
+}
+
+func TestProcessEvent_MissingWorkflowDef_TaskNotRetriedAfterFail(t *testing.T) {
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+
+	mem := workflow.NewMemoryDefStore()
+	engine := workflow.NewEngine(mem, noopDispatcher{})
+
+	task := runningTask("task-no-retry", "dev-no-retry", "missing-workflow")
+	_ = tasks.Save(context.Background(), task)
+
+	orch := newOrch(engine, tasks, states)
+
+	ev := func(id string, seq uint64) domain.Event {
+		return domain.Event{
+			ID: id, Kind: domain.EventKindAgentOnline,
+			DeviceID: "dev-no-retry", SeqNo: seq, OccurredAt: time.Now(),
+		}
+	}
+
+	// First event: workflow def not found → task failed.
+	err := orch.ProcessEvent(context.Background(), ev("ev-1", 1))
+	if err == nil {
+		t.Fatal("expected error for missing workflow def")
+	}
+	after1, _ := tasks.Get(context.Background(), "task-no-retry")
+	if after1.Status != domain.TaskStatusFailed {
+		t.Fatalf("expected failed after first event, got %s", after1.Status)
+	}
+
+	// Second event: task is now terminal — must be silently skipped (no error, no state).
+	if err := orch.ProcessEvent(context.Background(), ev("ev-2", 2)); err != nil {
+		t.Fatalf("expected no error on second event for terminal task, got: %v", err)
+	}
+	after2, _ := tasks.Get(context.Background(), "task-no-retry")
+	if after2.Status != domain.TaskStatusFailed {
+		t.Errorf("status must remain failed, got %s", after2.Status)
+	}
 }

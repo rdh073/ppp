@@ -1,12 +1,16 @@
 package com.autosdk.agent.action
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 private const val TAG = "ActionExecutor"
 
@@ -34,19 +38,25 @@ class ActionExecutor(private val service: AccessibilityService) {
         is AutomationAction.CloseApp ->
             global(AccessibilityService.GLOBAL_ACTION_HOME)
 
-        is AutomationAction.Click -> withNode(action.selector) { node ->
-            val clickNode = findSelfOrAncestor(node) { it.isClickable }
-                ?: return@withNode ActionResult.Failed(
-                    "target_not_actionable",
-                    "Node and ancestors are not clickable: ${action.selector}",
-                )
-            try {
-                if (!clickNode.isEnabled) return@withNode ActionResult.Failed(
-                    "target_not_actionable", "Node is disabled: ${action.selector}"
-                )
-                dispatchAction(clickNode, AccessibilityNodeInfo.ACTION_CLICK, action.selector)
-            } finally {
-                if (clickNode !== node) clickNode.recycle()
+        is AutomationAction.Click -> {
+            if (action.selector.kind == SelectorKind.COORDINATE) {
+                dispatchCoordinateTap(action.selector.value)
+            } else {
+                withNode(action.selector) { node ->
+                    val clickNode = findSelfOrAncestor(node) { it.isClickable }
+                        ?: return@withNode ActionResult.Failed(
+                            "target_not_actionable",
+                            "Node and ancestors are not clickable: ${action.selector}",
+                        )
+                    try {
+                        if (!clickNode.isEnabled) return@withNode ActionResult.Failed(
+                            "target_not_actionable", "Node is disabled: ${action.selector}"
+                        )
+                        dispatchAction(clickNode, AccessibilityNodeInfo.ACTION_CLICK, action.selector)
+                    } finally {
+                        if (clickNode !== node) clickNode.recycle()
+                    }
+                }
             }
         }
 
@@ -222,6 +232,55 @@ class ActionExecutor(private val service: AccessibilityService) {
         }
 
     // ---- private helpers ----
+
+    /**
+     * Issues a single-point tap gesture at absolute screen coordinates.
+     * Blank [value] is treated as a no-op (returns [ActionResult.Ok] immediately).
+     * Requires API 24+ (minSdk = 26, so always satisfied).
+     */
+    private fun dispatchCoordinateTap(value: String): ActionResult {
+        if (value.isBlank()) return ActionResult.Ok
+
+        val parts = value.split(",")
+        if (parts.size != 2) {
+            return ActionResult.Failed(
+                "input_rejected",
+                "Invalid coordinate format, expected 'x,y': $value",
+            )
+        }
+        val x = parts[0].trim().toIntOrNull()
+            ?: return ActionResult.Failed("input_rejected", "Invalid x coordinate: ${parts[0]}")
+        val y = parts[1].trim().toIntOrNull()
+            ?: return ActionResult.Failed("input_rejected", "Invalid y coordinate: ${parts[1]}")
+
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 1L)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        val latch = CountDownLatch(1)
+        var succeeded = false
+        val dispatched = service.dispatchGesture(
+            gesture,
+            object : AccessibilityService.GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription) {
+                    succeeded = true
+                    latch.countDown()
+                }
+                override fun onCancelled(gestureDescription: GestureDescription) {
+                    latch.countDown()
+                }
+            },
+            null,
+        )
+        if (!dispatched) {
+            return ActionResult.Failed("input_rejected", "Coordinate tap not dispatched at $x,$y")
+        }
+        if (!latch.await(2, TimeUnit.SECONDS)) {
+            return ActionResult.Failed("input_rejected", "Coordinate tap timed out at $x,$y")
+        }
+        return if (succeeded) ActionResult.Ok
+        else ActionResult.Failed("input_rejected", "Coordinate tap cancelled at $x,$y")
+    }
 
     private fun global(action: Int): ActionResult {
         val ok = service.performGlobalAction(action)

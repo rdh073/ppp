@@ -1,0 +1,105 @@
+# server-agent configuration file
+#
+# Override chain (lowest → highest priority):
+#   built-in defaults  →  this file  →  environment variables  →  CLI flags
+#
+# Secrets are NOT stored here. Pass them via environment variables only:
+#   AUTO_REDIS_PASSWORD       — Redis authentication password
+#   AUTO_TOOL_LLM_API_KEY     — Bearer token for the LLM tool endpoint
+#
+# Usage:
+#   go run ./cmd/server -config ./config/server.toml
+
+# ---------------------------------------------------------------------------
+# HTTP server
+# ---------------------------------------------------------------------------
+[server]
+# addr = ":3000"
+
+# Persistent runtime data directory (tasks, workflow checkpoints, events).
+# data_dir = "./var"
+
+# Tool catalog directory. Must contain providers.yaml + manifests/ subdirectory.
+# tool_dir = "./config/tools"
+
+# Workflow definitions directory. Leave empty for in-memory-only workflow defs.
+# workflow_dir = ""
+
+# How often to reload workflow definitions from workflow_dir (if set).
+# workflow_poll = "5s"
+
+# Log verbosity: debug | info | warn | error
+# log_level = "info"
+
+# Graceful shutdown window before the process exits.
+# shutdown_timeout = "15s"
+
+# ---------------------------------------------------------------------------
+# State store
+# ---------------------------------------------------------------------------
+[store]
+# driver = "file"      # "file" | "redis"
+
+# Redis-only: how long task and workflow-state keys live. 0 = no expiry.
+# state_ttl = "0s"
+
+# ---------------------------------------------------------------------------
+# Redis connection (used by store.driver = "redis" and event_runtime.mode = "redis-streams")
+# ---------------------------------------------------------------------------
+[redis]
+# addr = "localhost:6379"
+# db   = 0
+# Password: AUTO_REDIS_PASSWORD environment variable only.
+
+# ---------------------------------------------------------------------------
+# Event runtime
+# ---------------------------------------------------------------------------
+[event_runtime]
+# mode = "inline"   # "inline" | "redis-streams"
+#
+# inline:         accept → process in-process immediately (development / single-node)
+# redis-streams:  accept → publish to Redis Streams → worker goroutines consume
+
+# ---------------------------------------------------------------------------
+# Event bus (redis-streams mode only)
+# ---------------------------------------------------------------------------
+[event_bus]
+# partitions      = 8       # Number of wakeup stream partitions (workflow.wakeup.pNN)
+# group           = "server-agent"
+# consumer_prefix = "server-agent"
+# instance_id     = ""      # Stable worker identity; auto-generated when empty
+# lease_ttl       = "15s"   # Partition ownership lease TTL
+# pending_idle    = "45s"   # Minimum idle before reclaiming stuck pending entries
+# claim_count     = 16      # Max pending entries reclaimed per XAUTOCLAIM call
+# ownership_retry = "500ms" # Backoff before retrying partition ownership
+
+# ---------------------------------------------------------------------------
+# Periodic pruning (prevent unbounded file-store growth)
+# ---------------------------------------------------------------------------
+[pruning]
+# interval            = "1h"    # How often the pruner runs
+# accepted_events_age = "168h"  # Prune accepted events older than this (7 days)
+# dead_letters_age    = "168h"  # Prune dead letters older than this (7 days)
+# command_outbox_age  = "24h"   # Prune command outbox records older than this
+
+# ---------------------------------------------------------------------------
+# ADB (Android Debug Bridge) — accessibility auto-enabler
+# ---------------------------------------------------------------------------
+[adb]
+# host                    = "localhost"
+# port                    = 5037
+# accessibility_component = "com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService"
+
+# Optional per-device serial overrides. Maps deviceId → adb serial.
+# [adb.serial_by_device]
+# "emulator-pixel7" = "emulator-5554"
+# "real-device-01"  = "R58M41XXYYY"
+
+# ---------------------------------------------------------------------------
+# Tool LLM backend (model-backed tools such as vision.analyze)
+# ---------------------------------------------------------------------------
+[tools.llm]
+# OpenAI-compatible chat-completions endpoint.
+# api_url = "https://api.openai.com/v1/chat/completions"
+# model   = "gpt-4o"
+# API key: AUTO_TOOL_LLM_API_KEY environment variable only.

@@ -134,4 +134,5 @@ const (
 	TargetKindResourceID         TargetKind = "resource_id"
 	TargetKindContentDescription TargetKind = "content_description"
 	TargetKindClass              TargetKind = "class"
+	TargetKindCoordinate         TargetKind = "coordinate" // Value: "x,y" (pixels). Empty = no-op.
 )

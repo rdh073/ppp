@@ -1,0 +1,26 @@
+name: vision.analyze
+provider: anthropic-vision-native
+providerToolName: vision.analyze
+description: >
+  Analyzes a screenshot with a vision LLM and returns structured JSON.
+  The prompt and outputSchema params are supplied at runtime by the workflow,
+  making this tool reusable for any grid-selection challenge, UI observation,
+  or other visual reasoning task without any Go code changes.
+deterministic: false
+timeout: 30s
+retryBudget: 1
+inputSchema:
+  type: object
+  required: [imageBase64, prompt, outputSchema]
+  properties:
+    imageBase64:
+      type: string
+      minLength: 1
+    mimeType:
+      type: string
+    prompt:
+      type: string
+      minLength: 1
+    outputSchema:
+      type: string
+      minLength: 2

@@ -82,6 +82,69 @@ class ActionExecutorTest {
     }
 
     @Test
+    fun `coordinate tap with blank value is no-op`() {
+        val fixture = ExecutorFixture()
+
+        val result = fixture.executor.execute(
+            AutomationAction.Click(Selector(SelectorKind.COORDINATE, "")),
+        )
+
+        assertEquals(ActionResult.Ok, result)
+    }
+
+    @Test
+    fun `coordinate tap with whitespace value is no-op`() {
+        val fixture = ExecutorFixture()
+
+        val result = fixture.executor.execute(
+            AutomationAction.Click(Selector(SelectorKind.COORDINATE, "   ")),
+        )
+
+        assertEquals(ActionResult.Ok, result)
+    }
+
+    @Test
+    fun `coordinate tap with invalid format returns failure`() {
+        val fixture = ExecutorFixture()
+
+        val result = fixture.executor.execute(
+            AutomationAction.Click(Selector(SelectorKind.COORDINATE, "400")),
+        )
+
+        assertTrue(result is ActionResult.Failed)
+        assertEquals("input_rejected", (result as ActionResult.Failed).failureClass)
+    }
+
+    @Test
+    fun `coordinate tap with non-integer value returns failure`() {
+        val fixture = ExecutorFixture()
+
+        val result = fixture.executor.execute(
+            AutomationAction.Click(Selector(SelectorKind.COORDINATE, "abc,300")),
+        )
+
+        assertTrue(result is ActionResult.Failed)
+        assertEquals("input_rejected", (result as ActionResult.Failed).failureClass)
+    }
+
+    @Test
+    fun `coordinate tap with valid value attempts gesture dispatch`() {
+        val fixture = ExecutorFixture()
+
+        val result = fixture.executor.execute(
+            AutomationAction.Click(Selector(SelectorKind.COORDINATE, "400,300")),
+        )
+
+        // dispatchGesture returns false in Robolectric (gesture infrastructure not available).
+        // Verify the code path runs without a crash and surfaces the OS rejection correctly.
+        assertTrue(
+            "expected Ok or input_rejected, got $result",
+            result == ActionResult.Ok ||
+                (result is ActionResult.Failed && result.failureClass == "input_rejected"),
+        )
+    }
+
+    @Test
     fun `long press resolves long clickable ancestor for selected label node`() {
         val fixture = ExecutorFixture()
         val row = fixture.node(longClickable = true)

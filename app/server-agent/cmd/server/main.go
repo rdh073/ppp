@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -28,80 +27,88 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":3000", "HTTP listen address")
-	workflowDir := flag.String("workflow-dir", "", "directory to watch for YAML workflow defs (optional)")
-	workflowPoll := flag.Duration("workflow-poll", 5*time.Second, "polling interval for workflow-dir")
-	dataDir := flag.String("data-dir", filepath.Join(".", "var"), "directory for persisted runtime data")
-	toolDir := flag.String("tool-dir", filepath.Join(".", "config", "tools"), "directory containing tool providers, manifests, bindings, and prompts")
+	configPath := flag.String("config", "", "path to config.toml (optional; defaults and env vars apply when omitted)")
+	addrFlag := flag.String("addr", "", "HTTP listen address (overrides config; default :3000)")
+	dataDirFlag := flag.String("data-dir", "", fmt.Sprintf("persisted runtime data directory (overrides config; default %s)", filepath.Join(".", "var")))
+	toolDirFlag := flag.String("tool-dir", "", fmt.Sprintf("tool catalog directory (overrides config; default %s)", filepath.Join(".", "config", "tools")))
+	workflowDirFlag := flag.String("workflow-dir", "", "YAML workflow definitions directory (overrides config; default empty = in-memory only)")
+	workflowPollFlag := flag.Duration("workflow-poll", 0, "workflow-dir polling interval (overrides config; default 5s)")
 	flag.Parse()
 
+	// Bootstrap logger for errors before the config-driven logger is ready.
+	bootstrapLog := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	cfg, err := LoadConfig(*configPath)
+	if err != nil {
+		bootstrapLog.Error("config load failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Apply any flags that were explicitly set on the command line.
+	visitedFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { visitedFlags[f.Name] = true })
+	cfg.ApplyFlagOverrides(addrFlag, dataDirFlag, toolDirFlag, workflowDirFlag, workflowPollFlag, visitedFlags)
+
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: cfg.SlogLevel(),
 	}))
 
 	// --- infrastructure ---
 	reg := registry.New()
 	metricsRegistry := telemetry.NewRegistry()
 
-	stateStoreMode := stringEnv("AUTO_STATE_STORE", "file")
 	var taskStore store.TaskStore
 	var stateStore store.WorkflowStateStore
 	var taskQueue store.TaskQueue
-	switch stateStoreMode {
+	switch cfg.Store.Driver {
 	case "redis":
-		redisDB, err := intEnv("AUTO_REDIS_DB", 0)
-		if err != nil {
-			log.Error("invalid AUTO_REDIS_DB", "err", err)
-			os.Exit(1)
-		}
-		stateTTL, err := durationEnv("AUTO_STATE_TTL", store.DefaultStateTTL)
-		if err != nil {
-			log.Error("invalid AUTO_STATE_TTL", "err", err)
-			os.Exit(1)
-		}
 		redisClient := store.NewRedisClient(
-			stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
+			cfg.Redis.Addr,
 			os.Getenv("AUTO_REDIS_PASSWORD"),
-			redisDB,
+			cfg.Redis.DB,
 		)
 		if err := redisClient.Ping(context.Background()).Err(); err != nil {
 			log.Error("redis ping failed", "err", err)
 			os.Exit(1)
 		}
+		stateTTL := cfg.Store.StateTTL.D()
+		if stateTTL == 0 {
+			stateTTL = store.DefaultStateTTL
+		}
 		taskStore = store.NewRedisTaskStore(redisClient, stateTTL)
 		stateStore = store.NewRedisWorkflowStateStore(redisClient, stateTTL)
 		taskQueue = store.NewRedisTaskQueue(redisClient)
-		log.Info("state store: redis", "addr", stringEnv("AUTO_REDIS_ADDR", "localhost:6379"), "ttl", stateTTL)
+		log.Info("state store: redis", "addr", cfg.Redis.Addr, "ttl", stateTTL)
 	default: // "file"
-		fileTaskStore, err := store.NewFileTaskStore(*dataDir)
+		fileTaskStore, err := store.NewFileTaskStore(cfg.Server.DataDir)
 		if err != nil {
-			log.Error("failed to open task store", "dir", *dataDir, "err", err)
+			log.Error("failed to open task store", "dir", cfg.Server.DataDir, "err", err)
 			os.Exit(1)
 		}
-		fileStateStore, err := store.NewFileWorkflowStateStore(*dataDir)
+		fileStateStore, err := store.NewFileWorkflowStateStore(cfg.Server.DataDir)
 		if err != nil {
-			log.Error("failed to open workflow state store", "dir", *dataDir, "err", err)
+			log.Error("failed to open workflow state store", "dir", cfg.Server.DataDir, "err", err)
 			os.Exit(1)
 		}
-		fileQueue, err := store.NewFileTaskQueue(*dataDir)
+		fileQueue, err := store.NewFileTaskQueue(cfg.Server.DataDir)
 		if err != nil {
-			log.Error("failed to open task queue", "dir", *dataDir, "err", err)
+			log.Error("failed to open task queue", "dir", cfg.Server.DataDir, "err", err)
 			os.Exit(1)
 		}
 		taskStore = fileTaskStore
 		stateStore = fileStateStore
 		taskQueue = fileQueue
-		log.Info("state store: file", "dir", *dataDir)
+		log.Info("state store: file", "dir", cfg.Server.DataDir)
 	}
 
-	eventStore, err := store.NewFileEventPlaneStore(*dataDir)
+	eventStore, err := store.NewFileEventPlaneStore(cfg.Server.DataDir)
 	if err != nil {
-		log.Error("failed to open event plane store", "dir", *dataDir, "err", err)
+		log.Error("failed to open event plane store", "dir", cfg.Server.DataDir, "err", err)
 		os.Exit(1)
 	}
-	commandOutbox, err := store.NewFileCommandOutboxStore(*dataDir)
+	commandOutbox, err := store.NewFileCommandOutboxStore(cfg.Server.DataDir)
 	if err != nil {
-		log.Error("failed to open command outbox store", "dir", *dataDir, "err", err)
+		log.Error("failed to open command outbox store", "dir", cfg.Server.DataDir, "err", err)
 		os.Exit(1)
 	}
 	disp := dispatcher.NewMemoryDispatcher(reg, commandOutbox, metricsRegistry)
@@ -110,28 +117,29 @@ func main() {
 	var defStore workflow.DefStore
 	mem := workflow.NewMemoryDefStore()
 
-	if *workflowDir != "" {
-		fs, err := workflow.NewFSDefStore(*workflowDir, log)
+	if cfg.Server.WorkflowDir != "" {
+		fs, err := workflow.NewFSDefStore(cfg.Server.WorkflowDir, log)
 		if err != nil {
-			log.Error("failed to load workflow dir", "dir", *workflowDir, "err", err)
+			log.Error("failed to load workflow dir", "dir", cfg.Server.WorkflowDir, "err", err)
 			os.Exit(1)
 		}
-		fs.Watch(context.Background(), *workflowPoll)
+		fs.Watch(context.Background(), cfg.Server.WorkflowPoll.D())
 		defStore = fs
 	} else {
 		defStore = mem
 	}
 
 	// --- tool catalog ---
-	toolCatalog, err := toolcatalog.LoadCatalog(context.Background(), *toolDir, log, toolcatalog.ModelToolConfig{
-		APIURL: os.Getenv("AUTO_TOOL_LLM_API_URL"),
+	toolCatalog, err := toolcatalog.LoadCatalog(context.Background(), cfg.Server.ToolDir, log, toolcatalog.ModelToolConfig{
+		APIURL: cfg.Tools.LLM.APIURL,
 		APIKey: os.Getenv("AUTO_TOOL_LLM_API_KEY"),
-		Model:  os.Getenv("AUTO_TOOL_LLM_MODEL"),
+		Model:  cfg.Tools.LLM.Model,
 	})
 	if err != nil {
-		log.Error("failed to load tool catalog", "dir", *toolDir, "err", err)
+		log.Error("failed to load tool catalog", "dir", cfg.Server.ToolDir, "err", err)
 		os.Exit(1)
 	}
+
 	// --- workflow engine ---
 	engine := workflow.NewEngine(defStore, disp, toolCatalog.Registry)
 
@@ -161,58 +169,23 @@ func main() {
 		"tasksRequeued", recoveryReport.TasksRequeued,
 	)
 
-	runtimeMode := strings.TrimSpace(os.Getenv("AUTO_EVENT_RUNTIME"))
-	if runtimeMode == "" {
-		runtimeMode = "inline"
-	}
-
 	var runtime eventruntime.Runtime
-	switch runtimeMode {
+	switch cfg.EventRuntime.Mode {
 	case "inline":
 		runtime = eventruntime.NewInlineRuntime(eventStore, orch, log, metricsRegistry)
 	case "redis-streams":
-		partitions, err := intEnv("AUTO_EVENT_BUS_PARTITIONS", 8)
-		if err != nil {
-			log.Error("invalid AUTO_EVENT_BUS_PARTITIONS", "err", err)
-			os.Exit(1)
-		}
-		redisDB, err := intEnv("AUTO_REDIS_DB", 0)
-		if err != nil {
-			log.Error("invalid AUTO_REDIS_DB", "err", err)
-			os.Exit(1)
-		}
-		leaseTTL, err := durationEnv("AUTO_EVENT_BUS_LEASE_TTL", 15*time.Second)
-		if err != nil {
-			log.Error("invalid AUTO_EVENT_BUS_LEASE_TTL", "err", err)
-			os.Exit(1)
-		}
-		pendingIdle, err := durationEnv("AUTO_EVENT_BUS_PENDING_IDLE", 45*time.Second)
-		if err != nil {
-			log.Error("invalid AUTO_EVENT_BUS_PENDING_IDLE", "err", err)
-			os.Exit(1)
-		}
-		pendingClaimCount, err := intEnv("AUTO_EVENT_BUS_CLAIM_COUNT", 16)
-		if err != nil {
-			log.Error("invalid AUTO_EVENT_BUS_CLAIM_COUNT", "err", err)
-			os.Exit(1)
-		}
-		ownershipRetry, err := durationEnv("AUTO_EVENT_BUS_OWNERSHIP_RETRY", 500*time.Millisecond)
-		if err != nil {
-			log.Error("invalid AUTO_EVENT_BUS_OWNERSHIP_RETRY", "err", err)
-			os.Exit(1)
-		}
 		bus, err := eventruntime.NewRedisStreamsBus(eventruntime.RedisStreamsConfig{
-			Addr:              stringEnv("AUTO_REDIS_ADDR", "localhost:6379"),
+			Addr:              cfg.Redis.Addr,
 			Password:          os.Getenv("AUTO_REDIS_PASSWORD"),
-			DB:                redisDB,
-			Partitions:        partitions,
-			Group:             stringEnv("AUTO_REDIS_GROUP", "server-agent"),
-			ConsumerPrefix:    stringEnv("AUTO_REDIS_CONSUMER_PREFIX", "server-agent"),
-			InstanceID:        os.Getenv("AUTO_REDIS_INSTANCE_ID"),
-			LeaseTTL:          leaseTTL,
-			PendingIdle:       pendingIdle,
-			PendingClaimCount: int64(pendingClaimCount),
-			OwnershipRetry:    ownershipRetry,
+			DB:                cfg.Redis.DB,
+			Partitions:        cfg.EventBus.Partitions,
+			Group:             cfg.EventBus.Group,
+			ConsumerPrefix:    cfg.EventBus.ConsumerPrefix,
+			InstanceID:        cfg.EventBus.InstanceID,
+			LeaseTTL:          cfg.EventBus.LeaseTTL.D(),
+			PendingIdle:       cfg.EventBus.PendingIdle.D(),
+			PendingClaimCount: int64(cfg.EventBus.ClaimCount),
+			OwnershipRetry:    cfg.EventBus.OwnershipRetry.D(),
 		}, log, metricsRegistry)
 		if err != nil {
 			log.Error("failed to configure redis streams runtime", "err", err)
@@ -220,14 +193,14 @@ func main() {
 		}
 		runtime = eventruntime.NewQueuedRuntime(eventStore, orch, bus, log, metricsRegistry)
 	default:
-		log.Error("unsupported AUTO_EVENT_RUNTIME", "mode", runtimeMode)
+		log.Error("unsupported event runtime mode", "mode", cfg.EventRuntime.Mode)
 		os.Exit(1)
 	}
 	if err := runtime.Start(context.Background()); err != nil {
-		log.Error("event runtime start failed", "mode", runtimeMode, "err", err)
+		log.Error("event runtime start failed", "mode", cfg.EventRuntime.Mode, "err", err)
 		os.Exit(1)
 	}
-	log.Info("event runtime ready", "mode", runtimeMode)
+	log.Info("event runtime ready", "mode", cfg.EventRuntime.Mode)
 
 	// --- device assigner (routes pending tasks ↔ idle devices) ---
 	assigner := usecase.NewDeviceAssigner(taskStore, taskQueue, reg, runtime, log)
@@ -240,10 +213,10 @@ func main() {
 
 	orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
 	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
-		os.Getenv("AUTO_ADB_SERVER_HOST"),
-		os.Getenv("AUTO_ADB_SERVER_PORT"),
-		os.Getenv("AUTO_AGENT_ACCESSIBILITY_COMPONENT"),
-		os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"),
+		cfg.ADB.Host,
+		fmt.Sprintf("%d", cfg.ADB.Port),
+		cfg.ADB.AccessibilityComponent,
+		formatSerialByDevice(cfg.ADB.SerialByDevice),
 	)
 	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
 	lifecycleUC.SetForgetDevice(eventUC.ForgetDevice)
@@ -277,29 +250,30 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// --- periodic data pruning (file store: prevent unbounded growth) ---
-	// Accepted events older than 7 days and terminal command outbox records
-	// older than 24 hours are deleted hourly. Cursor state (watermark, dedup)
-	// is never pruned so deduplication remains correct across restarts.
+	// --- periodic data pruning (prevent unbounded file-store growth) ---
+	pruneInterval := cfg.Pruning.Interval.D()
+	if pruneInterval <= 0 {
+		pruneInterval = time.Hour
+	}
 	go func() {
-		t := time.NewTicker(time.Hour)
+		t := time.NewTicker(pruneInterval)
 		defer t.Stop()
 		for {
 			select {
 			case <-serverCtx.Done():
 				return
 			case <-t.C:
-				if n, err := eventStore.PruneAccepted(context.Background(), 7*24*time.Hour); err != nil {
+				if n, err := eventStore.PruneAccepted(context.Background(), cfg.Pruning.AcceptedEventsAge.D()); err != nil {
 					log.Warn("prune accepted events failed", "err", err)
 				} else if n > 0 {
 					log.Info("pruned accepted events", "removed", n)
 				}
-				if n, err := eventStore.PruneDeadLetters(context.Background(), 7*24*time.Hour); err != nil {
+				if n, err := eventStore.PruneDeadLetters(context.Background(), cfg.Pruning.DeadLettersAge.D()); err != nil {
 					log.Warn("prune dead letters failed", "err", err)
 				} else if n > 0 {
 					log.Info("pruned dead letters", "removed", n)
 				}
-				if n, err := commandOutbox.PruneCommandOutbox(context.Background(), 24*time.Hour); err != nil {
+				if n, err := commandOutbox.PruneCommandOutbox(context.Background(), cfg.Pruning.CommandOutboxAge.D()); err != nil {
 					log.Warn("prune command outbox failed", "err", err)
 				} else if n > 0 {
 					log.Info("pruned command outbox", "removed", n)
@@ -308,7 +282,11 @@ func main() {
 		}
 	}()
 
-	srv := &http.Server{Addr: *addr, Handler: mux}
+	shutdownTimeout := cfg.Server.ShutdownTimeout.D()
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 15 * time.Second
+	}
+	srv := &http.Server{Addr: cfg.Server.Addr, Handler: mux}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -316,8 +294,8 @@ func main() {
 		select {
 		case sig := <-sigCh:
 			log.Info("shutdown signal received", "signal", sig)
-			serverCancel() // cancels watchdog and other ctx-aware goroutines
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			serverCancel()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer shutdownCancel()
 			if err := srv.Shutdown(shutdownCtx); err != nil {
 				log.Error("http server shutdown error", "err", err)
@@ -326,43 +304,11 @@ func main() {
 		}
 	}()
 
-	log.Info("server-agent starting", "addr", *addr)
+	log.Info("server-agent starting", "addr", cfg.Server.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server failed", "err", err)
 		serverCancel()
 		os.Exit(1)
 	}
 	log.Info("server-agent stopped")
-}
-
-func stringEnv(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func intEnv(key string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, err
-	}
-	return parsed, nil
-}
-
-func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, err
-	}
-	return parsed, nil
 }

@@ -8,6 +8,7 @@ enum class SelectorKind {
     CONTENT_DESC,
     BOUNDS,
     PACKAGE_NAME,
+    COORDINATE, // Absolute screen coordinates "x,y". Empty value = no-op.
 }
 
 data class Selector(

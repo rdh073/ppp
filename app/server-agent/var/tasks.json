@@ -1,0 +1,92 @@
+{
+  "task-1487a927ef945945d9c9ae27beab8ad6": {
+    "ID": "task-1487a927ef945945d9c9ae27beab8ad6",
+    "Goal": "observe the current screen",
+    "InputArtifacts": null,
+    "Status": "failed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "test-observe",
+    "CreatedAt": "2026-03-15T17:09:24.340679079+07:00",
+    "UpdatedAt": "2026-03-15T17:09:24.376532013+07:00"
+  },
+  "task-3c69979a14d77a4e977d64fc5cba2990": {
+    "ID": "task-3c69979a14d77a4e977d64fc5cba2990",
+    "Goal": "set private dns to dns.adguard.com",
+    "InputArtifacts": {
+      "private_dns_hostname": "dns.adguard.com"
+    },
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "android-settings-private-dns",
+    "CreatedAt": "2026-03-15T17:11:35.049320121+07:00",
+    "UpdatedAt": "2026-03-15T17:11:39.608202306+07:00"
+  },
+  "task-71e5180f8822032bf0ce6cf3db53f5c2": {
+    "ID": "task-71e5180f8822032bf0ce6cf3db53f5c2",
+    "Goal": "observe the current screen",
+    "InputArtifacts": null,
+    "Status": "failed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "",
+    "CreatedAt": "2026-03-15T17:08:58.210167006+07:00",
+    "UpdatedAt": "2026-03-15T17:18:24.398814741+07:00"
+  },
+  "task-c1dafb78e5b69ba988a641a72a6d187f": {
+    "ID": "task-c1dafb78e5b69ba988a641a72a6d187f",
+    "Goal": "set private dns",
+    "InputArtifacts": {
+      "private_dns_hostname": "dns.adguard.com"
+    },
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "android-settings-private-dns",
+    "CreatedAt": "2026-03-15T17:20:37.942117116+07:00",
+    "UpdatedAt": "2026-03-15T17:20:41.712408744+07:00"
+  },
+  "task-ce2a4278e54505cc292bc26efa9cb035": {
+    "ID": "task-ce2a4278e54505cc292bc26efa9cb035",
+    "Goal": "observe the current screen",
+    "InputArtifacts": null,
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "test-observe",
+    "CreatedAt": "2026-03-15T17:10:12.247673256+07:00",
+    "UpdatedAt": "2026-03-15T17:10:12.317660543+07:00"
+  },
+  "task-daad73a0d38ba4b4e3dc1b5889b4d842": {
+    "ID": "task-daad73a0d38ba4b4e3dc1b5889b4d842",
+    "Goal": "set private dns",
+    "InputArtifacts": {
+      "private_dns_hostname": "dns.example.com"
+    },
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "android-settings-private-dns",
+    "CreatedAt": "2026-03-15T07:23:46.951837911+07:00",
+    "UpdatedAt": "2026-03-15T07:24:33.610299139+07:00"
+  },
+  "task-fb039d216de95e7d3f91a3ebca15c860": {
+    "ID": "task-fb039d216de95e7d3f91a3ebca15c860",
+    "Goal": "set private dns",
+    "InputArtifacts": {
+      "private_dns_hostname": "dns.adguard.com"
+    },
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "android-settings-private-dns",
+    "CreatedAt": "2026-03-15T17:29:12.535498713+07:00",
+    "UpdatedAt": "2026-03-15T17:29:16.593249156+07:00"
+  },
+  "task-fb4931101ba871bcbb4fdb179b438043": {
+    "ID": "task-fb4931101ba871bcbb4fdb179b438043",
+    "Goal": "set private dns to dns.quad9.net",
+    "InputArtifacts": {
+      "private_dns_hostname": "dns.quad9.net"
+    },
+    "Status": "completed",
+    "AssignedDevice": "339249820dc6a5a9",
+    "WorkflowName": "android-settings-private-dns",
+    "CreatedAt": "2026-03-15T17:30:43.717136769+07:00",
+    "UpdatedAt": "2026-03-15T17:30:48.544674596+07:00"
+  }
+}
