@@ -52,7 +52,7 @@ server-agent adalah service (Go) yang:
 - Menerima event dari android-agent dan memutuskan langkah berikutnya.
 - Menghasilkan perintah action dan memproses action result.
 
-Catatan: repo saat ini hanya menandai bahasa di [`app/server-agent/CLAUDE.md`](../app/server-agent/CLAUDE.md), jadi detail implementasi belum ada.
+Implementasi lengkap tersedia di `app/server-agent/`. Lihat `app/server-agent/CLAUDE.md` untuk layout paket, command build/test, dan konvensi kode.
 
 ## 4. Konsep Data Model Tingkat Tinggi
 

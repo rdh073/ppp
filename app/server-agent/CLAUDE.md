@@ -37,11 +37,11 @@ cmd/server/           wires all components, starts HTTP
 internal/
   domain/             pure types — Session, Task, WorkflowState, Event, Command, UiSnapshot
   registry/           MemoryRegistry + Sender interface + AgentRegistry port
-  store/              TaskStore + WorkflowStateStore interfaces + in-memory impls
+  store/              TaskStore (incl. ListActiveByDevice) + WorkflowStateStore + EventPlaneStore + TaskQueue + CommandOutboxStore; memory/file/redis impls
   eventruntime/       event submission boundary; inline vs redis-streams runtime modes
   dispatcher/         Dispatcher interface — routes device.* commands, correlates responses
-  workflow/           Engine (event-driven step graph), DefStore/FSDefStore, ToolInvoker port, matcher, interpolate
-  orchestrator/       ProcessEvent: per-device lock + watermark + dedup + engine run + checkpoint
+  workflow/           Engine, Node interface (action_node / toolcall_node / routingNode), DefStore/FSDefStore, matcher, snapshot_matcher, validate, interpolate
+  orchestrator/       ProcessEvent: per-device lock + watermark + dedup + engine run + checkpoint; uses ListActiveByDevice
   usecase/            AgentLifecycle, TaskControl, RuntimeRecovery — thin orchestration glue
   handler/            JSON-RPC agent handler (thin), HTTP task handler
   transport/ws/       WebSocket upgrade, read loop, JSON-RPC framing
@@ -254,9 +254,11 @@ Notes:
 
 ## Extending
 
-- **New workflow step type:** add a YAML file under `config/examples/workflows/` (or `-workflow-dir`) using the `StepDef` schema (`trigger`, `action`, `tool_call`, `expect`, `on_success`, `on_failure`). No Go code needed for data-driven workflows. For a new built-in workflow, add a YAML file to the default workflow dir or seed it into a `MemoryDefStore` at startup.
+- **New workflow step type:** add a YAML file under `config/examples/workflows/` (or `-workflow-dir`) using the `StepDef` schema (`trigger`, `action`, `tool_call`, `expect`, `on_success`, `on_failure`, `timeout`, `max_retry`). No Go code needed for data-driven workflows.
+- **New node behaviour:** implement the `workflow.Node` interface (`Execute(ctx, NodeCommand) → NodeOutput`); wire in `Engine.nodeFor()`.
 - **New agent.* method:** add case in `transport/ws/server.go:dispatch`, add handler in `handler/agent.go`.
 - **New tool without central hardcode:** add or update `config/tools/manifests/*.yaml`, `config/tools/bindings/*.yaml`, and optional `config/tools/prompts/*`; reuse `builtin`, `http`, `openai`, `anthropic`, `gemini`, or `deepseek` providers where possible.
 - **Example remote provider contract:** use `cmd/tool-provider-example` plus `config/examples/http-provider` as the reference shape for `GET /v1/tools` discovery and `POST /v1/tools/{name}:invoke`.
-- **Persist to Redis:** implement `store.TaskStore` + `store.WorkflowStateStore`, swap in `main.go`.
+- **Persist to Redis:** implement `store.TaskStore` + `store.WorkflowStateStore` (including `ListActiveByDevice`), swap in `main.go`.
+- **FSDefStore test injection:** use `workflow.NewFSDefStoreWithBacking(dir, backing, log)` to supply a custom `DefStore` in tests; call `ReloadNow(ctx)` instead of relying on the Watch ticker.
 - **Async orchestrator:** the `Dispatcher.Dispatch()` channel is the async seam — no node logic changes.

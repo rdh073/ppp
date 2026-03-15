@@ -13,6 +13,7 @@ local.properties
 
 # Go
 app/server-agent/bin/
+app/server-agent/var/
 *.exe
 
 # OS

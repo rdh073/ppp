@@ -283,7 +283,7 @@ Design constraints:
 
 Repo mapping:
 
-- `app/server-agent/internal/workflow/nodes/toolcall.go`
+- `app/server-agent/internal/workflow/toolcall_node.go`
 - `app/server-agent/internal/domain/workflow.go`
 - `app/server-agent/internal/domain/event.go`
 
