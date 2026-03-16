@@ -23,7 +23,7 @@ type simpleSchema struct {
 	MaxLength  *int                     `json:"maxLength"`
 }
 
-func compileSchemaValidator(raw json.RawMessage) (schemaValidator, error) {
+func CompileSchemaValidator(raw json.RawMessage) (schemaValidator, error) {
 	raw = normalizeJSON(raw)
 	if len(raw) == 0 {
 		return nil, nil

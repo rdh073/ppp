@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
 )
 
 // ToolManifest describes a tool's identity, routing metadata, and parameter schema.
@@ -60,30 +62,21 @@ type ToolBindingResolver interface {
 	Binding(bindingID string) (ToolBinding, bool)
 }
 
-// Sentinel errors.
+// Sentinel errors — ErrToolDisabled and ErrToolRetryable are owned by the llm
+// sub-package so that llm adapters can reference them without an import cycle.
+// They are re-exported here so all callers keep using the tools package.
 var (
 	ErrToolUnsupported   = errors.New("tool unsupported")
-	ErrToolDisabled      = errors.New("tool disabled")
+	ErrToolDisabled      = llm.ErrToolDisabled
 	ErrToolInvalidParams = errors.New("tool invalid params")
-	ErrToolRetryable     = errors.New("tool retryable")
+	ErrToolRetryable     = llm.ErrToolRetryable
 )
 
-// retryableToolError wraps an error to signal the caller may retry.
-type retryableToolError struct{ cause error }
-
-func (e retryableToolError) Error() string    { return e.cause.Error() }
-func (e retryableToolError) Unwrap() error    { return e.cause }
-func (e retryableToolError) Is(target error) bool {
-	return target == ErrToolRetryable
-}
-
 // MarkToolRetryable wraps err so callers can detect it as retryable.
-func MarkToolRetryable(err error) error { return retryableToolError{cause: err} }
+func MarkToolRetryable(err error) error { return llm.MarkToolRetryable(err) }
 
 // IsToolRetryable reports whether err is a retryable tool error.
-func IsToolRetryable(err error) bool {
-	return errors.Is(err, ErrToolRetryable)
-}
+func IsToolRetryable(err error) bool { return llm.IsToolRetryable(err) }
 
 // StaticToolRegistry implements ToolRegistry from a fixed list of ToolDefinitions.
 type StaticToolRegistry struct {

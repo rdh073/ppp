@@ -1,4 +1,4 @@
-package tools_test
+package loader_test
 
 import (
 	"context"
@@ -11,20 +11,20 @@ import (
 	"testing"
 
 	"github.com/autosdk/ppp/server-agent/internal/tools"
+	loader "github.com/autosdk/ppp/server-agent/internal/tools/loader"
 	"github.com/autosdk/ppp/server-agent/internal/tools/exampleprovider"
 )
 
 func defaultToolDir() string {
-	return filepath.Join("..", "..", "config", "tools")
+	return filepath.Join("..", "..", "..", "config", "tools")
 }
 
 func exampleHTTPToolDir() string {
-	return filepath.Join("..", "..", "config", "examples", "http-provider")
+	return filepath.Join("..", "..", "..", "config", "examples", "http-provider")
 }
 
-
 func TestLoadCatalog_DefaultConfig_ExposesExpectedToolsAndBindings(t *testing.T) {
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -73,12 +73,11 @@ func TestLoadCatalog_DefaultConfig_ExposesExpectedToolsAndBindings(t *testing.T)
 }
 
 func TestLoadCatalog_DefaultConfig_LocalToolInvokesFromManifest(t *testing.T) {
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 
-	// credential.generate_password is the canonical local deterministic tool.
 	raw, err := catalog.Registry.Invoke(context.Background(), "credential.generate_password", nil)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -95,11 +94,8 @@ func TestLoadCatalog_DefaultConfig_LocalToolInvokesFromManifest(t *testing.T) {
 	}
 }
 
-// TestLoadCatalog_WelcomeEmail_RemainsVisibleWhenAllDisabled verifies that the
-// content.generate_welcome_email chain tool is loadable with no providers
-// configured and returns ErrToolDisabled (not a load-time error).
 func TestLoadCatalog_WelcomeEmail_RemainsVisibleWhenAllDisabled(t *testing.T) {
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -112,8 +108,6 @@ func TestLoadCatalog_WelcomeEmail_RemainsVisibleWhenAllDisabled(t *testing.T) {
 	}
 }
 
-// TestLoadCatalog_WelcomeEmail_InvokesViaOpenAI configures only the openai-native
-// provider and verifies the chain selects it and returns a valid result.
 func TestLoadCatalog_WelcomeEmail_InvokesViaOpenAI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer openai-key" {
@@ -135,15 +129,13 @@ func TestLoadCatalog_WelcomeEmail_InvokesViaOpenAI(t *testing.T) {
 	t.Setenv("AUTO_TOOL_OPENAI_API_KEY", "openai-key")
 	t.Setenv("AUTO_TOOL_OPENAI_MODEL", "gpt-test")
 
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
 }
 
-// TestLoadCatalog_WelcomeEmail_InvokesViaDeepSeek configures only the deepseek-native
-// provider; the chain skips openai (disabled) and reaches deepseek.
 func TestLoadCatalog_WelcomeEmail_InvokesViaDeepSeek(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer deepseek-key" {
@@ -165,15 +157,13 @@ func TestLoadCatalog_WelcomeEmail_InvokesViaDeepSeek(t *testing.T) {
 	t.Setenv("AUTO_TOOL_DEEPSEEK_API_KEY", "deepseek-key")
 	t.Setenv("AUTO_TOOL_DEEPSEEK_MODEL", "deepseek-chat")
 
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
 }
 
-// TestLoadCatalog_WelcomeEmail_InvokesViaAnthropic configures only the anthropic-native
-// provider; the chain skips openai and deepseek (disabled) and reaches anthropic.
 func TestLoadCatalog_WelcomeEmail_InvokesViaAnthropic(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("x-api-key"); got != "anthropic-key" {
@@ -190,15 +180,13 @@ func TestLoadCatalog_WelcomeEmail_InvokesViaAnthropic(t *testing.T) {
 	t.Setenv("AUTO_TOOL_ANTHROPIC_API_KEY", "anthropic-key")
 	t.Setenv("AUTO_TOOL_ANTHROPIC_MODEL", "claude-test")
 
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
 }
 
-// TestLoadCatalog_WelcomeEmail_InvokesViaGemini configures only the gemini-native
-// provider; the chain skips openai, deepseek, and anthropic (disabled) and reaches gemini.
 func TestLoadCatalog_WelcomeEmail_InvokesViaGemini(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models/gemini-test:generateContent" {
@@ -215,7 +203,7 @@ func TestLoadCatalog_WelcomeEmail_InvokesViaGemini(t *testing.T) {
 	t.Setenv("AUTO_TOOL_GEMINI_API_KEY", "gemini-key")
 	t.Setenv("AUTO_TOOL_GEMINI_MODEL", "gemini-test")
 
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -223,7 +211,7 @@ func TestLoadCatalog_WelcomeEmail_InvokesViaGemini(t *testing.T) {
 }
 
 func TestLoadCatalog_DefaultConfig_HTTPToolRemainsVisibleWhenProviderDisabled(t *testing.T) {
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -246,7 +234,7 @@ func TestLoadCatalog_DefaultConfig_HTTPProviderInvokesWhenConfigured(t *testing.
 
 	t.Setenv("AUTO_TOOL_EXAMPLE_BASE_URL", server.URL)
 
-	catalog, err := tools.LoadCatalog(context.Background(), defaultToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -272,7 +260,7 @@ func TestLoadCatalog_HTTPProvider_EndToEndViaRegistry(t *testing.T) {
 
 	t.Setenv("AUTO_TOOL_EXAMPLE_BASE_URL", server.URL)
 
-	catalog, err := tools.LoadCatalog(context.Background(), exampleHTTPToolDir(), nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), exampleHTTPToolDir(), nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -292,12 +280,7 @@ func TestLoadCatalog_HTTPProvider_EndToEndViaRegistry(t *testing.T) {
 	}
 }
 
-
-// TestLoadCatalog_ChainProvider_FallsBackWhenFirstDisabled verifies that when
-// the first provider in a chain is disabled (optional, unconfigured), the chain
-// advances and the second provider's result is returned.
 func TestLoadCatalog_ChainProvider_FallsBackWhenFirstDisabled(t *testing.T) {
-	// Second provider (chain-second) returns a canned result.
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"choices":[{"message":{"content":"{\"result\":\"ok-from-fallback\"}"}}]
@@ -305,7 +288,6 @@ func TestLoadCatalog_ChainProvider_FallsBackWhenFirstDisabled(t *testing.T) {
 	}))
 	defer fallback.Close()
 
-	// Build a minimal temp tool catalog with a chain manifest.
 	dir := t.TempDir()
 	manifestsDir := filepath.Join(dir, "manifests")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -316,7 +298,6 @@ func TestLoadCatalog_ChainProvider_FallsBackWhenFirstDisabled(t *testing.T) {
 		}
 	}
 
-	// providers.yaml: two openai providers; first has no env set (disabled), second configured.
 	if err := os.WriteFile(filepath.Join(dir, "providers.yaml"), []byte(`providers:
   - id: chain-p1
     kind: openai
@@ -336,7 +317,6 @@ func TestLoadCatalog_ChainProvider_FallsBackWhenFirstDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Manifest: chain of chain-p1 → chain-p2.
 	if err := os.WriteFile(filepath.Join(manifestsDir, "test.chain.yaml"), []byte(`name: test.chain
 providers:
   - provider: chain-p1
@@ -362,17 +342,15 @@ outputSchema:
 		t.Fatal(err)
 	}
 
-	// Minimal prompt template.
 	if err := os.WriteFile(filepath.Join(promptsDir, "test.chain.prompt.tmpl"), []byte(`generate result`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Only chain-p2 is configured; chain-p1 has no env vars set.
 	t.Setenv("TEST_CHAIN_P2_API_URL", fallback.URL)
 	t.Setenv("TEST_CHAIN_P2_API_KEY", "test-key")
 	t.Setenv("TEST_CHAIN_P2_MODEL", "test-model")
 
-	catalog, err := tools.LoadCatalog(context.Background(), dir, nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), dir, nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -392,8 +370,6 @@ outputSchema:
 	}
 }
 
-// TestLoadCatalog_ChainProvider_AllDisabledReturnsErrToolDisabled verifies that when
-// every chain member is disabled, the chain returns ErrToolDisabled.
 func TestLoadCatalog_ChainProvider_AllDisabledReturnsErrToolDisabled(t *testing.T) {
 	dir := t.TempDir()
 	manifestsDir := filepath.Join(dir, "manifests")
@@ -405,7 +381,6 @@ func TestLoadCatalog_ChainProvider_AllDisabledReturnsErrToolDisabled(t *testing.
 		}
 	}
 
-	// Both providers have optional:true with no env vars set.
 	if err := os.WriteFile(filepath.Join(dir, "providers.yaml"), []byte(`providers:
   - id: chain-all-p1
     kind: openai
@@ -452,7 +427,7 @@ outputSchema:
 		t.Fatal(err)
 	}
 
-	catalog, err := tools.LoadCatalog(context.Background(), dir, nil, tools.ModelToolConfig{})
+	catalog, err := loader.LoadCatalog(context.Background(), dir, nil, loader.ModelToolConfig{})
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
@@ -463,7 +438,7 @@ outputSchema:
 	}
 }
 
-func assertWelcomeEmailInvokeTool(t *testing.T, catalog *tools.LoadedCatalog, toolName string) {
+func assertWelcomeEmailInvokeTool(t *testing.T, catalog *loader.LoadedCatalog, toolName string) {
 	t.Helper()
 
 	raw, err := catalog.Registry.Invoke(context.Background(), toolName, json.RawMessage(`{"fullName":"Ayu Lestari"}`))

@@ -20,7 +20,7 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/telemetry"
-	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools"
+	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools/loader"
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
