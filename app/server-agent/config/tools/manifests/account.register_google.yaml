@@ -1,0 +1,30 @@
+name: account.register_google
+providers:
+  - provider: account-http
+    providerToolName: account.register_google
+description: >
+  Registers a newly created Google account in the account-service registry.
+  Call this at the end of a google-account-create workflow to persist the
+  email and password. Returns accountId which can be stored as an artifact.
+deterministic: false
+timeout: 5s
+retryBudget: 1
+inputSchema:
+  type: object
+  required: [email, password]
+  properties:
+    email:
+      type: string
+      description: "Full Gmail address (e.g. user@gmail.com)"
+    password:
+      type: string
+      description: "Account password"
+    deviceId:
+      type: string
+      description: "Device ID that created the account"
+outputSchema:
+  type: object
+  required: [accountId]
+  properties:
+    accountId:
+      type: string

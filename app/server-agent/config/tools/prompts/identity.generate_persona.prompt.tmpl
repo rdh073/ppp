@@ -12,6 +12,7 @@ Rules:
 - lastName: a common Indonesian surname; may be one or two words (e.g. "Santoso" or "Pratama Wijaya")
 - fullName: firstName + " " + lastName
 - gender: exactly "male" or "female"
+- genderLabel: capitalised form of gender for UI text selectors — exactly "Male" or "Female"
 - email: lowercase, derived from fullName (replace spaces with dots, strip special chars),
   followed by "@" and one of: gmail.com, yahoo.co.id, outlook.com — chosen at random.
   Example: budi.santoso@gmail.com
@@ -20,4 +21,4 @@ Rules:
   Example: budi.santoso or rizky_pw92
 
 Return exactly this JSON object and nothing else:
-{"fullName":"...","firstName":"...","lastName":"...","gender":"...","email":"...","username":"..."}
+{"fullName":"...","firstName":"...","lastName":"...","gender":"...","genderLabel":"...","email":"...","username":"..."}

@@ -17,6 +17,9 @@ type generateBirthDateParams struct {
 
 type generatedBirthDateResult struct {
 	BirthDate     string `json:"birthDate"`
+	BirthMonth    int    `json:"birthMonth"`
+	BirthDay      int    `json:"birthDay"`
+	BirthYear     int    `json:"birthYear"`
 	Age           int    `json:"age"`
 	ReferenceDate string `json:"referenceDate"`
 }
@@ -38,9 +41,12 @@ func generateBirthDateTool() ToolDefinition {
 			}`),
 			OutputSchema: rawSchema(`{
 				"type":"object",
-				"required":["birthDate","age","referenceDate"],
+				"required":["birthDate","birthMonth","birthDay","birthYear","age","referenceDate"],
 				"properties":{
 					"birthDate":{"type":"string"},
+					"birthMonth":{"type":"integer"},
+					"birthDay":{"type":"integer"},
+					"birthYear":{"type":"integer"},
 					"age":{"type":"integer"},
 					"referenceDate":{"type":"string"}
 				}
@@ -70,6 +76,9 @@ func generateBirthDateTool() ToolDefinition {
 			birthDate := earliest.AddDate(0, 0, offset)
 			return marshalResult(generatedBirthDateResult{
 				BirthDate:     birthDate.Format(dateLayout),
+				BirthMonth:    int(birthDate.Month()),
+				BirthDay:      birthDate.Day(),
+				BirthYear:     birthDate.Year(),
 				Age:           calculateAge(birthDate, refDate),
 				ReferenceDate: refDate.Format(dateLayout),
 			})
@@ -134,6 +143,11 @@ func validateGeneratedBirthDateResult(raw json.RawMessage) error {
 	}
 	if calculateAge(birthDate, refDate) != result.Age {
 		return fmt.Errorf("age does not match birthDate and referenceDate")
+	}
+	if result.BirthMonth != int(birthDate.Month()) ||
+		result.BirthDay != birthDate.Day() ||
+		result.BirthYear != birthDate.Year() {
+		return fmt.Errorf("birthMonth/Day/Year do not match birthDate")
 	}
 	return nil
 }

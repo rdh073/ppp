@@ -301,3 +301,55 @@ Tujuan bagian ini adalah memastikan sistem tetap aman dan bisa dipulihkan walaup
 - Rate limit event dan command per agent untuk menghindari overload.
 - Tambahkan stop condition saat error berulang untuk mencegah loop tak berujung.
 - Gunakan cancellation untuk menghentikan task saat kondisi safety terpenuhi.
+
+## Adding a Domain Service (Model B)
+
+Setiap domain service yang perlu dipanggil dari workflow mengikuti Model B:
+service expose REST API untuk operator + tool protocol untuk workflow engine.
+
+Tidak ada shared Go module antara server-agent dan domain services — protocol types
+di-duplikasi per service secara intentional. Services tetap fully isolated.
+
+### Checklist
+
+1. **Scaffold service baru** — ikuti struktur `app/account-service/` atau `app/sms-service/`:
+   - `cmd/server/main.go` + `config.go`
+   - `internal/usecase/port.go` (interface)
+   - `internal/handler/toolserver.go` (tool protocol)
+   - `go.mod` (standalone module, tidak ada `go.work`)
+
+2. **Implement tool protocol** — copy `internal/handler/toolserver.go` dari service yang sudah ada.
+   File ini self-contained (tidak pull helper dari file lain). Ganti nama tool dan panggilan usecase.
+
+3. **Wire di `main.go`**:
+   ```go
+   mux.Handle("/v1/tools",  toolHandler)
+   mux.Handle("/v1/tools/", toolHandler)
+   ```
+
+4. **Register provider di server-agent** — tambah entry di `config/tools/providers.yaml`:
+   ```yaml
+   - id: <service>-http
+     kind: http
+     optional: true
+     baseURLEnv: AUTO_<SERVICE>_URL
+     timeout: 5s
+   ```
+
+5. **Tambah manifests** — satu file per tool di `config/tools/manifests/<service>.<tool>.yaml`:
+   ```yaml
+   name: <service>.<tool>
+   providers:
+     - provider: <service>-http
+       providerToolName: <service>.<tool>
+   ```
+
+6. **Set env var** — `AUTO_<SERVICE>_URL=http://localhost:<port>`
+
+### Protocol contract
+
+- `GET /v1/tools` — discovery; returns array of tool descriptors (name, description, inputSchema, outputSchema)
+- `POST /v1/tools/{name}:invoke` — invoke; body `{callId, params}`, response `{result}` or `{error: {code, message, retryable}}`
+
+Server-agent client implementation: `internal/tools/catalog_loader.go` (HTTP provider kind).
+Reference server implementation: `internal/tools/exampleprovider/handler.go` and `app/account-service/internal/handler/toolserver.go`.

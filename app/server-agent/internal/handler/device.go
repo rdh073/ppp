@@ -32,10 +32,14 @@ func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/devices")
 	id = strings.TrimPrefix(id, "/")
 
-	if id == "" {
+	parts := strings.SplitN(id, "/", 2)
+	switch {
+	case len(parts) == 1 && parts[0] == "":
 		h.list(w)
-	} else {
-		h.get(w, domain.DeviceID(id))
+	case len(parts) == 1:
+		h.get(w, domain.DeviceID(parts[0]))
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
 
@@ -82,3 +86,4 @@ func (h *DeviceHandler) get(w http.ResponseWriter, id domain.DeviceID) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessionToView(s))
 }
+

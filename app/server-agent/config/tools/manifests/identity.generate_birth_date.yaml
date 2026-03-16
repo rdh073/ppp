@@ -16,10 +16,16 @@ inputSchema:
       type: string
 outputSchema:
   type: object
-  required: [birthDate, age, referenceDate]
+  required: [birthDate, birthMonth, birthDay, birthYear, age, referenceDate]
   properties:
     birthDate:
       type: string
+    birthMonth:
+      type: integer
+    birthDay:
+      type: integer
+    birthYear:
+      type: integer
     age:
       type: integer
     referenceDate:

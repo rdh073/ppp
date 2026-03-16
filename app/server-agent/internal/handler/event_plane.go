@@ -24,11 +24,11 @@ import (
 //	GET  /events/deadletters/{deadLetterId}
 //	POST /events/deadletters/{deadLetterId}/replay
 type EventPlaneHandler struct {
-	uc  *usecase.EventPlaneControlUseCase
+	uc  usecase.EventPlaneControl
 	log *slog.Logger
 }
 
-func NewEventPlaneHandler(uc *usecase.EventPlaneControlUseCase, log *slog.Logger) *EventPlaneHandler {
+func NewEventPlaneHandler(uc usecase.EventPlaneControl, log *slog.Logger) *EventPlaneHandler {
 	return &EventPlaneHandler{uc: uc, log: log}
 }
 

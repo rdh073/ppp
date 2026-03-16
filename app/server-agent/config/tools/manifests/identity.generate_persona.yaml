@@ -27,7 +27,7 @@ inputSchema:
       enum: [male, female]
 outputSchema:
   type: object
-  required: [fullName, firstName, lastName, gender, email, username]
+  required: [fullName, firstName, lastName, gender, genderLabel, email, username]
   properties:
     fullName:
       type: string
@@ -37,6 +37,8 @@ outputSchema:
       type: string
     gender:
       enum: [male, female]
+    genderLabel:
+      type: string
     email:
       type: string
     username:

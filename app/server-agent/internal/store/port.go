@@ -62,3 +62,4 @@ type CommandOutboxStore interface {
 	Get(ctx context.Context, commandID string) (*domain.CommandOutboxRecord, error)
 	List(ctx context.Context) ([]*domain.CommandOutboxRecord, error)
 }
+

@@ -34,11 +34,11 @@ type Conn interface {
 // AgentHandler is a thin JSON-RPC dispatcher that delegates to AgentLifecycleUseCase.
 // It owns only parameter parsing and response shaping — no business logic.
 type AgentHandler struct {
-	uc  *usecase.AgentLifecycleUseCase
+	uc  usecase.AgentLifecycle
 	log *slog.Logger
 }
 
-func NewAgentHandler(uc *usecase.AgentLifecycleUseCase, log *slog.Logger) *AgentHandler {
+func NewAgentHandler(uc usecase.AgentLifecycle, log *slog.Logger) *AgentHandler {
 	return &AgentHandler{uc: uc, log: log}
 }
 

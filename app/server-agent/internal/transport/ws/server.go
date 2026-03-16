@@ -28,7 +28,7 @@ var upgrader = websocket.Upgrader{
 // or the dispatcher (response correlation).
 type AgentServer struct {
 	agentHandler *handler.AgentHandler
-	eventUC      *usecase.EventIngestionUseCase
+	eventUC      usecase.EventIngestion
 	reg          registry.AgentRegistry
 	disp         dispatcher.Dispatcher
 	log          *slog.Logger
@@ -36,7 +36,7 @@ type AgentServer struct {
 
 func NewAgentServer(
 	h *handler.AgentHandler,
-	eventUC *usecase.EventIngestionUseCase,
+	eventUC usecase.EventIngestion,
 	reg registry.AgentRegistry,
 	disp dispatcher.Dispatcher,
 	log *slog.Logger,

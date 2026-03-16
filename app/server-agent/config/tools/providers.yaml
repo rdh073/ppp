@@ -50,3 +50,8 @@ providers:
     optional: true
     baseURLEnv: AUTO_TOOL_EXAMPLE_BASE_URL
     timeout: 2s
+  - id: account-http
+    kind: http
+    optional: true
+    baseURLEnv: AUTO_ACCOUNT_SERVICE_URL
+    timeout: 5s

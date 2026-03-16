@@ -1,0 +1,36 @@
+name: account.register_instagram
+providers:
+  - provider: account-http
+    providerToolName: account.register_instagram
+description: >
+  Registers a newly created Instagram account in the account-service registry.
+  Call this at the end of an instagram-create workflow to persist credentials.
+  Returns accountId which can be stored as an artifact.
+deterministic: false
+timeout: 5s
+retryBudget: 1
+inputSchema:
+  type: object
+  required: [username, password]
+  properties:
+    username:
+      type: string
+      description: "Instagram username"
+    password:
+      type: string
+      description: "Account password"
+    contact:
+      type: string
+      description: "Phone or email used at sign-up"
+    deviceId:
+      type: string
+      description: "Device ID that created the account"
+    googleAccountId:
+      type: string
+      description: "Linked Google account ID (if any)"
+outputSchema:
+  type: object
+  required: [accountId]
+  properties:
+    accountId:
+      type: string

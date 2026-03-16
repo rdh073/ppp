@@ -16,11 +16,11 @@ import (
 //	GET    /tasks/{id}     → get task
 //	DELETE /tasks/{id}     → cancel task
 type TaskHandler struct {
-	uc  *usecase.TaskControlUseCase
+	uc  usecase.TaskControl
 	log *slog.Logger
 }
 
-func NewTaskHandler(uc *usecase.TaskControlUseCase, log *slog.Logger) *TaskHandler {
+func NewTaskHandler(uc usecase.TaskControl, log *slog.Logger) *TaskHandler {
 	return &TaskHandler{uc: uc, log: log}
 }
 

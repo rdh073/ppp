@@ -330,6 +330,7 @@ func TestRedisTaskStore_SaveUpdatesExistingTask(t *testing.T) {
 	}
 }
 
+
 func TestRedisWorkflowStateStore_WaitingExpect_RoundTrip(t *testing.T) {
 	c := redisTestClient(t)
 	s := store.NewRedisWorkflowStateStore(c, time.Minute)
