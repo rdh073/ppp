@@ -19,3 +19,9 @@ app/server-agent/var/
 # OS
 .DS_Store
 Thumbs.db
+
+.venv-rag
+unsloth_compiled_cache
+logs
+data
+__pycache__
