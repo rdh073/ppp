@@ -1,0 +1,507 @@
+# Workflow: create a new Google account via the Google account flow UI.
+#
+# Dump source: data/xml-dumps/waydroid/gms/create
+#
+# Load with:  go run ./cmd/server -workflow-dir config/examples/workflows
+# Create task:
+#   POST /tasks {
+#     "goal": "create new Google account",
+#     "workflowName": "google-account-create-waydroid"
+#   }
+#
+# Tool dependencies:
+#   identity.generate_persona     — creates first/last name and persona fields
+#   identity.generate_birth_date    — creates birthMonth/birthDay/birthYear
+#   credential.generate_password    — creates password
+#
+# Required input artifacts (if no SMS tool is available):
+#   phone_number       — phone number for SMS verification
+#   verification_code  — SMS code received on the phone
+#
+# Note:
+#   The GMS UI path in these dumps has no explicit custom username field;
+#   registration uses the generated gmail_username placeholder by convention.
+
+name: google-account-create-waydroid
+version: 2
+entry: generate_persona
+
+steps:
+
+  # ── Step 1: generate identity persona via LLM ──────────────────────────────
+  generate_persona:
+    trigger: {}
+    tool_call:
+      tool_name: identity.generate_persona
+      params: {}
+      outputs:
+        firstName: first_name
+        lastName: last_name
+        genderLabel: gender_label
+        username: gmail_username
+        email: gmail_email
+    on_success: generate_birth_date
+    on_failure: terminal
+
+  # ── Step 2: generate a realistic birth date ───────────────────────────────
+  generate_birth_date:
+    trigger: {}
+    tool_call:
+      tool_name: identity.generate_birth_date
+      params:
+        minAge: 25
+        maxAge: 35
+      outputs:
+        birthMonth: birth_month
+        birthDay: birth_day
+        birthYear: birth_year
+    on_success: generate_password
+    on_failure: terminal
+
+  # ── Step 3: generate account password ─────────────────────────────────────
+  generate_password:
+    trigger: {}
+    tool_call:
+      tool_name: credential.generate_password
+      params:
+        length: 20
+        includeSymbols: true
+      outputs:
+        password: password
+    on_success: open_google_app
+    on_failure: terminal
+
+  # ── Step 4: launch Google app / sign-in flow ──────────────────────────────
+  open_google_app:
+    trigger: {}
+    action:
+      kind: open_app
+      package: com.google.android.gms
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 20s
+    max_retry: 2
+    on_success: tap_create_account
+    on_failure: terminal
+
+  # ── Step 5: enter create-account branch ───────────────────────────────────
+  tap_create_account:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Create account"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 3
+    on_success: tap_for_personal_use
+    on_failure: terminal
+
+  # ── Step 6: choose account purpose (for my personal use) ──────────────────
+  tap_for_personal_use:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "For my personal use"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_first_name
+    on_failure: tap_for_myself
+
+  # ── Step 7: fallback label variant ────────────────────────────────────────
+  tap_for_myself:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "For myself"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_first_name
+    on_failure: terminal
+
+  # ── Step 8: fill first name ──────────────────────────────────────────────
+  enter_first_name:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "firstName"
+      input_text: "{{input.first_name}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_last_name
+    on_failure: terminal
+
+  # ── Step 9: fill last name ───────────────────────────────────────────────
+  enter_last_name:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "lastName"
+      input_text: "{{input.last_name}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_next_after_name
+    on_failure: terminal
+
+  # ── Step 10: advance from name screen ────────────────────────────────────
+  tap_next_after_name:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_birth_month
+    on_failure: terminal
+
+  # ── Step 11: fill month ────────────────────────────────────────────────
+  enter_birth_month:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "month"
+      input_text: "{{input.birth_month}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_birth_day
+    on_failure: tap_next_after_birthday
+
+  # ── Step 12: fill day ─────────────────────────────────────────────────
+  enter_birth_day:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "day"
+      input_text: "{{input.birth_day}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_birth_year
+    on_failure: terminal
+
+  # ── Step 13: fill year ─────────────────────────────────────────────────
+  enter_birth_year:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "year"
+      input_text: "{{input.birth_year}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: select_gender
+    on_failure: terminal
+
+  # ── Step 14: select gender from available options ───────────────────────
+  select_gender:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "{{input.gender_label}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_next_after_birthday
+    on_failure: select_gender_fallback
+
+  # ── Step 15: fallback when gender label is not rendered ───────────────────
+  select_gender_fallback:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Rather not say"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_next_after_birthday
+    on_failure: terminal
+
+  # ── Step 16: advance past birthday screen ────────────────────────────────
+  tap_next_after_birthday:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_choose_email
+    on_failure: terminal
+
+  # ── Step 17: advance username choice screen ─────────────────────────────
+  tap_choose_email:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: enter_password
+    on_failure: terminal
+
+  # ── Step 18: set account password (single visible field in this flow) ─────
+  enter_password:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "password"
+      input_text: "{{input.password}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_next_after_password
+    on_failure: terminal
+
+  # ── Step 19: advance into phone verification step ────────────────────────
+  tap_next_after_password:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: enter_phone
+    on_failure: review_account_info
+
+  # ── Step 20: enter verification phone ────────────────────────────────────
+  enter_phone:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "phoneNumberId"
+      input_text: "{{input.phone_number}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: tap_next_after_phone
+    on_failure: review_account_info
+
+  # ── Step 21: advance after sending SMS code ───────────────────────────────
+  tap_next_after_phone:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: enter_verification_code
+    on_failure: review_account_info
+
+  # ── Step 22: enter OTP from input artifact ───────────────────────────────
+  enter_verification_code:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "code"
+      input_text: "{{input.verification_code}}"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: tap_next_after_verification
+    on_failure: review_account_info
+
+  # ── Step 23: advance from code step ──────────────────────────────────────
+  tap_next_after_verification:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: review_account_info
+    on_failure: review_account_info
+
+  # ── Step 24: confirm account review ──────────────────────────────────────
+  review_account_info:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Next"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 12s
+    max_retry: 2
+    on_success: accept_terms
+    on_failure: accept_terms
+
+  # ── Step 25: accept privacy terms if shown ───────────────────────────────
+  accept_terms:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "I agree"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: accept_google_services
+    on_failure: accept_google_services
+
+  # ── Step 26: confirm Google Services setup ───────────────────────────────
+  accept_google_services:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "ACCEPT"
+    expect:
+      kind: android.screen.changed
+      package: com.google.android.gms
+      ui:
+        ui_ready: true
+    timeout: 15s
+    max_retry: 2
+    on_success: register_google_account
+    on_failure: register_google_account
+
+  # ── Step 27: persist created account ────────────────────────────────────
+  register_google_account:
+    trigger: {}
+    tool_call:
+      tool_name: account.register_google
+      params:
+        email: "{{input.gmail_email}}"
+        password: "{{input.password}}"
+        deviceId: "{{input.device_id}}"
+      outputs:
+        accountId: google_account_id
+      optional: true
+    on_success: terminal
+    on_failure: terminal

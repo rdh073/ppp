@@ -27,6 +27,13 @@ func (noopAccessibilityAutoEnabler) Enable(context.Context, domain.DeviceID, str
 	return nil
 }
 
+func (noopAccessibilityAutoEnabler) EnableBinding(context.Context, AccessibilityRemediationRequest) AccessibilityRemediationResult {
+	return AccessibilityRemediationResult{
+		IdentityStatus:    domain.DeviceIdentityStatusUnknown,
+		RemediationStatus: domain.AccessibilityRemediationStatusPendingNoADB,
+	}
+}
+
 // AdbAccessibilityAutoEnabler runs adb shell settings commands to ensure the
 // agent accessibility service is enabled on the target device.
 type AdbAccessibilityAutoEnabler struct {
@@ -80,68 +87,156 @@ func (a *AdbAccessibilityAutoEnabler) Enable(
 	adbSerial string,
 	serviceComponent string,
 ) error {
-	return retryWithBackoff(ctx, 3, time.Second, func() error {
-		return a.enable(ctx, deviceID, adbSerial, serviceComponent)
+	result := a.EnableBinding(ctx, AccessibilityRemediationRequest{
+		DeviceID:         deviceID,
+		ADBSerial:        adbSerial,
+		ServiceComponent: serviceComponent,
 	})
+	return result.Err
 }
 
-// enable is the single-attempt implementation; Enable wraps it with retry.
-func (a *AdbAccessibilityAutoEnabler) enable(
+func (a *AdbAccessibilityAutoEnabler) EnableBinding(
 	ctx context.Context,
-	deviceID domain.DeviceID,
-	adbSerial string,
-	serviceComponent string,
-) error {
+	req AccessibilityRemediationRequest,
+) AccessibilityRemediationResult {
+	var last AccessibilityRemediationResult
+	for attempt := 0; attempt < 3; attempt++ {
+		last = a.enableOnce(ctx, req)
+		if last.Err == nil || !isRetryableRemediationStatus(last.RemediationStatus) {
+			return last
+		}
+		if attempt == 2 {
+			break
+		}
+		delay := time.Second * (1 << uint(attempt))
+		select {
+		case <-ctx.Done():
+			return AccessibilityRemediationResult{
+				ADBSerial:         last.ADBSerial,
+				ObservedAndroidID: last.ObservedAndroidID,
+				IdentityStatus:    last.IdentityStatus,
+				RemediationStatus: domain.AccessibilityRemediationStatusInfraError,
+				SerialSource:      last.SerialSource,
+				Err:               ctx.Err(),
+			}
+		case <-time.After(delay):
+		}
+	}
+	return last
+}
+
+func (a *AdbAccessibilityAutoEnabler) enableOnce(
+	ctx context.Context,
+	req AccessibilityRemediationRequest,
+) AccessibilityRemediationResult {
 	if err := ctx.Err(); err != nil {
-		return err
+		return AccessibilityRemediationResult{
+			ADBSerial:         strings.TrimSpace(req.ADBSerial),
+			IdentityStatus:    domain.DeviceIdentityStatusUnknown,
+			RemediationStatus: domain.AccessibilityRemediationStatusInfraError,
+			Err:               err,
+		}
 	}
 
-	serial := strings.TrimSpace(adbSerial)
+	serial := strings.TrimSpace(req.ADBSerial)
+	serialSource := "event"
 	if serial == "" {
-		serial = strings.TrimSpace(a.adbSerialByDeviceID[deviceID])
+		serial = strings.TrimSpace(a.adbSerialByDeviceID[req.DeviceID])
+		serialSource = "config"
 	}
-	component := strings.TrimSpace(serviceComponent)
+	component := strings.TrimSpace(req.ServiceComponent)
 	if component == "" {
 		component = a.defaultServiceComponent
 	}
 
+	result := AccessibilityRemediationResult{
+		ADBSerial:         serial,
+		IdentityStatus:    domain.DeviceIdentityStatusUnknown,
+		RemediationStatus: domain.AccessibilityRemediationStatusPending,
+		SerialSource:      serialSource,
+	}
+	if serial != "" {
+		result.IdentityStatus = domain.DeviceIdentityStatusSerialKnownUnverified
+	}
+	if serial == "" {
+		result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoSerial
+		result.Err = fmt.Errorf("adb serial unknown for deviceID=%q", req.DeviceID)
+		return result
+	}
+
 	client, err := a.newClient(a.adbHost, a.adbPort)
 	if err != nil {
-		return fmt.Errorf("adb client init failed: %w", err)
+		result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoADB
+		result.Err = fmt.Errorf("adb client init failed: %w", err)
+		return result
 	}
 
 	devices, err := client.DeviceList()
 	if err != nil {
-		return fmt.Errorf("adb device list failed: %w", err)
+		result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoADB
+		result.Err = fmt.Errorf("adb device list failed: %w", err)
+		return result
+	}
+	if len(devices) == 0 {
+		result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoADB
+		result.Err = fmt.Errorf("adb has no connected devices; cannot enable accessibility for deviceID=%q", req.DeviceID)
+		return result
 	}
 
-	device, err := selectTargetDevice(devices, serial, deviceID)
+	device, err := selectTargetDevice(devices, serial, req.DeviceID)
 	if err != nil {
-		return err
+		if strings.Contains(err.Error(), "adbSerial is required") {
+			result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoSerial
+		} else {
+			result.RemediationStatus = domain.AccessibilityRemediationStatusPendingNoADB
+		}
+		result.Err = err
+		return result
 	}
-	if err := a.verifyDeviceIdentity(ctx, device, deviceID); err != nil {
-		return err
+	result.ADBSerial = device.Serial()
+
+	observed, verifyErr := a.verifyDeviceIdentity(ctx, device, req.DeviceID)
+	result.ObservedAndroidID = observed
+	if verifyErr != nil {
+		if observed != "" && observed != "null" && observed != normalizeAndroidID(string(req.DeviceID)) {
+			result.IdentityStatus = domain.DeviceIdentityStatusMismatch
+			result.RemediationStatus = domain.AccessibilityRemediationStatusBlockedMismatch
+		} else {
+			result.RemediationStatus = domain.AccessibilityRemediationStatusCommandError
+		}
+		result.Err = verifyErr
+		return result
 	}
+	result.IdentityStatus = domain.DeviceIdentityStatusVerified
 
 	current, err := a.getEnabledServices(ctx, device)
 	if err != nil {
-		return err
+		result.RemediationStatus = domain.AccessibilityRemediationStatusCommandError
+		result.Err = err
+		return result
 	}
 
-	if !containsComponent(current, component) {
-		next := component
-		if current != "" {
-			next = current + ":" + component
-		}
-		if _, err := a.runShell(ctx, device, "settings", "put", "secure", "enabled_accessibility_services", next); err != nil {
-			return err
-		}
+	if containsComponent(current, component) {
+		result.RemediationStatus = domain.AccessibilityRemediationStatusAlreadyEnabled
+		return result
 	}
 
+	next := component
+	if current != "" {
+		next = current + ":" + component
+	}
+	if _, err := a.runShell(ctx, device, "settings", "put", "secure", "enabled_accessibility_services", next); err != nil {
+		result.RemediationStatus = domain.AccessibilityRemediationStatusCommandError
+		result.Err = err
+		return result
+	}
 	if _, err := a.runShell(ctx, device, "settings", "put", "secure", "accessibility_enabled", "1"); err != nil {
-		return err
+		result.RemediationStatus = domain.AccessibilityRemediationStatusCommandError
+		result.Err = err
+		return result
 	}
-	return nil
+	result.RemediationStatus = domain.AccessibilityRemediationStatusEnabled
+	return result
 }
 
 func (a *AdbAccessibilityAutoEnabler) getEnabledServices(ctx context.Context, device gadb.Device) (string, error) {
@@ -176,26 +271,26 @@ func (a *AdbAccessibilityAutoEnabler) verifyDeviceIdentity(
 	ctx context.Context,
 	device gadb.Device,
 	deviceID domain.DeviceID,
-) error {
+) (string, error) {
 	out, err := a.runShell(ctx, device, "settings", "get", "secure", "android_id")
 	if err != nil {
-		return fmt.Errorf("failed to verify android_id on %s: %w", device.Serial(), err)
+		return "", fmt.Errorf("failed to verify android_id on %s: %w", device.Serial(), err)
 	}
 
 	observed := normalizeAndroidID(out)
 	expected := normalizeAndroidID(string(deviceID))
 	if observed == "" || observed == "null" || expected == "" {
-		return fmt.Errorf("cannot verify device identity: expected=%q observed=%q serial=%q", expected, observed, device.Serial())
+		return observed, fmt.Errorf("cannot verify device identity: expected=%q observed=%q serial=%q", expected, observed, device.Serial())
 	}
 	if observed != expected {
-		return fmt.Errorf(
+		return observed, fmt.Errorf(
 			"device identity mismatch: deviceID=%q serial=%q android_id=%q",
 			deviceID,
 			device.Serial(),
 			observed,
 		)
 	}
-	return nil
+	return observed, nil
 }
 
 func selectTargetDevice(devices []gadb.Device, adbSerial string, deviceID domain.DeviceID) (gadb.Device, error) {
@@ -265,28 +360,13 @@ func parseADBSerialByDeviceMap(raw string) map[domain.DeviceID]string {
 	return result
 }
 
-// retryWithBackoff calls fn up to maxAttempts times, using exponential backoff
-// starting at baseDelay. It stops early if ctx is cancelled or fn returns a
-// non-retryable error. ADB errors are always considered retryable (transient
-// ADB server restart, USB reconnect, etc.).
-func retryWithBackoff(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
-	var lastErr error
-	for i := 0; i < maxAttempts; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-		if i < maxAttempts-1 {
-			delay := baseDelay * (1 << uint(i)) // 1s, 2s, 4s
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-		}
+func isRetryableRemediationStatus(status domain.AccessibilityRemediationStatus) bool {
+	switch status {
+	case domain.AccessibilityRemediationStatusPendingNoADB,
+		domain.AccessibilityRemediationStatusInfraError,
+		domain.AccessibilityRemediationStatusCommandError:
+		return true
+	default:
+		return false
 	}
-	return lastErr
 }

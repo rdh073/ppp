@@ -60,6 +60,7 @@ func main() {
 	var taskStore store.TaskStore
 	var stateStore store.WorkflowStateStore
 	var taskQueue store.TaskQueue
+	var bindingStore store.DeviceBindingStore
 	switch cfg.Store.Driver {
 	case "redis":
 		redisClient := store.NewRedisClient(
@@ -78,6 +79,7 @@ func main() {
 		taskStore = store.NewRedisTaskStore(redisClient, stateTTL)
 		stateStore = store.NewRedisWorkflowStateStore(redisClient, stateTTL)
 		taskQueue = store.NewRedisTaskQueue(redisClient)
+		bindingStore = store.NewRedisDeviceBindingStore(redisClient)
 		log.Info("state store: redis", "addr", cfg.Redis.Addr, "ttl", stateTTL)
 	default: // "file"
 		fileTaskStore, err := store.NewFileTaskStore(cfg.Server.DataDir)
@@ -95,9 +97,15 @@ func main() {
 			log.Error("failed to open task queue", "dir", cfg.Server.DataDir, "err", err)
 			os.Exit(1)
 		}
+		fileBindingStore, err := store.NewFileDeviceBindingStore(cfg.Server.DataDir)
+		if err != nil {
+			log.Error("failed to open device binding store", "dir", cfg.Server.DataDir, "err", err)
+			os.Exit(1)
+		}
 		taskStore = fileTaskStore
 		stateStore = fileStateStore
 		taskQueue = fileQueue
+		bindingStore = fileBindingStore
 		log.Info("state store: file", "dir", cfg.Server.DataDir)
 	}
 
@@ -218,13 +226,15 @@ func main() {
 		cfg.ADB.AccessibilityComponent,
 		formatSerialByDevice(cfg.ADB.SerialByDevice),
 	)
-	eventUC := usecase.NewEventIngestion(runtime, autoEnabler)
+	bindingManager := usecase.NewDeviceBindingManager(bindingStore, autoEnabler, metricsRegistry, log)
+	go bindingManager.Run(serverCtx, cfg.ADB.ReconcileInterval.D())
+	eventUC := usecase.NewEventIngestionWithBindings(runtime, bindingManager, log)
 	lifecycleUC.SetForgetDevice(eventUC.ForgetDevice)
 	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log, metricsRegistry)
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
-	deviceHandler := handler.NewDeviceHandler(reg, log)
+	deviceHandler := handler.NewDeviceHandler(reg, log, bindingManager)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)

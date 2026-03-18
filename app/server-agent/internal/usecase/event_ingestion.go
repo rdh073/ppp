@@ -21,6 +21,8 @@ import (
 type EventIngestionUseCase struct {
 	orch         EventProcessor
 	autoEnabler  AccessibilityAutoEnabler
+	bindings     DeviceBindingCoordinator
+	log          *slog.Logger
 	knownSerials sync.Map // domain.DeviceID → string; learned from event params
 }
 
@@ -36,6 +38,22 @@ func NewEventIngestion(orch EventProcessor, autoEnabler ...AccessibilityAutoEnab
 	return &EventIngestionUseCase{
 		orch:        orch,
 		autoEnabler: enabler,
+		log:         slog.Default(),
+	}
+}
+
+func NewEventIngestionWithBindings(
+	orch EventProcessor,
+	bindings DeviceBindingCoordinator,
+	log *slog.Logger,
+) *EventIngestionUseCase {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &EventIngestionUseCase{
+		orch:     orch,
+		bindings: bindings,
+		log:      log,
 	}
 }
 
@@ -109,6 +127,26 @@ func (u *EventIngestionUseCase) IngestNotification(
 		return processErr
 	}
 
+	if u.bindings != nil {
+		if err := u.bindings.NoteDeviceEvent(
+			ctx,
+			deviceID,
+			kind,
+			meta.SeqNo,
+			meta.ADBSerial,
+			meta.ServiceComponent,
+			now,
+		); err != nil && u.log != nil {
+			u.log.Warn("device binding update failed", "deviceId", deviceID, "kind", kind, "err", err)
+		}
+		if kind == domain.EventKindAccessibilityDisabled && meta.SeqNo > 0 {
+			if _, err := u.bindings.Remediate(ctx, deviceID); err != nil && u.log != nil {
+				u.log.Warn("device remediation failed", "deviceId", deviceID, "err", err)
+			}
+		}
+		return nil
+	}
+
 	return u.maybeEnableAccessibility(
 		ctx,
 		kind,
@@ -147,6 +185,10 @@ func (u *EventIngestionUseCase) maybeEnableAccessibility(
 // ForgetDevice removes any cached ADB serial for deviceID.
 // Call this when a device disconnects to prevent stale serial reuse.
 func (u *EventIngestionUseCase) ForgetDevice(deviceID domain.DeviceID) {
+	if u.bindings != nil {
+		u.bindings.ForgetDevice(deviceID)
+		return
+	}
 	u.knownSerials.Delete(deviceID)
 }
 

@@ -140,6 +140,41 @@ Android events: `android.activity.created`, `android.activity.resumed`, `android
 | `device.query` | `{selector: {kind, value}}` | `{targets: [...]}` |
 | `device.capabilities.get` | `{}` | `{capabilities: [...]}` |
 
+### `android.screen.changed` Handling
+
+For `android.*` notifications (including `android.screen.changed`), the server ingests the event and does not send a direct JSON-RPC response for notification frames (`id` absent).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent as android-agent
+    participant WS as WS AgentServer.dispatch
+    participant Ingest as EventIngestionUseCase
+    participant Orch as Orchestrator
+    participant Engine as Workflow Engine
+    participant Disp as Dispatcher
+    participant Agent2 as android-agent
+
+    Agent->>WS: JSON-RPC Notification\nmethod: android.screen.changed (no id)
+    WS->>Ingest: IngestNotification(deviceId, method, params)
+    Ingest->>Orch: ProcessEvent(domain.Event{kind, seqNo, payload})
+
+    alt stale/duplicate/not relevant
+        Orch-->>Ingest: ErrEventDropped / no transition
+        Ingest-->>WS: nil
+        WS-->>Agent: no response (notification)
+    else relevant to active workflow
+        Orch->>Engine: Handle(event)
+        Engine->>Disp: Dispatch(device.observe/device.execute)
+        Disp->>Agent2: JSON-RPC Request (with id)
+        Agent2-->>Disp: JSON-RPC Response (result/error)
+    end
+```
+
+Notes:
+- Unknown non-`android.*` methods return JSON-RPC error `method not found`.
+- `android.*` events from unregistered connections are dropped.
+
 ---
 
 ## Workflow YAML Schema

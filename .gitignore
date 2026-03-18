@@ -16,6 +16,10 @@ app/server-agent/bin/
 app/server-agent/var/
 *.exe
 
+# Dashboard / Node
+app/dashboard/node_modules/
+app/dashboard/dist/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -25,3 +29,6 @@ unsloth_compiled_cache
 logs
 data
 __pycache__
+
+
+C4-Documentation

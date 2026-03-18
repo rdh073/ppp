@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/autosdk/ppp/server-agent/internal/domain"
 )
 
 type WakeupFallbackPath string
@@ -97,12 +99,17 @@ type Registry struct {
 	workflowWakeupQueueDepth atomic.Int64
 	deviceLaneActive         atomic.Int64
 	commandInflight          atomic.Int64
+	accessibilityPending     atomic.Int64
+	accessibilityBlocked     atomic.Int64
 
 	partitionDepthMu sync.Mutex
 	partitionDepth   map[string]int64
 
 	commandTimeoutMu sync.Mutex
 	commandTimeout   map[string]uint64
+
+	accessibilityRemediationMu sync.Mutex
+	accessibilityRemediation   map[string]uint64
 
 	ingestLag            histogram
 	workflowNodeDuration histogram
@@ -119,6 +126,9 @@ type Snapshot struct {
 	CommandInflight          int64
 	WakeupPartitionDepth     map[string]int64
 	CommandTimeout           map[string]uint64
+	AccessibilityRemediation map[string]uint64
+	AccessibilityPending     int64
+	AccessibilityBlocked     int64
 }
 
 type histogram struct {
@@ -152,8 +162,9 @@ type histogramSeriesSnapshot struct {
 
 func NewRegistry() *Registry {
 	return &Registry{
-		partitionDepth: make(map[string]int64),
-		commandTimeout: make(map[string]uint64),
+		partitionDepth:            make(map[string]int64),
+		commandTimeout:            make(map[string]uint64),
+		accessibilityRemediation:  make(map[string]uint64),
 		ingestLag: newHistogram(
 			[]float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 			"source",
@@ -260,6 +271,27 @@ func (r *Registry) ObserveIngestLag(source IngestSource, d time.Duration) {
 	r.ingestLag.observe(d.Seconds(), normalizeMetricLabel(string(source), string(IngestSourceInternal)))
 }
 
+func (r *Registry) RecordAccessibilityRemediation(outcome string) {
+	outcome = normalizeMetricLabel(outcome, string(domain.AccessibilityRemediationStatusIdle))
+	r.accessibilityRemediationMu.Lock()
+	defer r.accessibilityRemediationMu.Unlock()
+	r.accessibilityRemediation[outcome]++
+}
+
+func (r *Registry) SetAccessibilityPendingBindings(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	r.accessibilityPending.Store(n)
+}
+
+func (r *Registry) SetAccessibilityBlockedBindings(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	r.accessibilityBlocked.Store(n)
+}
+
 func (r *Registry) ObserveWorkflowNode(node string, outcome WorkflowNodeOutcome, d time.Duration) {
 	node = normalizeMetricLabel(node, "unknown")
 	r.workflowNodeDuration.observe(d.Seconds(), node, normalizeMetricLabel(string(outcome), string(WorkflowNodeOutcomeError)))
@@ -297,6 +329,13 @@ func (r *Registry) Snapshot() Snapshot {
 	}
 	r.commandTimeoutMu.Unlock()
 
+	r.accessibilityRemediationMu.Lock()
+	accessibilityRemediation := make(map[string]uint64, len(r.accessibilityRemediation))
+	for outcome, count := range r.accessibilityRemediation {
+		accessibilityRemediation[outcome] = count
+	}
+	r.accessibilityRemediationMu.Unlock()
+
 	return Snapshot{
 		WakeupFallback: map[WakeupFallbackPath]uint64{
 			WakeupFallbackIngress:        r.wakeupFallbackIngress.Load(),
@@ -309,6 +348,9 @@ func (r *Registry) Snapshot() Snapshot {
 		CommandInflight:          r.commandInflight.Load(),
 		WakeupPartitionDepth:     partitionDepth,
 		CommandTimeout:           commandTimeout,
+		AccessibilityRemediation: accessibilityRemediation,
+		AccessibilityPending:     r.accessibilityPending.Load(),
+		AccessibilityBlocked:     r.accessibilityBlocked.Load(),
 		Replay: map[ReplayPath]map[ReplayOutcome]uint64{
 			ReplayPathAccepted: {
 				ReplayOutcomeAttempted: r.replayAcceptedAttempted.Load(),
@@ -400,6 +442,25 @@ func (r *Registry) RenderPrometheus() string {
 	for _, kind := range timeoutKinds {
 		fmt.Fprintf(&b, "autosdk_server_command_timeout_total{kind=%q} %d\n", kind, snap.CommandTimeout[kind])
 	}
+
+	b.WriteString("# HELP autosdk_server_accessibility_remediation_total Number of accessibility remediation attempts by outcome.\n")
+	b.WriteString("# TYPE autosdk_server_accessibility_remediation_total counter\n")
+	remediationOutcomes := make([]string, 0, len(snap.AccessibilityRemediation))
+	for outcome := range snap.AccessibilityRemediation {
+		remediationOutcomes = append(remediationOutcomes, outcome)
+	}
+	slices.Sort(remediationOutcomes)
+	for _, outcome := range remediationOutcomes {
+		fmt.Fprintf(&b, "autosdk_server_accessibility_remediation_total{outcome=%q} %d\n", outcome, snap.AccessibilityRemediation[outcome])
+	}
+
+	b.WriteString("# HELP autosdk_server_accessibility_pending_bindings Current number of bindings waiting for accessibility remediation.\n")
+	b.WriteString("# TYPE autosdk_server_accessibility_pending_bindings gauge\n")
+	fmt.Fprintf(&b, "autosdk_server_accessibility_pending_bindings %d\n", snap.AccessibilityPending)
+
+	b.WriteString("# HELP autosdk_server_accessibility_blocked_bindings Current number of bindings blocked by android_id mismatch.\n")
+	b.WriteString("# TYPE autosdk_server_accessibility_blocked_bindings gauge\n")
+	fmt.Fprintf(&b, "autosdk_server_accessibility_blocked_bindings %d\n", snap.AccessibilityBlocked)
 
 	renderHistogram(
 		&b,

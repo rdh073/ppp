@@ -95,6 +95,7 @@ type ADBConfig struct {
 	Port                   int               `toml:"port"`
 	AccessibilityComponent string            `toml:"accessibility_component"`
 	SerialByDevice         map[string]string `toml:"serial_by_device"`
+	ReconcileInterval      Duration          `toml:"reconcile_interval"`
 }
 
 type ToolsConfig struct {
@@ -152,6 +153,7 @@ func DefaultConfig() *Config {
 			Port:                   5037,
 			AccessibilityComponent: "com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService",
 			SerialByDevice:         make(map[string]string),
+			ReconcileInterval:      Duration(15 * time.Second),
 		},
 		Tools: ToolsConfig{
 			LLM: LLMToolConfig{
@@ -308,6 +310,13 @@ func (c *Config) applyEnvOverrides() error {
 	}
 	if v := os.Getenv("AUTO_ADB_SERIAL_BY_DEVICE"); v != "" {
 		c.ADB.SerialByDevice = parseSerialByDevice(v)
+	}
+	if v := envTrimmed("AUTO_ADB_RECONCILE_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid AUTO_ADB_RECONCILE_INTERVAL %q: %w", v, err)
+		}
+		c.ADB.ReconcileInterval = Duration(d)
 	}
 	if v := envTrimmed("AUTO_TOOL_LLM_API_URL"); v != "" {
 		c.Tools.LLM.APIURL = v
