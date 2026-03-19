@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
 import { listDevices } from '../api/devices';
 import { useDeviceStore } from '../store/devices';
+import { POLL_MS } from '../config';
 import { usePolling } from './usePolling';
 
-export function useDevices(intervalMs: number = 5000) {
+export function useDevices(intervalMs: number = POLL_MS) {
   const devices = useDeviceStore((state) => state.devices);
   const loading = useDeviceStore((state) => state.loading);
   const error = useDeviceStore((state) => state.error);

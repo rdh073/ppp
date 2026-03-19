@@ -31,6 +31,7 @@ internal object AgentCapabilities {
             mapOf("name" to "back", "available" to true),
             mapOf("name" to "wake", "available" to true),
             mapOf("name" to "open_app", "available" to true),
+            mapOf("name" to "open_intent", "available" to true),
             mapOf("name" to "close_app", "available" to true),
             mapOf("name" to "fill_form", "available" to true),
             mapOf(

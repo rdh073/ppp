@@ -159,3 +159,39 @@ func TestToolCallNode_ParamInterpolation(t *testing.T) {
 		t.Errorf("want hostname=dns.example.com, got %q", params["hostname"])
 	}
 }
+
+// TestToolCallNode_LiteralParams_KeepJSONTypes: non-template params should be
+// marshaled as JSON literals so tools expecting integer/boolean types can parse.
+func TestToolCallNode_LiteralParams_KeepJSONTypes(t *testing.T) {
+	cap := &capturingToolInvoker{result: json.RawMessage(`{}`)}
+	n := &ToolCallNode{tools: cap}
+	_, err := n.Execute(context.Background(), makeToolCmd(
+		&domain.ToolCallDef{
+			ToolName: "some.tool",
+			Params: map[string]string{
+				"minAge":         "25",
+				"includeSymbols": "true",
+				"name":           "agus",
+			},
+			Optional: true,
+		},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+
+	var params map[string]any
+	if err := json.Unmarshal(cap.captured, &params); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if got, ok := params["minAge"].(float64); !ok || got != 25 {
+		t.Fatalf("minAge: want numeric 25, got %#v", params["minAge"])
+	}
+	if got, ok := params["includeSymbols"].(bool); !ok || !got {
+		t.Fatalf("includeSymbols: want true bool, got %#v", params["includeSymbols"])
+	}
+	if got, ok := params["name"].(string); !ok || got != "agus" {
+		t.Fatalf("name: want string 'agus', got %#v", params["name"])
+	}
+}

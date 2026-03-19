@@ -1,8 +1,13 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { useTasks } from '../../hooks/useTasks';
+import { useDevices } from '../../hooks/useDevices';
+import { useWorkflows } from '../../hooks/useWorkflows';
+import { POLL_MS } from '../../config';
 
 export function TaskPanel() {
   const { tasks, loading, loadingById, error, create, refreshById, cancel } = useTasks();
+  const { devices } = useDevices(POLL_MS);
+  const { workflows } = useWorkflows(Math.max(10_000, POLL_MS));
 
   const [goal, setGoal] = useState('');
   const [deviceId, setDeviceId] = useState('');
@@ -58,11 +63,25 @@ export function TaskPanel() {
         </label>
         <label>
           Device ID (optional)
-          <input value={deviceId} onChange={(e) => setDeviceId(e.target.value)} />
+          <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+            <option value="">Auto-assign device</option>
+            {devices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.deviceId}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Workflow (optional)
-          <input value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
+          <select value={workflowName} onChange={(e) => setWorkflowName(e.target.value)}>
+            <option value="">Auto-select workflow</option>
+            {workflows.map((workflow) => (
+              <option key={workflow.name} value={workflow.name}>
+                {workflow.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           inputArtifacts (JSON)

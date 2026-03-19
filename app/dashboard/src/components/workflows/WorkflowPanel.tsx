@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useWorkflows } from '../../hooks/useWorkflows';
+import { POLL_MS } from '../../config';
 
 export function WorkflowPanel() {
-  const { workflows, selected, loading, error, loadWorkflowByName } = useWorkflows(10000);
+  const { workflows, selected, loading, error, loadWorkflowByName } = useWorkflows(Math.max(10_000, POLL_MS));
   const [selectedName, setSelectedName] = useState('');
 
   return (

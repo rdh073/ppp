@@ -89,4 +89,5 @@ export interface DeviceQueryParams {
   to?: string;
   kind?: string;
   source?: string;
+  includePayload?: boolean;
 }

@@ -439,6 +439,11 @@ internal object AgentProtocolDeserializer {
                     ?.get("value")?.jsonPrimitive?.contentOrNull ?: return null
                 AutomationAction.OpenApp(pkgName)
             }
+            "open_intent" -> {
+                val intentAction = obj["intentAction"]?.jsonPrimitive?.contentOrNull ?: return null
+                val packageName = obj["package"]?.jsonPrimitive?.contentOrNull
+                AutomationAction.OpenIntent(intentAction, packageName)
+            }
             "close_app" -> AutomationAction.CloseApp
             "screenshot" -> AutomationAction.Screenshot
             "fill_form" -> {

@@ -299,7 +299,7 @@ func main() {
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = 15 * time.Second
 	}
-	srv := &http.Server{Addr: cfg.Server.Addr, Handler: mux}
+	srv := &http.Server{Addr: cfg.Server.Addr, Handler: withCORS(mux)}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -324,4 +324,19 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("server-agent stopped")
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

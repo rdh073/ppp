@@ -180,7 +180,7 @@ VITE_METRICS_URL=http://localhost:3000/metrics
 
 ## Referensi
 
-- `C4-Documentation/c4-code-scripts-dashboard.md`
+
 - `app/server-agent/internal/handler/assets/openapi.json`
 - `app/server-agent/cmd/server/main.go`
 - `app/server-agent/internal/handler/openapi.go`

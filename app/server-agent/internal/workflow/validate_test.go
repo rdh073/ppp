@@ -213,3 +213,21 @@ func TestValidate_ValidTimeoutString(t *testing.T) {
 		t.Fatalf("expected valid timeout to pass, got: %v", err)
 	}
 }
+
+func TestValidate_OpenIntentRequiresIntentAction(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Action: &domain.ActionDef{
+			Kind: domain.ActionKindOpenIntent,
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error for missing intent_action")
+	}
+	if !strings.Contains(err.Error(), "intent_action") {
+		t.Fatalf("expected intent_action validation error, got: %v", err)
+	}
+}

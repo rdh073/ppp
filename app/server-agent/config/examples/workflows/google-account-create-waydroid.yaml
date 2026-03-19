@@ -71,23 +71,146 @@ steps:
     on_success: open_google_app
     on_failure: terminal
 
-  # ── Step 4: launch Google app / sign-in flow ──────────────────────────────
+  # ── Step 4: launch Settings as entry point for Google account flow ───────
   open_google_app:
     trigger: {}
     action:
-      kind: open_app
-      package: com.google.android.gms
+      kind: open_intent
+      intent_action: "android.settings.ADD_ACCOUNT_SETTINGS"
+      package: com.android.settings
     expect:
       kind: android.screen.changed
-      package: com.google.android.gms
       ui:
         ui_ready: true
     timeout: 20s
     max_retry: 2
+    on_success: tap_google_provider
+    on_failure: terminal
+
+  # ── Step 5: open Settings search ──────────────────────────────────────────
+  tap_settings_search:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: resource_id
+        value: "com.android.settings:id/search_action_bar_two_pane"
+    expect:
+      kind: android.screen.changed
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: input_accounts_query
+    on_failure: tap_settings_search_legacy
+
+  # ── Step 5b: fallback selector for single-pane search bar title ───────────
+  tap_settings_search_legacy:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: resource_id
+        value: "com.android.settings:id/search_bar_title"
+    expect:
+      kind: android.screen.changed
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: input_accounts_query
+    on_failure: input_accounts_query
+
+  # ── Step 6: type account query in Settings search ─────────────────────────
+  input_accounts_query:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "android:id/search_src_text"
+      input_text: "add account"
+    expect:
+      kind: android.screen.changed
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_accounts
+    on_failure: tap_accounts
+
+  # ── Step 7: open Add account entry from Settings search ───────────────────
+  tap_accounts:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "960,171"
+    expect:
+      kind: android.screen.changed
+      package: com.android.settings
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 3
+    on_success: tap_add_account
+    on_failure: tap_accounts_legacy
+
+  # ── Step 8: fallback to Google account settings entry ─────────────────────
+  tap_accounts_legacy:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Google"
+    expect:
+      kind: android.screen.changed
+      package: com.android.settings
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 2
+    on_success: tap_google_provider
+    on_failure: terminal
+
+  # ── Step 9: choose Add account ────────────────────────────────────────────
+  tap_add_account:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Add account"
+    expect:
+      kind: android.screen.changed
+      package: com.android.settings
+      ui:
+        ui_ready: true
+    timeout: 10s
+    max_retry: 3
+    on_success: tap_google_provider
+    on_failure: terminal
+
+  # ── Step 10: pick Google provider ─────────────────────────────────────────
+  tap_google_provider:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Google"
+    expect:
+      kind: android.screen.changed
+      ui:
+        ui_ready: true
+    timeout: 30s
+    max_retry: 3
     on_success: tap_create_account
     on_failure: terminal
 
-  # ── Step 5: enter create-account branch ───────────────────────────────────
+  # ── Step 11: enter create-account branch ──────────────────────────────────
   tap_create_account:
     trigger: {}
     action:
@@ -97,11 +220,28 @@ steps:
         value: "Create account"
     expect:
       kind: android.screen.changed
-      package: com.google.android.gms
+      text_contains: "For my personal use"
       ui:
         ui_ready: true
-    timeout: 10s
+    timeout: 30s
     max_retry: 3
+    on_success: tap_for_personal_use
+    on_failure: tap_create_account_coordinate
+
+  tap_create_account_coordinate:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "686,600"
+    expect:
+      kind: android.screen.changed
+      text_contains: "For my personal use"
+      ui:
+        ui_ready: true
+    timeout: 30s
+    max_retry: 2
     on_success: tap_for_personal_use
     on_failure: terminal
 
@@ -115,11 +255,28 @@ steps:
         value: "For my personal use"
     expect:
       kind: android.screen.changed
-      package: com.google.android.gms
+      text_contains: "Create a Google Account"
       ui:
         ui_ready: true
-    timeout: 10s
+    timeout: 30s
     max_retry: 2
+    on_success: enter_first_name
+    on_failure: tap_for_personal_use_coordinate
+
+  tap_for_personal_use_coordinate:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: coordinate
+        value: "737,656"
+    expect:
+      kind: android.screen.changed
+      text_contains: "Create a Google Account"
+      ui:
+        ui_ready: true
+    timeout: 30s
+    max_retry: 1
     on_success: enter_first_name
     on_failure: tap_for_myself
 

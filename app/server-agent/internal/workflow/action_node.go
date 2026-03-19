@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -16,13 +17,16 @@ func (n *ActionNode) Execute(ctx context.Context, cmd NodeCommand) (NodeOutput, 
 	step := cmd.Step
 	state := cmd.State
 	task := cmd.Task
+	dispatchTimeout := parseDuration(step.Timeout, defaultStepTimeout)
+	dispatchCtx, cancel := context.WithTimeout(ctx, dispatchTimeout)
+	defer cancel()
 
 	devCmd, err := buildCommand(step.Action, state.DeviceID, task.ID, state.Inputs)
 	if err != nil {
 		return NodeOutput{Err: fmt.Errorf("build command: %w", err)}, nil
 	}
 
-	ch, err := n.disp.Dispatch(ctx, devCmd)
+	ch, err := n.disp.Dispatch(dispatchCtx, devCmd)
 	if err != nil {
 		return NodeOutput{Err: fmt.Errorf("dispatch: %w", err)}, nil
 	}
@@ -45,8 +49,11 @@ func (n *ActionNode) Execute(ctx context.Context, cmd NodeCommand) (NodeOutput, 
 			return NodeOutput{SuspendExpect: &exp, Deadline: deadline}, nil
 		}
 		return NodeOutput{}, nil
-	case <-ctx.Done():
-		return NodeOutput{}, ctx.Err()
+	case <-dispatchCtx.Done():
+		if errors.Is(dispatchCtx.Err(), context.DeadlineExceeded) {
+			return NodeOutput{Err: fmt.Errorf("command response timeout after %s", dispatchTimeout)}, nil
+		}
+		return NodeOutput{}, dispatchCtx.Err()
 	}
 }
 

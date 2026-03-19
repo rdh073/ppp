@@ -1,9 +1,10 @@
 import { useCallback, useMemo } from 'react';
 import { listWorkflows, getWorkflow } from '../api/workflows';
 import { useWorkflowStore } from '../store/workflows';
+import { POLL_MS } from '../config';
 import { usePolling } from './usePolling';
 
-export function useWorkflows(intervalMs: number = 5000) {
+export function useWorkflows(intervalMs: number = POLL_MS) {
   const workflows = useWorkflowStore((state) => state.workflows);
   const selected = useWorkflowStore((state) => state.selected);
   const loading = useWorkflowStore((state) => state.loading);

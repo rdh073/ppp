@@ -72,6 +72,33 @@
     background: rgba(255, 255, 255, 0.7);
   }
 
+  .topbar-chip-ok {
+    border-color: rgba(14, 123, 96, 0.4);
+    color: #0c6b54;
+    background: rgba(164, 235, 202, 0.45);
+  }
+
+  .topbar-chip-down {
+    border-color: rgba(178, 58, 70, 0.35);
+    color: #8e2f38;
+    background: rgba(246, 196, 202, 0.55);
+  }
+
+  .topbar-chip-checking {
+    border-color: rgba(160, 133, 70, 0.35);
+    color: #705c2c;
+    background: rgba(246, 230, 187, 0.65);
+  }
+
+  .topbar-api {
+    @apply text-xs;
+    color: var(--muted);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .topbar-link {
     @apply inline-flex items-center justify-center rounded-xl border px-3 py-2 text-sm font-semibold no-underline transition-all duration-200;
     border-color: var(--border-strong);

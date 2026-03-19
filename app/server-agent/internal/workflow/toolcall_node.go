@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ToolCallNode handles steps with a non-nil ToolCall field.
@@ -25,9 +26,13 @@ func (n *ToolCallNode) Execute(ctx context.Context, cmd NodeCommand) (NodeOutput
 	}
 
 	// Build JSON params: interpolate {{input.key}} placeholders.
-	paramMap := make(map[string]string, len(def.Params))
+	//
+	// For literal (non-template) values we allow JSON scalar/object decoding so
+	// YAML params like `minAge: 25` or `includeSymbols: true` are sent as number
+	// / boolean instead of strings. For templated values we keep strings.
+	paramMap := make(map[string]any, len(def.Params))
 	for k, v := range def.Params {
-		paramMap[k] = Interpolate(v, inputs)
+		paramMap[k] = interpolateToolParam(v, inputs)
 	}
 	raw, err := json.Marshal(paramMap)
 	if err != nil {
@@ -65,6 +70,27 @@ func (n *ToolCallNode) Execute(ctx context.Context, cmd NodeCommand) (NodeOutput
 		outputs[inputKey] = s
 	}
 	return NodeOutput{StateInputs: outputs}, nil
+}
+
+func interpolateToolParam(template string, inputs map[string]string) any {
+	interpolated := Interpolate(template, inputs)
+	if strings.Contains(template, "{{") {
+		return interpolated
+	}
+	trimmed := strings.TrimSpace(interpolated)
+	if trimmed == "" {
+		return interpolated
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return interpolated
+	}
+	switch decoded.(type) {
+	case bool, float64, nil, map[string]any, []any, string:
+		return decoded
+	default:
+		return interpolated
+	}
 }
 
 // Ensure ToolCallNode implements Node at compile time.

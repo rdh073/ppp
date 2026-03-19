@@ -1,7 +1,4 @@
-const DEFAULT_API_URL = 'http://localhost:3000';
-
-export const API_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || DEFAULT_API_URL;
+import { API_URL } from '../config';
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
@@ -32,13 +29,13 @@ export async function requestJson<T>(path: string, options: RequestOptions = {})
   const {
     method = 'GET',
     body,
-    timeoutMs = 10_000,
+    timeoutMs = 30_000,
     headers,
     query,
   } = options;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort('request-timeout'), timeoutMs);
 
   try {
     const hasBody = body !== undefined && body !== null;
@@ -75,6 +72,11 @@ export async function requestJson<T>(path: string, options: RequestOptions = {})
     }
 
     return (await response.json()) as T;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`Request timed out after ${timeoutMs}ms (${method} ${path})`);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

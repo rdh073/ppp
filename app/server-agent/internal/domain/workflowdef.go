@@ -59,6 +59,7 @@ type StepDef struct {
 //	  outputs:
 //	    fullName: username_full
 //	  optional: false
+//
 // StringOrJSONMap is a map[string]string whose YAML unmarshaler accepts both
 // plain string values and inline YAML objects/sequences.
 // Non-string nodes are JSON-marshalled before being stored, so toolcall_node.go
@@ -137,12 +138,13 @@ func (m EventMatch) IsEmpty() bool {
 // ActionDef is a typed command to be sent to the device via device.execute.
 // String values support {{input.key}} interpolation from WorkflowState.Inputs.
 type ActionDef struct {
-	Kind      ActionKind   `yaml:"kind"                    json:"kind"`
-	Target    *TargetDef   `yaml:"target,omitempty"        json:"target,omitempty"`
-	InputText string       `yaml:"input_text,omitempty"    json:"input_text,omitempty"` // for input_text
-	Package   string       `yaml:"package,omitempty"       json:"package,omitempty"`    // for open_app
-	Direction string       `yaml:"direction,omitempty"     json:"direction,omitempty"`  // for scroll: up|down|left|right
-	Fields    []FieldEntry `yaml:"fields,omitempty"        json:"fields,omitempty"`     // for fill_form
+	Kind         ActionKind   `yaml:"kind"                    json:"kind"`
+	Target       *TargetDef   `yaml:"target,omitempty"        json:"target,omitempty"`
+	InputText    string       `yaml:"input_text,omitempty"    json:"input_text,omitempty"`   // for input_text
+	Package      string       `yaml:"package,omitempty"       json:"package,omitempty"`      // for open_app
+	IntentAction string       `yaml:"intent_action,omitempty" json:"intentAction,omitempty"` // for open_intent
+	Direction    string       `yaml:"direction,omitempty"     json:"direction,omitempty"`    // for scroll: up|down|left|right
+	Fields       []FieldEntry `yaml:"fields,omitempty"        json:"fields,omitempty"`       // for fill_form
 }
 
 // FieldEntry is one input field in a fill_form action.
@@ -201,13 +203,14 @@ func (m UiMatch) IsEmpty() bool {
 type ActionKind string
 
 const (
-	ActionKindOpenApp   ActionKind = "open_app"
-	ActionKindClick     ActionKind = "click"
-	ActionKindLongClick ActionKind = "long_click"
-	ActionKindInputText ActionKind = "input_text"
-	ActionKindScroll    ActionKind = "scroll"
-	ActionKindObserve   ActionKind = "observe"   // explicit snapshot fetch, used as fallback
-	ActionKindFillForm  ActionKind = "fill_form" // fill multiple input fields in one device round-trip
+	ActionKindOpenApp    ActionKind = "open_app"
+	ActionKindOpenIntent ActionKind = "open_intent"
+	ActionKindClick      ActionKind = "click"
+	ActionKindLongClick  ActionKind = "long_click"
+	ActionKindInputText  ActionKind = "input_text"
+	ActionKindScroll     ActionKind = "scroll"
+	ActionKindObserve    ActionKind = "observe"   // explicit snapshot fetch, used as fallback
+	ActionKindFillForm   ActionKind = "fill_form" // fill multiple input fields in one device round-trip
 )
 
 // TargetKind selects the accessibility attribute used to identify a UI element.

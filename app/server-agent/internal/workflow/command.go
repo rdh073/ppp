@@ -14,11 +14,12 @@ type executeParams struct {
 }
 
 type executeAction struct {
-	Kind      string         `json:"kind"`
-	Target    *executeTarget `json:"target,omitempty"`
-	InputText string         `json:"inputText,omitempty"`
-	Package   string         `json:"package,omitempty"`
-	Direction string         `json:"direction,omitempty"`
+	Kind         string         `json:"kind"`
+	Target       *executeTarget `json:"target,omitempty"`
+	InputText    string         `json:"inputText,omitempty"`
+	Package      string         `json:"package,omitempty"`
+	IntentAction string         `json:"intentAction,omitempty"`
+	Direction    string         `json:"direction,omitempty"`
 }
 
 type executeTarget struct {
@@ -94,6 +95,7 @@ func buildCommand(
 		}
 		act.InputText = Interpolate(action.InputText, inputs)
 		act.Package = Interpolate(action.Package, inputs)
+		act.IntentAction = Interpolate(action.IntentAction, inputs)
 		act.Direction = action.Direction
 
 		params, err = json.Marshal(executeParams{Action: act})

@@ -3,6 +3,7 @@ package workflow
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
@@ -92,6 +93,7 @@ func validateAction(
 
 	switch action.Kind {
 	case domain.ActionKindOpenApp,
+		domain.ActionKindOpenIntent,
 		domain.ActionKindClick,
 		domain.ActionKindLongClick,
 		domain.ActionKindInputText,
@@ -106,6 +108,10 @@ func validateAction(
 	case domain.ActionKindClick, domain.ActionKindLongClick, domain.ActionKindInputText:
 		if action.Target == nil {
 			errs = append(errs, fmt.Errorf("step %q: action kind %q requires target", stepID, action.Kind))
+		}
+	case domain.ActionKindOpenIntent:
+		if strings.TrimSpace(action.IntentAction) == "" {
+			errs = append(errs, fmt.Errorf("step %q: action kind %q requires intent_action", stepID, action.Kind))
 		}
 	case domain.ActionKindFillForm:
 		if len(action.Fields) == 0 {

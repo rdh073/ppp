@@ -99,3 +99,39 @@ func TestBuildCommand_FillFormSemanticKeyTargets(t *testing.T) {
 		t.Fatalf("field target value = %q, want %q", params.Action.Fields[0].Target.Value, "login.email")
 	}
 }
+
+func TestBuildCommand_OpenIntent(t *testing.T) {
+	cmd, err := buildCommand(
+		&domain.ActionDef{
+			Kind:         domain.ActionKindOpenIntent,
+			IntentAction: "android.settings.ADD_ACCOUNT_SETTINGS",
+			Package:      "com.android.settings",
+		},
+		domain.DeviceID("dev1"),
+		domain.TaskID("task1"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("buildCommand returned error: %v", err)
+	}
+
+	var params struct {
+		Action struct {
+			Kind         string `json:"kind"`
+			IntentAction string `json:"intentAction"`
+			Package      string `json:"package"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(cmd.Params, &params); err != nil {
+		t.Fatalf("unmarshal command params: %v", err)
+	}
+	if params.Action.Kind != string(domain.ActionKindOpenIntent) {
+		t.Fatalf("action kind = %q, want %q", params.Action.Kind, domain.ActionKindOpenIntent)
+	}
+	if params.Action.IntentAction != "android.settings.ADD_ACCOUNT_SETTINGS" {
+		t.Fatalf("intentAction = %q", params.Action.IntentAction)
+	}
+	if params.Action.Package != "com.android.settings" {
+		t.Fatalf("package = %q", params.Action.Package)
+	}
+}

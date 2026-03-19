@@ -65,10 +65,20 @@ func (h *EventPlaneHandler) listAccepted(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	includePayload, err := parseBoolQueryParam(r, "includePayload", true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	records, err := h.uc.ListAccepted(r.Context(), query)
 	if err != nil {
 		writeUseCaseError(w, err)
 		return
+	}
+	if !includePayload {
+		for i := range records.Items {
+			records.Items[i].Event.Payload = nil
+		}
 	}
 	writeJSON(w, http.StatusOK, records)
 }
@@ -225,6 +235,22 @@ func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, err
 	}
 	return from, to, nil
+}
+
+func parseBoolQueryParam(r *http.Request, key string, defaultValue bool) (bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s: %q", key, raw)
+	}
 }
 
 func parseTimeQueryParam(r *http.Request, key string) (time.Time, error) {

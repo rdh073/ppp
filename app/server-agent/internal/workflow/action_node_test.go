@@ -156,3 +156,17 @@ func TestActionNode_ContextCancelled(t *testing.T) {
 		t.Errorf("expected context.Canceled system error, got: %v", err)
 	}
 }
+
+// TestActionNode_CommandResponseTimeout: command response wait respects step timeout and fails as business error.
+func TestActionNode_CommandResponseTimeout(t *testing.T) {
+	n := &ActionNode{disp: neverDispatcher{}}
+	out, err := n.Execute(context.Background(), makeActionCmd(
+		&domain.ActionDef{Kind: domain.ActionKindObserve}, nil, "1ms",
+	))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if out.Err == nil {
+		t.Fatal("expected business error for command response timeout")
+	}
+}

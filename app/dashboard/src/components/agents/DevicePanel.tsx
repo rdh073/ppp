@@ -1,4 +1,5 @@
 import { useDevices } from '../../hooks/useDevices';
+import { POLL_MS } from '../../config';
 
 function formatTime(value: string) {
   const date = new Date(value);
@@ -9,7 +10,7 @@ function formatTime(value: string) {
 }
 
 export function DevicePanel() {
-  const { devices, loading, error, refresh } = useDevices(5000);
+  const { devices, loading, error, refresh } = useDevices(POLL_MS);
 
   return (
     <section className="panel">

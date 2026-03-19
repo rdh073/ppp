@@ -15,11 +15,13 @@ export function listAcceptedEvents(params: DeviceQueryParams = {}): Promise<Page
       to: params.to,
       kind: params.kind,
       source: params.source,
+      deviceId: params.deviceId,
+      includePayload: params.includePayload === undefined ? undefined : String(params.includePayload),
     },
   });
 }
 
-export function getAcceptedEvent(eventId: string): Promise<{ event: EventRecord; acceptedAt: string; source: string }> {
+export function getAcceptedEvent(eventId: string): Promise<EventRecord> {
   return requestJson(`/events/accepted/${encodeURIComponent(eventId)}`, {
     method: 'GET',
   });

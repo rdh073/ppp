@@ -2,9 +2,10 @@ import { useCallback, useMemo } from 'react';
 import { listAcceptedEvents } from '../api/events';
 import type { DeviceQueryParams } from '../types';
 import { useEventStore } from '../store/events';
+import { POLL_MS } from '../config';
 import { usePolling } from './usePolling';
 
-export function useEvents(intervalMs: number = 5000, params: DeviceQueryParams = {}) {
+export function useEvents(intervalMs: number = POLL_MS, params: DeviceQueryParams = {}) {
   const entries = useEventStore((state) => state.entries);
   const loading = useEventStore((state) => state.loading);
   const error = useEventStore((state) => state.error);
@@ -14,25 +15,39 @@ export function useEvents(intervalMs: number = 5000, params: DeviceQueryParams =
   const setLoading = useEventStore((state) => state.setLoading);
   const setError = useEventStore((state) => state.setError);
 
+  const {
+    limit,
+    offset,
+    order,
+    cursor,
+    from,
+    to,
+    kind,
+    source,
+    deviceId,
+    includePayload,
+  } = params;
+
   const loadEvents = useCallback(
     async (append = false) => {
       setLoading(true);
       const baseOffset =
-        params.offset ??
+        offset ??
         (append && pagination
           ? pagination.offset + pagination.limit
           : 0);
       try {
         const payload = await listAcceptedEvents({
-          limit: params.limit,
+          limit,
           offset: baseOffset,
-          order: params.order,
-          cursor: params.cursor,
-          from: params.from,
-          to: params.to,
-          kind: params.kind,
-          source: params.source,
-          deviceId: params.deviceId,
+          order,
+          cursor,
+          from,
+          to,
+          kind,
+          source,
+          deviceId,
+          includePayload,
         });
         if (append) {
           appendPage(payload);
@@ -44,7 +59,7 @@ export function useEvents(intervalMs: number = 5000, params: DeviceQueryParams =
         setError(message);
       }
     },
-    [appendPage, params, pagination, setError, setList, setLoading],
+    [appendPage, cursor, deviceId, from, includePayload, kind, limit, offset, order, pagination, setError, setList, setLoading, source, to],
   );
 
   const refresh = useCallback(

@@ -154,6 +154,22 @@ class ActionExecutor(private val service: AccessibilityService) {
             }
         }
 
+        is AutomationAction.OpenIntent -> {
+            try {
+                val intent = Intent(action.intentAction).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    action.packageName?.takeIf { it.isNotBlank() }?.let { setPackage(it) }
+                }
+                service.startActivity(intent)
+                ActionResult.Ok
+            } catch (t: Throwable) {
+                ActionResult.Failed(
+                    "input_rejected",
+                    "Failed to start intent ${action.intentAction}: ${t.message ?: t::class.java.simpleName}",
+                )
+            }
+        }
+
         is AutomationAction.Screenshot -> {
             if (Build.VERSION.SDK_INT < 30) {
                 ActionResult.Failed("capability_unavailable", "Screenshot requires API 30+")
@@ -314,7 +330,8 @@ class ActionExecutor(private val service: AccessibilityService) {
             ?: return ActionResult.Failed("input_rejected", "Invalid y coordinate: ${parts[1]}")
 
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 1L)
+        // Use a human-like tap duration so WebView surfaces reliably register the gesture.
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 80L)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
         val latch = CountDownLatch(1)
@@ -336,7 +353,11 @@ class ActionExecutor(private val service: AccessibilityService) {
             return ActionResult.Failed("input_rejected", "Coordinate tap not dispatched at $x,$y")
         }
         if (!latch.await(2, TimeUnit.SECONDS)) {
-            return ActionResult.Failed("input_rejected", "Coordinate tap timed out at $x,$y")
+            // Some WebView-backed surfaces on Waydroid never invoke gesture callbacks
+            // even though the tap is actually applied. Treat this as best-effort success
+            // so higher-level workflow retries can progress based on resulting UI state.
+            Log.w(TAG, "Coordinate tap callback timed out at $x,$y; assuming delivered")
+            return ActionResult.Ok
         }
         return if (succeeded) ActionResult.Ok
         else ActionResult.Failed("input_rejected", "Coordinate tap cancelled at $x,$y")

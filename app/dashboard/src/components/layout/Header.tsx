@@ -2,7 +2,9 @@ import type { Tab } from './TabNav';
 
 interface HeaderProps {
   activeTab: Tab;
+  apiUrl: string;
   metricsUrl: string;
+  healthStatus: 'checking' | 'ok' | 'down';
 }
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -12,7 +14,10 @@ const TAB_LABELS: Record<Tab, string> = {
   events: 'Event Feed',
 };
 
-export function Header({ activeTab, metricsUrl }: HeaderProps) {
+export function Header({ activeTab, apiUrl, metricsUrl, healthStatus }: HeaderProps) {
+  const healthLabel =
+    healthStatus === 'ok' ? 'API online' : healthStatus === 'down' ? 'API unreachable' : 'API checking';
+
   return (
     <header className="topbar">
       <div className="topbar-main">
@@ -21,6 +26,8 @@ export function Header({ activeTab, metricsUrl }: HeaderProps) {
       </div>
       <div className="topbar-meta">
         <span className="topbar-chip">Focus: {TAB_LABELS[activeTab]}</span>
+        <span className={`topbar-chip topbar-chip-${healthStatus}`}>{healthLabel}</span>
+        <span className="topbar-api">API: {apiUrl}</span>
         <a className="topbar-link" href={metricsUrl} target="_blank" rel="noreferrer">
           Open Metrics
         </a>

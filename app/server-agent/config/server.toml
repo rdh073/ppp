@@ -1,0 +1,51 @@
+# server-agent runtime config (local)
+#
+# Use:
+#   go run ./cmd/server -config ./config/server.toml
+
+[server]
+addr = ":3000"
+data_dir = "./var"
+tool_dir = "./config/tools"
+workflow_dir = "./config/examples/workflows"
+workflow_poll = "5s"
+log_level = "info"
+shutdown_timeout = "15s"
+
+[store]
+driver = "file"
+state_ttl = "0s"
+
+[redis]
+addr = "localhost:6379"
+db = 0
+
+[event_runtime]
+mode = "inline"
+
+[event_bus]
+partitions = 8
+group = "server-agent"
+consumer_prefix = "server-agent"
+instance_id = ""
+lease_ttl = "15s"
+pending_idle = "45s"
+claim_count = 16
+ownership_retry = "500ms"
+
+[pruning]
+interval = "1h"
+accepted_events_age = "168h"
+dead_letters_age = "168h"
+command_outbox_age = "24h"
+
+[adb]
+host = "localhost"
+port = 5037
+accessibility_component = "com.autosdk.agent/com.autosdk.agent.service.AgentAccessibilityService"
+reconcile_interval = "30s"
+
+[tools.llm]
+api_url = "https://api.openai.com/v1/chat/completions"
+model = "gpt-4.1-mini"
+api_key = "REPLACE_WITH_OPENAI_API_KEY"

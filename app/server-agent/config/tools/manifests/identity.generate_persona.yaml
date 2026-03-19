@@ -22,11 +22,13 @@ modelPolicy: backend_workflow_json
 promptFile: prompts/identity.generate_persona.prompt.tmpl
 inputSchema:
   type: object
+  additionalProperties: false
   properties:
     gender:
       enum: [male, female]
 outputSchema:
   type: object
+  additionalProperties: false
   required: [fullName, firstName, lastName, gender, genderLabel, email, username]
   properties:
     fullName:

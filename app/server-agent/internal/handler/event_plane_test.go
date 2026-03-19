@@ -103,6 +103,42 @@ func TestEventPlaneHandler_ListAccepted(t *testing.T) {
 	}
 }
 
+func TestEventPlaneHandler_ListAccepted_ExcludePayload(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	event := domain.Event{
+		ID:         "dev-http-payload:1",
+		Kind:       domain.EventKindScreenChanged,
+		DeviceID:   "dev-http-payload",
+		SeqNo:      1,
+		OccurredAt: time.Now().UTC(),
+		Payload: map[string]any{
+			"message": "large payload should be omitted",
+		},
+	}
+	if _, err := events.Accept(context.Background(), event); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted?deviceId=dev-http-payload&includePayload=false&limit=10", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /events/accepted includePayload=false: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload usecase.AcceptedEventPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(payload.Items))
+	}
+	if payload.Items[0].Event.Payload != nil {
+		t.Fatalf("expected payload to be omitted, got %#v", payload.Items[0].Event.Payload)
+	}
+}
+
 func TestEventPlaneHandler_ListAccepted_TimeRange(t *testing.T) {
 	h, events, _, _ := newEventPlaneHandler(t)
 	for idx, event := range []domain.Event{

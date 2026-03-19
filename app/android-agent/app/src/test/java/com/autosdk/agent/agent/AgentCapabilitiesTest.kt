@@ -17,7 +17,7 @@ class AgentCapabilitiesTest {
         val names = caps.map { it["name"] as String }.toSet()
         val expected = setOf(
             "observe", "click", "long_press", "input_text", "delete_text",
-            "scroll", "home", "back", "wake", "open_app", "close_app",
+            "scroll", "home", "back", "wake", "open_app", "open_intent", "close_app",
             "fill_form", "screenshot",
         )
         assertEquals(expected, names)

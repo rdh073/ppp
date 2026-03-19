@@ -1,7 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { createTask, getTask, cancelTask } from '../api/tasks';
 import type { TaskCreateRequest } from '../types';
 import { useTaskStore } from '../store/tasks';
+import { POLL_MS } from '../config';
+import { usePolling } from './usePolling';
 
 export function useTasks() {
   const tasks = useTaskStore((state) => state.tasks);
@@ -14,6 +16,12 @@ export function useTasks() {
   const setLoadingById = useTaskStore((state) => state.setLoadingById);
   const setError = useTaskStore((state) => state.setError);
   const upsertTrackedId = useTaskStore((state) => state.upsertTrackedId);
+  const activeTrackedIds = useMemo(() => {
+    return trackedIds.filter((id) => {
+      const status = tasks[id]?.status;
+      return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
+    });
+  }, [tasks, trackedIds]);
 
   const create = useCallback(async (body: TaskCreateRequest) => {
     setTasksLoading(true);
@@ -63,6 +71,23 @@ export function useTasks() {
   const listTracked = trackedIds
     .map((id) => tasks[id])
     .filter((task): task is NonNullable<typeof task> => task !== undefined);
+
+  const refreshActive = useCallback(async () => {
+    await Promise.all(activeTrackedIds.map(async (id) => {
+      setLoadingById(id, true);
+      try {
+        const task = await getTask(id);
+        setTask(task);
+      } catch (raw) {
+        const message = raw instanceof Error ? raw.message : 'Failed to refresh active tasks';
+        setError(message);
+      } finally {
+        setLoadingById(id, false);
+      }
+    }));
+  }, [activeTrackedIds, setError, setLoadingById, setTask]);
+
+  usePolling(refreshActive, POLL_MS, activeTrackedIds.length > 0);
 
   return {
     tasks: listTracked,

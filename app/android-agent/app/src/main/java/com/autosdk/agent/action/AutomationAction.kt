@@ -25,6 +25,7 @@ sealed interface AutomationAction {
     data object Back : AutomationAction
     data object Wake : AutomationAction
     data class OpenApp(val packageName: String) : AutomationAction
+    data class OpenIntent(val intentAction: String, val packageName: String?) : AutomationAction
     data object CloseApp : AutomationAction
     data object Screenshot : AutomationAction
     /**

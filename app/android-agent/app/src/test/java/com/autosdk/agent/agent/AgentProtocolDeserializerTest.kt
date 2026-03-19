@@ -164,6 +164,18 @@ class AgentProtocolDeserializerTest {
     }
 
     @Test
+    fun `parseAction returns OpenIntent`() {
+        val obj = buildJsonObject {
+            put("kind", "open_intent")
+            put("intentAction", "android.settings.ADD_ACCOUNT_SETTINGS")
+            put("package", "com.android.settings")
+        }
+        val action = AgentProtocolDeserializer.parseAction(obj) as AutomationAction.OpenIntent
+        assertEquals("android.settings.ADD_ACCOUNT_SETTINGS", action.intentAction)
+        assertEquals("com.android.settings", action.packageName)
+    }
+
+    @Test
     fun `parseAction returns CloseApp`() {
         val obj = buildJsonObject { put("kind", "close_app") }
         assertEquals(AutomationAction.CloseApp, AgentProtocolDeserializer.parseAction(obj))
