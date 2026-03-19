@@ -29,3 +29,11 @@ unsloth_compiled_cache
 logs
 data
 __pycache__
+
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+plans/
+.claude/
+.agents/
