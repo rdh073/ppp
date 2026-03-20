@@ -85,4 +85,13 @@ sealed interface AgentEvent {
     data class ResponseSent(val requestId: String) : AgentEvent
 
     data class WindowStateChanged(val params: JsonObject) : AgentEvent
+
+    /** Fired immediately on TYPE_WINDOW_STATE_CHANGED — no settle wait, no digest dedup.
+     *  Carries packageName + className so workflows can trigger on activity transitions
+     *  even when the semantic content hasn't changed. */
+    data class ActivityCreated(val params: JsonObject) : AgentEvent
+
+    /** Fired on TYPE_NOTIFICATION_STATE_CHANGED.
+     *  Carries packageName + text so workflows can trigger on toast / system notifications. */
+    data class NotificationReceived(val params: JsonObject) : AgentEvent
 }

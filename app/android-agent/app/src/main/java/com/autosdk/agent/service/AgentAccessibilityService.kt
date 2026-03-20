@@ -15,13 +15,16 @@ import com.autosdk.agent.observation.SnapshotBuilder
 import com.autosdk.agent.state.AgentEvent
 import com.autosdk.agent.state.AgentLogger
 import com.autosdk.agent.state.AgentRuntimeHooks
+import com.autosdk.agent.state.AgentState
 import com.autosdk.agent.state.AgentStateStore
 import com.autosdk.agent.state.AgentStateCoordinator
 import com.autosdk.agent.state.AgentStatus
+import com.autosdk.agent.state.AgentTransportPhase
 import com.autosdk.agent.state.CoroutineBackoffScheduler
 import com.autosdk.agent.state.CoroutineHeartbeatScheduler
 import com.autosdk.agent.state.PendingAccessibilityDisabledEvent
 import com.autosdk.agent.state.SharedPreferencesAgentStateStore
+import com.autosdk.agent.state.toStatus
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,6 +107,7 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        AgentNotificationManager.createChannel(this)
         Log.i(TAG, "Accessibility service connected")
 
         serviceInfo =
@@ -113,7 +117,8 @@ class AgentAccessibilityService : AccessibilityService() {
                         AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                         AccessibilityEvent.TYPE_WINDOWS_CHANGED or
                         AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
-                        AccessibilityEvent.TYPE_VIEW_SCROLLED
+                        AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                        AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
                 feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
                 flags =
                     AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
@@ -124,6 +129,7 @@ class AgentAccessibilityService : AccessibilityService() {
         if (runtimeInitialized.compareAndSet(false, true)) {
             setupAgentRuntime()
         }
+        AgentNotificationManager.update(this, coordinator?.currentStatus() ?: AgentState.initial().toStatus())
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -139,10 +145,33 @@ class AgentAccessibilityService : AccessibilityService() {
             setupAgentRuntime()
         }
 
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val cls = event.className?.toString()
-            if (!cls.isNullOrBlank()) {
-                currentActivityName = cls
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                val cls = event.className?.toString()
+                if (!cls.isNullOrBlank()) {
+                    currentActivityName = cls
+                }
+                // Dispatch ActivityCreated immediately — no settle wait, no digest dedup.
+                // Fires on every window transition so workflows can trigger on activity
+                // changes even when semantic content is unchanged.
+                val seqNo = outboundEventSeqNo.incrementAndGet()
+                stateStore?.persistLastOutboundEventSeqNo(seqNo)
+                val params = buildActivityCreatedParams(
+                    seqNo = seqNo,
+                    packageName = event.packageName?.toString(),
+                    className = cls,
+                )
+                serviceScope.launch {
+                    coordinator?.dispatch(AgentEvent.ActivityCreated(params))
+                }
+            }
+            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
+                val seqNo = outboundEventSeqNo.incrementAndGet()
+                stateStore?.persistLastOutboundEventSeqNo(seqNo)
+                val params = buildNotificationParams(seqNo = seqNo, event = event)
+                serviceScope.launch {
+                    coordinator?.dispatch(AgentEvent.NotificationReceived(params))
+                }
             }
         }
 
@@ -165,6 +194,7 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        AgentNotificationManager.cancel(this)
 
         val activeCoordinator = coordinator
         if (activeCoordinator != null) {
@@ -404,6 +434,28 @@ class AgentAccessibilityService : AccessibilityService() {
         })
     }
 
+    private fun buildActivityCreatedParams(
+        seqNo: Long,
+        packageName: String?,
+        className: String?,
+    ) = buildJsonObject {
+        put("seqNo", seqNo)
+        packageName?.let { put("packageName", it) }
+        className?.let { put("className", it) }
+    }
+
+    private fun buildNotificationParams(
+        seqNo: Long,
+        event: AccessibilityEvent,
+    ) = buildJsonObject {
+        put("seqNo", seqNo)
+        event.packageName?.toString()?.let { put("packageName", it) }
+        put("text", buildJsonArray {
+            event.text?.forEach { t -> t?.toString()?.takeIf { it.isNotBlank() }?.let { add(it) } }
+            event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { add(it) }
+        })
+    }
+
     private fun shouldScheduleSemanticPublish(eventType: Int): Boolean =
         eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
@@ -465,6 +517,28 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Requests an immediate reconnect from the current transport state.
+     * Called by [AgentReconnectReceiver] when the user taps "Reconnect" in the
+     * persistent status notification.
+     *
+     * - DISCONNECTED → dispatches [AgentEvent.ConnectRequested]
+     * - BACKOFF_WAIT → dispatches [AgentEvent.BackoffElapsed] to skip the remaining delay
+     * - Any other state → no-op (already connecting or connected)
+     */
+    internal fun requestReconnect() {
+        val activeCoordinator = coordinator ?: return
+        serviceScope.launch {
+            when (activeCoordinator.currentState().transport) {
+                AgentTransportPhase.DISCONNECTED ->
+                    activeCoordinator.dispatch(AgentEvent.ConnectRequested)
+                AgentTransportPhase.BACKOFF_WAIT ->
+                    activeCoordinator.dispatch(AgentEvent.BackoffElapsed)
+                else -> Unit
+            }
+        }
+    }
+
     private inner class ServiceRuntimeHooks : AgentRuntimeHooks {
         override fun clearInflightCommand() {
             // Runtime execution event wiring will own this more precisely in PR6.
@@ -476,6 +550,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 serviceScope.launch { flushPendingAccessibilityDisabledEvent() }
             }
             wasTransportConnected = isConnected
+            AgentNotificationManager.update(this@AgentAccessibilityService, status)
             Log.d(TAG, "status ${status.toDebugString()}")
         }
     }

@@ -437,3 +437,80 @@ func TestMatchExpect_UI(t *testing.T) {
 		t.Fatal("semantic UI expect should match")
 	}
 }
+
+// --- OR expect tests ---
+
+// TestMatchExpect_Or_FirstClauseMatches verifies that OR advances when the
+// first clause matches.
+func TestMatchExpect_Or_FirstClauseMatches(t *testing.T) {
+	event := makeEvent(androidKind, `{"packageName":"com.android.settings","text":["Saved"]}`)
+	exp := domain.ExpectDef{
+		Or: []domain.ExpectDef{
+			{Kind: androidKind, TextContains: "Saved"},
+			{Kind: domain.EventKindNotification, TextContains: "Berhasil"},
+		},
+	}
+	if !workflow.MatchExpect(exp, event) {
+		t.Fatal("OR: first clause matches — should return true")
+	}
+}
+
+// TestMatchExpect_Or_SecondClauseMatches verifies that OR advances when only
+// the second clause matches.
+func TestMatchExpect_Or_SecondClauseMatches(t *testing.T) {
+	event := makeEvent(domain.EventKindNotification, `{"text":["Berhasil disimpan"]}`)
+	exp := domain.ExpectDef{
+		Or: []domain.ExpectDef{
+			{Kind: androidKind, TextContains: "Saved"},
+			{Kind: domain.EventKindNotification, TextContains: "Berhasil"},
+		},
+	}
+	if !workflow.MatchExpect(exp, event) {
+		t.Fatal("OR: second clause matches — should return true")
+	}
+}
+
+// TestMatchExpect_Or_NoneMatch verifies that OR returns false when no clause
+// matches.
+func TestMatchExpect_Or_NoneMatch(t *testing.T) {
+	event := makeEvent(androidKind, `{"packageName":"com.android.settings","text":["Network"]}`)
+	exp := domain.ExpectDef{
+		Or: []domain.ExpectDef{
+			{Kind: androidKind, TextContains: "Saved"},
+			{Kind: domain.EventKindNotification, TextContains: "Berhasil"},
+		},
+	}
+	if workflow.MatchExpect(exp, event) {
+		t.Fatal("OR: no clause matches — should return false")
+	}
+}
+
+// TestSnapshotMatchesExpect_Or_FirstClauseMatches verifies OR on snapshot check.
+func TestSnapshotMatchesExpect_Or_FirstClauseMatches(t *testing.T) {
+	raw := json.RawMessage(`{"snapshotAfter":{"packageName":"com.android.settings","activityName":"PrivateDnsSettings","targets":[{"text":"Saved"}]}}`)
+	exp := domain.ExpectDef{
+		Or: []domain.ExpectDef{
+			{Package: "com.android.settings", TextContains: "Saved"},
+			{Package: "com.android.mms", TextContains: "Terkirim"},
+		},
+	}
+	if !workflow.SnapshotMatchesExpect(raw, exp) {
+		t.Fatal("OR snapshot: first clause matches — should return true")
+	}
+}
+
+// TestSnapshotMatchesExpect_Or_KindOnlyClausesSkipped verifies that OR clauses
+// with only Kind (not a snapshot-observable field) are skipped, and the check
+// returns false when no other clause matches.
+func TestSnapshotMatchesExpect_Or_KindOnlyClausesSkipped(t *testing.T) {
+	raw := json.RawMessage(`{"snapshotAfter":{"packageName":"com.android.settings","targets":[]}}`)
+	exp := domain.ExpectDef{
+		Or: []domain.ExpectDef{
+			{Kind: androidKind},                 // Kind-only — not a snapshot property
+			{Kind: domain.EventKindNotification}, // Kind-only — not a snapshot property
+		},
+	}
+	if workflow.SnapshotMatchesExpect(raw, exp) {
+		t.Fatal("OR snapshot: Kind-only clauses are not snapshot properties — should return false")
+	}
+}

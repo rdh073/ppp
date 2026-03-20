@@ -231,3 +231,112 @@ func TestValidate_OpenIntentRequiresIntentAction(t *testing.T) {
 		t.Fatalf("expected intent_action validation error, got: %v", err)
 	}
 }
+
+// --- OR expect validation tests ---
+
+func TestValidate_ExpectOr_Valid(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Action: &domain.ActionDef{Kind: domain.ActionKindObserve},
+		Expect: &domain.ExpectDef{
+			Or: []domain.ExpectDef{
+				{Kind: domain.EventKindScreenChanged, TextContains: "Saved"},
+				{Kind: domain.EventKindNotification, TextContains: "Berhasil"},
+			},
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	if err := workflow.Validate(def); err != nil {
+		t.Fatalf("expected valid OR expect to pass, got: %v", err)
+	}
+}
+
+func TestValidate_ExpectOr_MutuallyExclusiveWithKind(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Expect: &domain.ExpectDef{
+			Kind: domain.EventKindScreenChanged, // conflict with Or
+			Or: []domain.ExpectDef{
+				{Kind: domain.EventKindScreenChanged},
+				{Kind: domain.EventKindNotification},
+			},
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error: or + kind are mutually exclusive")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive error, got: %v", err)
+	}
+}
+
+func TestValidate_ExpectOr_RequiresAtLeastTwoClauses(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Expect: &domain.ExpectDef{
+			Or: []domain.ExpectDef{
+				{Kind: domain.EventKindScreenChanged},
+			},
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error: or requires at least 2 clauses")
+	}
+	if !strings.Contains(err.Error(), "at least 2") {
+		t.Fatalf("expected 'at least 2' error, got: %v", err)
+	}
+}
+
+func TestValidate_ExpectOr_RejectsNestedOr(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Expect: &domain.ExpectDef{
+			Or: []domain.ExpectDef{
+				{Kind: domain.EventKindScreenChanged},
+				{
+					Or: []domain.ExpectDef{ // nested — not supported
+						{Kind: domain.EventKindNotification},
+						{Kind: domain.EventKindScreenChanged},
+					},
+				},
+			},
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error: nested or is not supported")
+	}
+	if !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("expected nested error, got: %v", err)
+	}
+}
+
+func TestValidate_ExpectOr_RejectsLegacyKindInClause(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Expect: &domain.ExpectDef{
+			Or: []domain.ExpectDef{
+				{Kind: "android.window.state_changed"}, // legacy
+				{Kind: domain.EventKindNotification},
+			},
+		},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error: legacy kind in or clause")
+	}
+	if !strings.Contains(err.Error(), string(domain.EventKindScreenChanged)) {
+		t.Fatalf("expected replacement hint, got: %v", err)
+	}
+}

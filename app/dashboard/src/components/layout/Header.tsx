@@ -3,12 +3,12 @@ import {
   Activity,
   Cpu,
   ExternalLink,
-  LayoutDashboard,
   Moon,
   Network,
   Server,
   Sun,
 } from 'lucide-react';
+import { GopherAndroidIcon, GopherDashboardIcon, GopherServerIcon } from './GopherIcons';
 
 interface HeaderProps {
   activeTab: Tab;
@@ -42,7 +42,7 @@ export function Header({ activeTab, apiUrl, metricsUrl, healthStatus, theme, onT
     <header className="topbar">
       <div className="topbar-main">
         <p className="topbar-kicker">
-          <LayoutDashboard size={13} aria-hidden="true" />
+          <GopherDashboardIcon size={14} />
           <span>Automation Control</span>
         </p>
         <h1>PPP Control Dashboard</h1>
@@ -68,6 +68,26 @@ export function Header({ activeTab, apiUrl, metricsUrl, healthStatus, theme, onT
               <Activity size={14} />
             </span>
             <span>Live polling active</span>
+          </span>
+        </div>
+        <div className="topbar-role-row" aria-label="system roles">
+          <span className="topbar-role-pill topbar-role-pill--server">
+            <span className="topbar-role-icon" aria-hidden="true">
+              <GopherServerIcon size={15} />
+            </span>
+            Server
+          </span>
+          <span className="topbar-role-pill topbar-role-pill--android">
+            <span className="topbar-role-icon" aria-hidden="true">
+              <GopherAndroidIcon size={15} />
+            </span>
+            Android Agent
+          </span>
+          <span className="topbar-role-pill topbar-role-pill--dashboard">
+            <span className="topbar-role-icon" aria-hidden="true">
+              <GopherDashboardIcon size={15} />
+            </span>
+            Dashboard
           </span>
         </div>
       </div>

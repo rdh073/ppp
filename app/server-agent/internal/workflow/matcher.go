@@ -36,8 +36,18 @@ func MatchEvent(m domain.EventMatch, event domain.Event) bool {
 }
 
 // MatchExpect reports whether event satisfies the expect condition.
-// Semantics identical to MatchEvent.
+//
+// When e.Or is non-empty, the event must satisfy at least one clause (OR
+// semantics). Otherwise all non-empty fields must match (AND semantics).
 func MatchExpect(e domain.ExpectDef, event domain.Event) bool {
+	if len(e.Or) > 0 {
+		for _, clause := range e.Or {
+			if MatchExpect(clause, event) {
+				return true
+			}
+		}
+		return false
+	}
 	return matchDeviceEvent(event, e.Kind, e.Package, e.ClassSuffix, e.TextContains, e.UI)
 }
 

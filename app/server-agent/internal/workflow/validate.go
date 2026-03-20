@@ -54,9 +54,7 @@ func validateStep(stepID string, step domain.StepDef) []error {
 		errs = append(errs, err)
 	}
 	if step.Expect != nil {
-		if err := validateEventKind(stepID, "expect", step.Expect.Kind); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, validateExpect(stepID, "expect", *step.Expect)...)
 	}
 	if step.Timeout != "" {
 		if _, err := time.ParseDuration(step.Timeout); err != nil {
@@ -67,6 +65,33 @@ func validateStep(stepID string, step domain.StepDef) []error {
 		errs = append(errs, validateAction(stepID, *step.Action)...)
 	}
 
+	return errs
+}
+
+func validateExpect(stepID, path string, exp domain.ExpectDef) []error {
+	if len(exp.Or) == 0 {
+		if err := validateEventKind(stepID, path, exp.Kind); err != nil {
+			return []error{err}
+		}
+		return nil
+	}
+	// OR combinator rules.
+	var errs []error
+	if exp.Kind != "" || exp.Package != "" || exp.ClassSuffix != "" || exp.TextContains != "" || exp.UI != nil {
+		errs = append(errs, fmt.Errorf("step %q: %s: \"or\" is mutually exclusive with other match fields", stepID, path))
+	}
+	if len(exp.Or) < 2 {
+		errs = append(errs, fmt.Errorf("step %q: %s: \"or\" requires at least 2 clauses", stepID, path))
+	}
+	for i, clause := range exp.Or {
+		if len(clause.Or) > 0 {
+			errs = append(errs, fmt.Errorf("step %q: %s.or[%d]: nested \"or\" is not supported", stepID, path, i))
+			continue
+		}
+		if err := validateEventKind(stepID, fmt.Sprintf("%s.or[%d]", path, i), clause.Kind); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errs
 }
 

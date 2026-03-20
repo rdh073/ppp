@@ -164,12 +164,19 @@ type TargetDef struct {
 
 // ExpectDef describes the device event that confirms an action succeeded.
 // All non-empty fields must match (AND semantics).
+//
+// OR semantics: when Or is non-empty, the step advances on success if any
+// clause in Or matches the incoming event. Or is mutually exclusive with the
+// direct match fields (Kind, Package, ClassSuffix, TextContains, UI) —
+// mixing them in the same ExpectDef is a validation error. Nested Or is not
+// supported.
 type ExpectDef struct {
-	Kind         EventKind `yaml:"kind,omitempty"           json:"kind,omitempty"`
-	Package      string    `yaml:"package,omitempty"        json:"package,omitempty"`
-	ClassSuffix  string    `yaml:"class_suffix,omitempty"   json:"class_suffix,omitempty"`
-	TextContains string    `yaml:"text_contains,omitempty"  json:"text_contains,omitempty"`
-	UI           *UiMatch  `yaml:"ui,omitempty"             json:"ui,omitempty"`
+	Kind         EventKind   `yaml:"kind,omitempty"           json:"kind,omitempty"`
+	Package      string      `yaml:"package,omitempty"        json:"package,omitempty"`
+	ClassSuffix  string      `yaml:"class_suffix,omitempty"   json:"class_suffix,omitempty"`
+	TextContains string      `yaml:"text_contains,omitempty"  json:"text_contains,omitempty"`
+	UI           *UiMatch    `yaml:"ui,omitempty"             json:"ui,omitempty"`
+	Or           []ExpectDef `yaml:"or,omitempty"             json:"or,omitempty"`
 }
 
 // UiMatch describes semantic UI facts to match against event payloads or

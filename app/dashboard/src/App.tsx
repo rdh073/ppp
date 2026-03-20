@@ -11,21 +11,6 @@ import './index.css';
 type DashboardTheme = 'monokai' | 'light';
 const THEME_STORAGE_KEY = 'ppp-dashboard-theme';
 
-function renderPanel(active: Tab) {
-  switch (active) {
-    case 'devices':
-      return <DevicePanel />;
-    case 'tasks':
-      return <TaskPanel />;
-    case 'workflows':
-      return <WorkflowPanel />;
-    case 'events':
-      return <EventPanel />;
-    default:
-      return <DevicePanel />;
-  }
-}
-
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('devices');
   const [healthStatus, setHealthStatus] = useState<'checking' | 'ok' | 'down'>('checking');
@@ -82,7 +67,17 @@ export function App() {
           <section className="tab-strip">
             <TabNav active={activeTab} onChange={setActiveTab} />
           </section>
-          <section className="panel-frame">{renderPanel(activeTab)}</section>
+          <section className="panel-frame">
+            <div
+              style={{ display: activeTab === 'devices' ? 'block' : 'none' }}
+              aria-hidden={activeTab !== 'devices'}
+            >
+              <DevicePanel />
+            </div>
+            {activeTab === 'tasks' && <TaskPanel />}
+            {activeTab === 'workflows' && <WorkflowPanel />}
+            {activeTab === 'events' && <EventPanel />}
+          </section>
         </main>
       </div>
     </div>

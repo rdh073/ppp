@@ -184,6 +184,30 @@ object AgentReducer {
                         )
                     }
                 }
+
+            is AgentEvent.ActivityCreated ->
+                if (state.transport != AgentTransportPhase.CONNECTED ||
+                    state.execution != AgentExecutionPhase.IDLE
+                ) {
+                    AgentReduction(state, listOf(AgentEffect.Log("activity_created_dropped:not_connected_or_busy")))
+                } else {
+                    AgentReduction(
+                        state,
+                        listOf(AgentEffect.PublishUiEvent(method = "android.activity.created", params = event.params)),
+                    )
+                }
+
+            is AgentEvent.NotificationReceived ->
+                if (state.transport != AgentTransportPhase.CONNECTED ||
+                    state.execution != AgentExecutionPhase.IDLE
+                ) {
+                    AgentReduction(state, listOf(AgentEffect.Log("notification_dropped:not_connected_or_busy")))
+                } else {
+                    AgentReduction(
+                        state,
+                        listOf(AgentEffect.PublishUiEvent(method = "android.notification", params = event.params)),
+                    )
+                }
         }
 
     private fun resetForFreshBoundary(

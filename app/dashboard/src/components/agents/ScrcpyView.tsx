@@ -261,7 +261,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   return (
     <div className="scrcpy-shell">
       <div className="panel-subhead">
-        <div className="flex items-center gap-2">
+        <div className="scrcpy-subhead-main flex items-center gap-2">
           <span>{modeLabel}</span>
           {deviceName && <span className="scrcpy-session-badge">{deviceName}</span>}
         </div>

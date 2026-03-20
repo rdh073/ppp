@@ -1,7 +1,9 @@
 package com.autosdk.agent.state
 
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.add
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -272,6 +274,111 @@ class AgentReducerTest {
 
         assertEquals(state, reduction.state)
         assertEquals(listOf(AgentEffect.Log("ui_event_dropped:duplicate_digest")), reduction.effects)
+    }
+
+    @Test
+    fun `activity created when connected and idle emits PublishUiEvent`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params = buildJsonObject {
+            put("seqNo", 1L)
+            put("packageName", "com.android.settings")
+            put("className", "com.android.settings.PrivateDnsActivity")
+        }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.ActivityCreated(params))
+
+        assertEquals(1, reduction.effects.size)
+        val effect = reduction.effects.single()
+        assertTrue(effect is AgentEffect.PublishUiEvent)
+        assertEquals("android.activity.created", (effect as AgentEffect.PublishUiEvent).method)
+        assertEquals(params, effect.params)
+        // State is unchanged — no digest tracking for activity events
+        assertEquals(state, reduction.state)
+    }
+
+    @Test
+    fun `activity created is not filtered by duplicate class name`() {
+        // Unlike android.screen.changed, activity.created has no digest dedup —
+        // repeated transitions to the same activity must still fire.
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params = buildJsonObject {
+            put("seqNo", 2L)
+            put("packageName", "com.android.settings")
+            put("className", "com.android.settings.PrivateDnsActivity")
+        }
+
+        val r1 = AgentReducer.reduce(state, AgentEvent.ActivityCreated(params))
+        val r2 = AgentReducer.reduce(r1.state, AgentEvent.ActivityCreated(params))
+
+        assertTrue(r1.effects.single() is AgentEffect.PublishUiEvent)
+        assertTrue(r2.effects.single() is AgentEffect.PublishUiEvent)
+    }
+
+    @Test
+    fun `activity created when not connected is dropped with log`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTING,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params = buildJsonObject { put("packageName", "com.example") }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.ActivityCreated(params))
+
+        assertEquals(state, reduction.state)
+        val log = reduction.effects.single()
+        assertTrue(log is AgentEffect.Log)
+        assertTrue((log as AgentEffect.Log).message.startsWith("activity_created_dropped"))
+    }
+
+    @Test
+    fun `notification received when connected and idle emits PublishUiEvent`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.CONNECTED,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params = buildJsonObject {
+            put("seqNo", 3L)
+            put("packageName", "com.android.mms")
+            put("text", buildJsonArray {
+                add("kode verifikasi: 123456")
+            })
+        }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.NotificationReceived(params))
+
+        assertEquals(1, reduction.effects.size)
+        val effect = reduction.effects.single()
+        assertTrue(effect is AgentEffect.PublishUiEvent)
+        assertEquals("android.notification", (effect as AgentEffect.PublishUiEvent).method)
+        assertEquals(params, effect.params)
+        assertEquals(state, reduction.state)
+    }
+
+    @Test
+    fun `notification received when not connected is dropped with log`() {
+        val state = AgentState.initial().copy(
+            service = AgentServicePhase.ACTIVE,
+            transport = AgentTransportPhase.BACKOFF_WAIT,
+            execution = AgentExecutionPhase.IDLE,
+        )
+        val params = buildJsonObject { put("packageName", "com.android.mms") }
+
+        val reduction = AgentReducer.reduce(state, AgentEvent.NotificationReceived(params))
+
+        assertEquals(state, reduction.state)
+        val log = reduction.effects.single()
+        assertTrue(log is AgentEffect.Log)
+        assertTrue((log as AgentEffect.Log).message.startsWith("notification_dropped"))
     }
 
     @Test

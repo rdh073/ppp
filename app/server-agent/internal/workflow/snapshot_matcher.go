@@ -16,7 +16,19 @@ import (
 //
 // Returns false on any parse error or when raw is empty.
 func SnapshotMatchesExpect(raw json.RawMessage, exp domain.ExpectDef) bool {
-	if len(raw) == 0 || !expectHasSnapshotCriteria(exp) {
+	if len(raw) == 0 {
+		return false
+	}
+	// OR: any clause that has snapshot criteria and matches → true.
+	if len(exp.Or) > 0 {
+		for _, clause := range exp.Or {
+			if SnapshotMatchesExpect(raw, clause) {
+				return true
+			}
+		}
+		return false
+	}
+	if !expectHasSnapshotCriteria(exp) {
 		return false
 	}
 	var result struct {
