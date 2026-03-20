@@ -43,9 +43,9 @@ export function Header({ activeTab, apiUrl, metricsUrl, healthStatus, theme, onT
       <div className="topbar-main">
         <p className="topbar-kicker">
           <LayoutDashboard size={13} aria-hidden="true" />
-          <span>Operator Control Surface</span>
+          <span>Automation Control</span>
         </p>
-        <h1>PPP Operator Console</h1>
+        <h1>PPP Control Dashboard</h1>
         <p>
           Control, monitor, and intervene across android-agent sessions with one dashboard in real
           time.
@@ -76,14 +76,14 @@ export function Header({ activeTab, apiUrl, metricsUrl, healthStatus, theme, onT
           <span className="topbar-meta-label">Control endpoint</span>
           <span className="topbar-api" title={apiUrl}>
             <Network size={14} aria-hidden="true" />
-            <span>{apiUrl}</span>
+            <code className="topbar-api-value">{apiUrl}</code>
           </span>
         </div>
         <span className="topbar-meta-label topbar-meta-label--compact">Workspace action</span>
         <div className="row topbar-actions">
           <button type="button" className="topbar-link" onClick={onToggleTheme}>
             {theme === 'monokai' ? <Moon size={16} aria-hidden="true" /> : <Sun size={16} aria-hidden="true" />}
-            <span>{theme === 'monokai' ? 'Tokyo Night' : 'Tokyo Light'}</span>
+            <span>{theme === 'monokai' ? 'Dark' : 'Light'}</span>
           </button>
           <a className="topbar-link topbar-link--ghost" href={metricsUrl} target="_blank" rel="noreferrer">
             <span className="topbar-link-icon">

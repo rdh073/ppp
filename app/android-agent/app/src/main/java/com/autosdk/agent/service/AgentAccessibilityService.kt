@@ -36,6 +36,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "AgentAccessibilitySvc"
@@ -91,6 +92,15 @@ class AgentAccessibilityService : AccessibilityService() {
     private val outboundEventSeqNo = AtomicLong(0L)
     @Volatile private var wasTransportConnected = false
 
+    /**
+     * Guards against double-initialisation. Uses CAS so that exactly one of
+     * [onServiceConnected] or the first [onAccessibilityEvent] wins the race.
+     * Needed because some Android environments (e.g. Waydroid) omit the
+     * [onServiceConnected] callback when the process restarts while the service
+     * is already enabled — causing [coordinator] to remain null indefinitely.
+     */
+    private val runtimeInitialized = AtomicBoolean(false)
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -111,11 +121,23 @@ class AgentAccessibilityService : AccessibilityService() {
                 notificationTimeout = 100
             }
 
-        setupAgentRuntime()
+        if (runtimeInitialized.compareAndSet(false, true)) {
+            setupAgentRuntime()
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         lastEventMs.set(System.currentTimeMillis())
+
+        // Bootstrap guard: if the process was restarted while the accessibility
+        // service was already enabled, Android skips onServiceConnected() on the
+        // new instance.  Detect this from the first arriving event and
+        // initialise the runtime lazily.  CAS ensures setupAgentRuntime() runs
+        // exactly once regardless of which path fires first.
+        if (runtimeInitialized.compareAndSet(false, true)) {
+            Log.i(TAG, "Runtime not initialised — bootstrapping from first accessibility event")
+            setupAgentRuntime()
+        }
 
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val cls = event.className?.toString()

@@ -14,6 +14,21 @@
   --accent-strong: #5b7fd1;
   --on-accent: #11131c;
   --error: #f7768e;
+  --state-success: #22c55e;
+  --state-success-bg: rgba(34, 197, 94, 0.12);
+  --state-success-text: #4ade80;
+  --state-success-border: rgba(34, 197, 94, 0.25);
+  --state-warning: #f59e0b;
+  --state-warning-bg: rgba(245, 158, 11, 0.12);
+  --state-warning-text: #fbbf24;
+  --state-warning-border: rgba(245, 158, 11, 0.25);
+  --state-offline: #475569;
+  --state-offline-bg: rgba(71, 85, 105, 0.18);
+  --state-offline-text: #94a3b8;
+  --state-offline-border: rgba(71, 85, 105, 0.3);
+  --capability-chip-bg: rgba(122, 162, 247, 0.12);
+  --capability-chip-text: #9bb8ff;
+  --capability-chip-border: rgba(122, 162, 247, 0.24);
 }
 
 :root[data-theme='light'] {
@@ -28,6 +43,21 @@
   --accent-strong: #1f60be;
   --on-accent: #f8fafc;
   --error: #e11d48;
+  --state-success: #16a34a;
+  --state-success-bg: rgba(22, 163, 74, 0.14);
+  --state-success-text: #15803d;
+  --state-success-border: rgba(22, 163, 74, 0.32);
+  --state-warning: #d97706;
+  --state-warning-bg: rgba(234, 179, 8, 0.16);
+  --state-warning-text: #a16207;
+  --state-warning-border: rgba(217, 119, 6, 0.3);
+  --state-offline: #64748b;
+  --state-offline-bg: rgba(100, 116, 139, 0.13);
+  --state-offline-text: #475569;
+  --state-offline-border: rgba(100, 116, 139, 0.3);
+  --capability-chip-bg: rgba(47, 128, 237, 0.12);
+  --capability-chip-text: #1d4ed8;
+  --capability-chip-border: rgba(47, 128, 237, 0.26);
 }
 
 @layer base {
@@ -63,7 +93,7 @@
   }
 
   .layout-shell {
-    @apply mx-auto grid w-full max-w-[1240px] gap-4 md:gap-5;
+    @apply mx-auto grid w-full gap-4 md:gap-5;
     animation: panel-enter 360ms ease-out both;
   }
 
@@ -141,9 +171,15 @@
   }
 
   .topbar-api-wrap {
-    @apply w-full;
+    @apply grid w-full gap-1.5 rounded-xl border px-2.5 py-2;
     max-width: 420px;
     justify-self: end;
+    border-color: var(--border);
+    background: rgba(17, 18, 24, 0.32);
+  }
+
+  :root[data-theme='light'] .topbar-api-wrap {
+    background: rgba(255, 255, 255, 0.72);
   }
 
   .topbar-chip {
@@ -209,21 +245,22 @@
   }
 
   .topbar-api-wrap .topbar-api {
-    margin-top: 0.35rem;
+    margin-top: 0;
   }
 
   .topbar-api {
-    @apply inline-flex items-center gap-1.5 text-xs;
-    color: var(--muted);
-    max-width: 420px;
+    @apply inline-flex min-h-[30px] w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs;
+    color: var(--text);
+    max-width: none;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    border-color: var(--border);
+    background: rgba(15, 23, 42, 0.35);
     line-height: 1.35;
   }
 
   :root[data-theme='light'] .topbar-api {
-    color: #334155;
+    color: #1f2937;
+    background: rgba(248, 250, 252, 0.88);
   }
 
   .topbar-api svg {
@@ -233,6 +270,13 @@
 
   :root[data-theme='light'] .topbar-api svg {
     color: #2f80ed;
+  }
+
+  .topbar-api-value {
+    @apply min-w-0 overflow-hidden text-ellipsis whitespace-nowrap;
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.01em;
   }
 
   .topbar-actions {
@@ -338,15 +382,46 @@
   }
 
   .tab-token {
-    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border text-xs font-bold tracking-[0.08em];
-    border-color: var(--border-strong);
-    color: #c7d7ff;
-    background: rgba(26, 27, 38, 0.88);
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border;
+    border-color: rgba(122, 162, 247, 0.3);
+    color: #9bb8ff;
+    background: rgba(122, 162, 247, 0.12);
+    transition: border-color 180ms ease, color 180ms ease, background 180ms ease, transform 180ms ease;
+  }
+
+  .tab-token svg {
+    display: block;
   }
 
   :root[data-theme='light'] .tab-token {
-    color: var(--accent-strong);
-    background: rgba(255, 255, 255, 0.88);
+    border-color: rgba(47, 128, 237, 0.35);
+    color: #1f60be;
+    background: rgba(47, 128, 237, 0.14);
+  }
+
+  .tab:hover .tab-token {
+    border-color: rgba(122, 162, 247, 0.5);
+    color: #d9e7ff;
+    background: rgba(122, 162, 247, 0.2);
+    transform: translateY(-1px);
+  }
+
+  :root[data-theme='light'] .tab:hover .tab-token {
+    border-color: rgba(47, 128, 237, 0.55);
+    color: #1d4ed8;
+    background: rgba(47, 128, 237, 0.18);
+  }
+
+  .tab-active .tab-token {
+    border-color: var(--accent);
+    color: var(--on-accent);
+    background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+    box-shadow: 0 8px 14px rgba(122, 162, 247, 0.24);
+  }
+
+  :root[data-theme='light'] .tab-active .tab-token {
+    color: #ffffff;
+    box-shadow: 0 8px 14px rgba(47, 128, 237, 0.2);
   }
 
   .tab-copy {
@@ -381,7 +456,7 @@
   }
 
   .panel-subhead {
-    @apply mb-2 mt-5 text-xs font-semibold uppercase tracking-[0.1em];
+    @apply mb-3 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.1em];
     color: var(--muted);
   }
 
@@ -490,6 +565,18 @@
   .artifact-row {
     @apply grid items-center gap-2;
     grid-template-columns: minmax(200px, 1.2fr) minmax(220px, 1.8fr) auto;
+  }
+
+  .capability-chip {
+    background: var(--capability-chip-bg);
+    color: var(--capability-chip-text);
+    border: 1px solid var(--capability-chip-border);
+  }
+
+  :root[data-theme='light'] .capability-chip {
+    background: var(--capability-chip-bg);
+    color: var(--capability-chip-text);
+    border: 1px solid var(--capability-chip-border);
   }
 
   .btn-secondary {
@@ -833,7 +920,7 @@
   .wf-search-strip {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.625rem;
+    gap: 0.75rem;
     align-items: end;
   }
 
@@ -934,15 +1021,24 @@
 
   .workflow-card-list {
     @apply m-0 grid list-none gap-2 p-0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-card-list > li {
+    min-width: 0;
   }
 
   .workflow-card {
-    @apply w-full cursor-pointer justify-start rounded-xl border p-3 text-left;
+    @apply flex w-full cursor-pointer flex-col items-stretch justify-start gap-2 rounded-xl border p-3 text-left;
     border-color: var(--border);
     color: var(--text);
     background: rgba(36, 40, 59, 0.82);
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
     box-shadow: none;
+    overflow: hidden;
+    white-space: normal;
   }
 
   :root[data-theme='light'] .workflow-card {
@@ -970,11 +1066,18 @@
   }
 
   .workflow-card-head {
-    @apply flex w-full items-center justify-between gap-2;
+    @apply grid w-full gap-2;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    min-width: 0;
   }
 
   .workflow-card-name {
-    @apply truncate text-sm font-semibold;
+    @apply text-sm font-semibold;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
   }
 
   .workflow-card-version {
@@ -1306,10 +1409,6 @@
     color: var(--muted);
   }
 
-  .workflow-grid ul {
-    @apply m-0 list-disc pl-5;
-  }
-
   .workflow-grid button {
     @apply w-full justify-start;
   }
@@ -1360,6 +1459,39 @@
     background: var(--surface-strong);
   }
 
+  .scrcpy-grid {
+    @apply mt-4 grid gap-3;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    align-items: start;
+  }
+
+  @media (max-width: 760px) {
+    .scrcpy-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .scrcpy-session-badge {
+      max-width: 132px;
+    }
+  }
+
+  .scrcpy-session-badge {
+    color: var(--accent);
+    border: 1px solid rgba(122, 162, 247, 0.35);
+    background: rgba(122, 162, 247, 0.12);
+    border-radius: 9999px;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.68rem;
+    line-height: 1.2;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    max-width: 180px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   .scrcpy-connect {
     @apply grid gap-3 mt-3;
   }
@@ -1375,10 +1507,6 @@
 
   .field-input {
     @apply w-full;
-  }
-
-  .panel-subhead {
-    @apply flex items-center justify-between gap-3 mb-3;
   }
 
   /* ── Task Panel ──────────────────────────────────────────────────── */

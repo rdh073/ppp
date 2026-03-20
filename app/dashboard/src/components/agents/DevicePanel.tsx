@@ -4,6 +4,11 @@ import { getAndroidIdentity } from '../../utils/deviceIdentity';
 import { ScrcpyView } from './ScrcpyView';
 import type { Device } from '../../types';
 
+const DEFAULT_MAX_SCRCPY_SESSIONS = 6;
+const MIN_MAX_SCRCPY_SESSIONS = 1;
+const MAX_MAX_SCRCPY_SESSIONS = 12;
+const MAX_SCRCPY_SESSIONS_STORAGE_KEY = 'ppp.dashboard.maxScrcpySessions';
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function relativeTime(value: string): string {
@@ -38,32 +43,33 @@ function StatusDot({ status }: { status: 'online' | 'stale' | 'offline' }) {
   if (status === 'online')
     return (
       <span className="relative inline-flex items-center justify-center w-3 h-3">
-        <span className={`${base} bg-[#22c55e] animate-ping absolute opacity-60`} />
-        <span className={`${base} bg-[#22c55e] relative`} />
+        <span className={`${base} bg-[var(--state-success)] animate-ping absolute opacity-60`} />
+        <span className={`${base} bg-[var(--state-success)] relative`} />
       </span>
     );
-  if (status === 'stale') return <span className={`${base} bg-[#f59e0b]`} />;
-  return <span className={`${base} bg-[#475569]`} />;
+  if (status === 'stale') return <span className={`${base} bg-[var(--state-warning)]`} />;
+  if (status === 'offline') return <span className={`${base} bg-[var(--state-offline)]`} />;
+  return null;
 }
 
 function StatusBadge({ status }: { status: 'online' | 'stale' | 'offline' }) {
   if (status === 'online')
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide"
-        style={{ background: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)' }}>
+        style={{ background: 'var(--state-success-bg)', color: 'var(--state-success-text)', border: '1px solid var(--state-success-border)' }}>
         <StatusDot status="online" /> Online
       </span>
     );
   if (status === 'stale')
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide"
-        style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)' }}>
+        style={{ background: 'var(--state-warning-bg)', color: 'var(--state-warning-text)', border: '1px solid var(--state-warning-border)' }}>
         <StatusDot status="stale" /> Stale
       </span>
     );
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide"
-      style={{ background: 'rgba(71,85,105,0.18)', color: '#94a3b8', border: '1px solid rgba(71,85,105,0.3)' }}>
+      style={{ background: 'var(--state-offline-bg)', color: 'var(--state-offline-text)', border: '1px solid var(--state-offline-border)' }}>
       <StatusDot status="offline" /> Offline
     </span>
   );
@@ -71,8 +77,7 @@ function StatusBadge({ status }: { status: 'online' | 'stale' | 'offline' }) {
 
 function CapabilityChip({ name }: { name: string }) {
   return (
-    <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.62rem] font-medium"
-      style={{ background: 'rgba(122,162,247,0.1)', color: 'var(--accent)', border: '1px solid rgba(122,162,247,0.2)' }}>
+    <span className="capability-chip inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.62rem] font-medium">
       {name}
     </span>
   );
@@ -84,10 +89,11 @@ interface DeviceCardProps {
   device: Device;
   selected: boolean;
   onSelect: (id: string, checked: boolean) => void;
-  onScrcpy: (device: Device) => void;
+  isScrcpyActive: boolean;
+  onToggleScrcpy: (device: Device) => void;
 }
 
-function DeviceCard({ device, selected, onSelect, onScrcpy }: DeviceCardProps) {
+function DeviceCard({ device, selected, onSelect, onToggleScrcpy, isScrcpyActive }: DeviceCardProps) {
   const status = deviceStatus(device);
   const identity = getAndroidIdentity(device);
   const version = device.deviceMetadata?.androidVersion
@@ -100,11 +106,17 @@ function DeviceCard({ device, selected, onSelect, onScrcpy }: DeviceCardProps) {
     <div
       className="relative rounded-2xl border p-4 transition-all duration-200 cursor-pointer"
       style={{
-        borderColor: selected ? 'var(--accent)' : status === 'online' ? 'rgba(34,197,94,0.2)' : 'var(--border)',
+        borderColor: selected
+          ? 'var(--accent)'
+          : status === 'online'
+            ? 'var(--state-success-border)'
+            : 'var(--border)',
         background: selected
           ? 'linear-gradient(135deg, rgba(122,162,247,0.08), var(--surface))'
           : 'var(--surface)',
-        boxShadow: selected ? '0 0 0 1px var(--accent), 0 8px 24px rgba(122,162,247,0.1)' : undefined,
+        boxShadow: selected
+          ? '0 0 0 1px var(--accent), 0 8px 24px rgba(122,162,247,0.1)'
+          : undefined,
       }}
       onClick={() => onSelect(device.deviceId, !selected)}
     >
@@ -177,14 +189,15 @@ function DeviceCard({ device, selected, onSelect, onScrcpy }: DeviceCardProps) {
           type="button"
           className="btn-secondary flex-1 gap-1.5"
           style={{ minHeight: '32px', fontSize: '0.73rem', padding: '0.3rem 0.6rem' }}
-          onClick={() => onScrcpy(device)}
-          aria-label={`Open Scrcpy for ${identity}`}
+          onClick={() => onToggleScrcpy(device)}
+          aria-label={`${isScrcpyActive ? 'Close' : 'Open'} Scrcpy for ${identity}`}
+          data-active={isScrcpyActive || undefined}
         >
           <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" />
             <path d="M8 21h8M12 17v4" />
           </svg>
-          Mirror
+          {isScrcpyActive ? 'Close Mirror' : 'Mirror'}
         </button>
       </div>
     </div>
@@ -223,10 +236,10 @@ function Stat({ label, value, color }: { label: string; value: number; color?: s
 interface BulkBarProps {
   count: number;
   onClear: () => void;
-  onScrcpyFirst: () => void;
+  onScrcpyAll: () => void;
 }
 
-function BulkBar({ count, onClear, onScrcpyFirst }: BulkBarProps) {
+function BulkBar({ count, onClear, onScrcpyAll }: BulkBarProps) {
   if (count === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 transition-all duration-200"
@@ -236,8 +249,8 @@ function BulkBar({ count, onClear, onScrcpyFirst }: BulkBarProps) {
       </span>
       <div className="flex gap-2 ml-auto">
         <button type="button" className="btn-secondary" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.6rem' }}
-          onClick={onScrcpyFirst}>
-          Mirror first
+          onClick={onScrcpyAll}>
+          Mirror selected
         </button>
         <button type="button" className="btn-secondary" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.6rem' }}
           onClick={onClear}>
@@ -260,9 +273,11 @@ function ViewToggle({ view, onChange }: { view: 'grid' | 'list'; onChange: (v: '
       style={{
         minHeight: '32px',
         padding: '0.25rem 0.5rem',
-        background: view === v ? 'linear-gradient(180deg, var(--accent), var(--accent-strong))' : 'var(--surface)',
-        borderColor: view === v ? 'var(--accent)' : 'var(--border-strong)',
-        color: view === v ? 'var(--on-accent)' : 'var(--text)',
+        background: view === v
+          ? 'linear-gradient(180deg, var(--accent), var(--accent-strong))'
+          : 'rgba(47, 128, 237, 0.08)',
+        borderColor: view === v ? 'var(--accent)' : 'rgba(47, 128, 237, 0.32)',
+        color: view === v ? 'var(--on-accent)' : 'var(--accent-strong)',
       }}
     >
       {icon}
@@ -287,9 +302,10 @@ function ViewToggle({ view, onChange }: { view: 'grid' | 'list'; onChange: (v: '
 
 // ── list view row ──────────────────────────────────────────────────────────
 
-function DeviceRow({ device, selected, onSelect, onScrcpy }: DeviceCardProps) {
+function DeviceRow({ device, selected, onSelect, onToggleScrcpy, isScrcpyActive }: DeviceCardProps) {
   const status = deviceStatus(device);
   const identity = getAndroidIdentity(device);
+  const actionLabel = isScrcpyActive ? 'Close Mirror' : 'Mirror';
   return (
     <tr
       className="cursor-pointer transition-colors duration-150"
@@ -326,12 +342,12 @@ function DeviceRow({ device, selected, onSelect, onScrcpy }: DeviceCardProps) {
       <td onClick={(e) => e.stopPropagation()}>
         <button type="button" className="btn-secondary gap-1.5"
           style={{ minHeight: '28px', fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
-          onClick={() => onScrcpy(device)}>
+          onClick={() => onToggleScrcpy(device)}>
           <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" />
             <path d="M8 21h8M12 17v4" />
           </svg>
-          Mirror
+          {actionLabel}
         </button>
       </td>
     </tr>
@@ -376,6 +392,32 @@ function filterDevices(devices: Device[], query: string): Device[] {
   });
 }
 
+type ScrcpySession = {
+  id: string;
+  deviceId: string;
+  adbSerial?: string;
+  deviceName: string;
+};
+
+function clampScrcpySessionLimit(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_SCRCPY_SESSIONS;
+  return Math.max(MIN_MAX_SCRCPY_SESSIONS, Math.min(MAX_MAX_SCRCPY_SESSIONS, value));
+}
+
+function readStoredScrcpySessionLimit(): number {
+  if (typeof window === 'undefined') return DEFAULT_MAX_SCRCPY_SESSIONS;
+  const raw = window.localStorage.getItem(MAX_SCRCPY_SESSIONS_STORAGE_KEY);
+  if (!raw) return DEFAULT_MAX_SCRCPY_SESSIONS;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return DEFAULT_MAX_SCRCPY_SESSIONS;
+  return clampScrcpySessionLimit(parsed);
+}
+
+function capScrcpySessions(sessions: ScrcpySession[], maxSessions: number): ScrcpySession[] {
+  if (sessions.length <= maxSessions) return sessions;
+  return sessions.slice(sessions.length - maxSessions);
+}
+
 // ── main panel ─────────────────────────────────────────────────────────────
 
 export function DevicePanel() {
@@ -383,9 +425,8 @@ export function DevicePanel() {
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [scrcpyOpen, setScrcpyOpen] = useState(false);
-  const [scrcpyDeviceId, setScrcpyDeviceId] = useState<string | undefined>();
-  const [scrcpyAdbSerial, setScrcpyAdbSerial] = useState<string | undefined>();
+  const [scrcpySessions, setScrcpySessions] = useState<ScrcpySession[]>([]);
+  const [maxScrcpySessions, setMaxScrcpySessions] = useState<number>(() => readStoredScrcpySessionLimit());
 
   const filtered = filterDevices(devices, search);
 
@@ -401,16 +442,66 @@ export function DevicePanel() {
     setSelected(checked ? new Set(filtered.map((d) => d.deviceId)) : new Set());
   }
 
-  function openScrcpy(device: Device) {
-    setScrcpyDeviceId(device.deviceId);
-    setScrcpyAdbSerial(device.adbSerial ?? undefined);
-    setScrcpyOpen(true);
+  function updateMaxScrcpySessions(value: number) {
+    const next = clampScrcpySessionLimit(value);
+    setMaxScrcpySessions(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(MAX_SCRCPY_SESSIONS_STORAGE_KEY, String(next));
+    }
+    setScrcpySessions((prev) => capScrcpySessions(prev, next));
   }
 
-  function handleScrcpyFirst() {
-    const firstId = [...selected][0];
-    const device = devices.find((d) => d.deviceId === firstId);
-    if (device) openScrcpy(device);
+  function openScrcpy(device: Device) {
+    const identity = getAndroidIdentity(device);
+    setScrcpySessions((prev) => {
+      if (prev.some((session) => session.deviceId === device.deviceId)) {
+        return prev;
+      }
+      return capScrcpySessions([
+        ...prev,
+        {
+          id: `${device.deviceId}-${Date.now()}`,
+          deviceId: device.deviceId,
+          adbSerial: device.adbSerial ?? undefined,
+          deviceName: identity,
+        },
+      ], maxScrcpySessions);
+    });
+  }
+
+  function closeScrcpyBySessionId(id: string) {
+    setScrcpySessions((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  function closeScrcpyByDeviceId(deviceId: string) {
+    setScrcpySessions((prev) => prev.filter((s) => s.deviceId !== deviceId));
+  }
+
+  function handleScrcpySelected() {
+    const selectedDevices = devices.filter((device) => selected.has(device.deviceId));
+    if (selectedDevices.length === 0) return;
+    const sessionIds = new Set(scrcpySessions.map((session) => session.deviceId));
+    const now = Date.now();
+    const missing = selectedDevices.filter((device) => !sessionIds.has(device.deviceId));
+    setScrcpySessions((prev) => {
+      if (missing.length === 0) return prev;
+      const sessionsToOpen = missing.map((device, index) => ({
+          id: `${device.deviceId}-${now + index}`,
+          deviceId: device.deviceId,
+          adbSerial: device.adbSerial ?? undefined,
+          deviceName: getAndroidIdentity(device),
+        }));
+      return capScrcpySessions([...prev, ...sessionsToOpen], maxScrcpySessions);
+    });
+  }
+
+  function toggleScrcpy(device: Device) {
+    const hasSession = scrcpySessions.some((session) => session.deviceId === device.deviceId);
+    if (hasSession) {
+      closeScrcpyByDeviceId(device.deviceId);
+    } else {
+      openScrcpy(device);
+    }
   }
 
   const allSelected = filtered.length > 0 && filtered.every((d) => selected.has(d.deviceId));
@@ -428,6 +519,29 @@ export function DevicePanel() {
           )}
         </div>
         <div className="actions">
+          <label
+            className="inline-flex items-center gap-2 rounded-xl border px-2.5 py-1"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-strong)' }}
+          >
+            <span className="text-[0.65rem] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--muted)' }}>
+              Max mirror
+            </span>
+            <input
+              type="number"
+              min={MIN_MAX_SCRCPY_SESSIONS}
+              max={MAX_MAX_SCRCPY_SESSIONS}
+              step={1}
+              value={maxScrcpySessions}
+              onChange={(e) => {
+                const parsed = Number.parseInt(e.target.value, 10);
+                if (Number.isNaN(parsed)) return;
+                updateMaxScrcpySessions(parsed);
+              }}
+              aria-label="Maximum concurrent scrcpy sessions"
+              className="w-16 rounded-lg px-2 py-1 text-center text-xs"
+              style={{ minHeight: '28px' }}
+            />
+          </label>
           <ViewToggle view={view} onChange={setView} />
           <button type="button" onClick={() => refresh()} disabled={loading}>
             <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -460,7 +574,11 @@ export function DevicePanel() {
       </div>
 
       {/* bulk action bar */}
-      <BulkBar count={selected.size} onClear={() => setSelected(new Set())} onScrcpyFirst={handleScrcpyFirst} />
+      <BulkBar
+        count={selected.size}
+        onClear={() => setSelected(new Set())}
+        onScrcpyAll={handleScrcpySelected}
+      />
 
       {/* content */}
       {filtered.length === 0 ? (
@@ -473,7 +591,8 @@ export function DevicePanel() {
               device={device}
               selected={selected.has(device.deviceId)}
               onSelect={handleSelect}
-              onScrcpy={openScrcpy}
+              onToggleScrcpy={toggleScrcpy}
+              isScrcpyActive={scrcpySessions.some((session) => session.deviceId === device.deviceId)}
             />
           ))}
         </div>
@@ -507,7 +626,8 @@ export function DevicePanel() {
                   device={device}
                   selected={selected.has(device.deviceId)}
                   onSelect={handleSelect}
-                  onScrcpy={openScrcpy}
+                  onToggleScrcpy={toggleScrcpy}
+                  isScrcpyActive={scrcpySessions.some((session) => session.deviceId === device.deviceId)}
                 />
               ))}
             </tbody>
@@ -515,17 +635,30 @@ export function DevicePanel() {
         </div>
       )}
 
-      {/* scrcpy overlay */}
-      {scrcpyOpen && (
-        <ScrcpyView
-          onClose={() => {
-            setScrcpyOpen(false);
-            setScrcpyDeviceId(undefined);
-            setScrcpyAdbSerial(undefined);
-          }}
-          deviceId={scrcpyDeviceId}
-          adbSerial={scrcpyAdbSerial}
-        />
+      {/* scrcpy sessions */}
+      {scrcpySessions.length > 0 && (
+        <section className="mt-4">
+          <div className="panel-subhead">
+            <h3 className="m-0 text-sm font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--muted)' }}>
+              Active scrcpy sessions ({scrcpySessions.length}/{maxScrcpySessions})
+            </h3>
+            <button type="button" className="btn-secondary" onClick={() => setScrcpySessions([])}>
+              Close all
+            </button>
+          </div>
+          <div className="scrcpy-grid">
+            {scrcpySessions.map((session) => (
+              <ScrcpyView
+                key={session.id}
+                sessionId={session.id}
+                deviceId={session.deviceId}
+                adbSerial={session.adbSerial}
+                deviceName={session.deviceName}
+                onClose={() => closeScrcpyBySessionId(session.id)}
+              />
+            ))}
+          </div>
+        </section>
       )}
     </section>
   );

@@ -20,13 +20,15 @@ type Mode = 'usb' | 'network';
 
 interface Props {
   onClose: () => void;
+  sessionId: string;
   /** Device ID to use for the network (WebSocket) ADB proxy mode. */
   deviceId?: string;
   /** Known ADB serial (e.g. "192.168.1.10:5555"). Used as-is when provided. */
   adbSerial?: string;
+  deviceName?: string;
 }
 
-export function ScrcpyView({ onClose, deviceId, adbSerial: initialAdbSerial }: Props) {
+export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdbSerial, deviceName }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [mode, setMode] = useState<Mode>(deviceId ? 'network' : 'usb');
@@ -259,7 +261,10 @@ export function ScrcpyView({ onClose, deviceId, adbSerial: initialAdbSerial }: P
   return (
     <div className="scrcpy-shell">
       <div className="panel-subhead">
-        <span>{modeLabel}</span>
+        <div className="flex items-center gap-2">
+          <span>{modeLabel}</span>
+          {deviceName && <span className="scrcpy-session-badge">{deviceName}</span>}
+        </div>
         <button type="button" className="btn-secondary" onClick={() => void disconnect()}>
           Disconnect
         </button>
@@ -273,7 +278,7 @@ export function ScrcpyView({ onClose, deviceId, adbSerial: initialAdbSerial }: P
             <label>
               <input
                 type="radio"
-                name="scrcpy-mode"
+                name={`scrcpy-mode-${sessionId}`}
                 value="usb"
                 checked={mode === 'usb'}
                 onChange={() => setMode('usb')}
@@ -283,7 +288,7 @@ export function ScrcpyView({ onClose, deviceId, adbSerial: initialAdbSerial }: P
             <label>
               <input
                 type="radio"
-                name="scrcpy-mode"
+                name={`scrcpy-mode-${sessionId}`}
                 value="network"
                 checked={mode === 'network'}
                 onChange={() => setMode('network')}
