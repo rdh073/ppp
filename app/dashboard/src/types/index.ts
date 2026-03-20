@@ -2,11 +2,23 @@ export type TaskStatus = 'pending' | 'running' | 'paused' | 'completed' | 'faile
 
 export interface Device {
   deviceId: string;
+  androidIdentity?: string;
   sessionId: string;
   agentInstanceId?: string;
   capabilities: Array<{ name: string; [key: string]: unknown }>;
   connectedAt: string;
   lastHeartbeatAt: string;
+  deviceMetadata?: {
+    manufacturer?: string;
+    model?: string;
+    device?: string;
+    brand?: string;
+    product?: string;
+    androidVersion?: string;
+    sdkInt?: number;
+  };
+  adbSerial?: string;
+  observedAndroidId?: string;
 }
 
 export interface TaskCreateRequest {
@@ -22,6 +34,11 @@ export interface Task {
   inputArtifacts: Record<string, string>;
   status: TaskStatus;
   assignedDevice: string;
+  workflowName?: string;
+  currentStep?: string;
+  retryCount?: number;
+  lastCommandStatus?: string;
+  lastCommandError?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,10 +59,16 @@ export interface WorkflowStepDef {
     target?: TargetDef;
     input_text?: string;
   };
+  tool_call?: {
+    tool_name?: string;
+    params?: Record<string, string>;
+    outputs?: Record<string, string>;
+    optional?: boolean;
+  };
   expect?: Record<string, unknown>;
   when?: string[];
-  on_success?: string[];
-  on_failure?: string[];
+  on_success?: string | string[];
+  on_failure?: string | string[];
   timeout?: number;
   max_retry?: number;
 }

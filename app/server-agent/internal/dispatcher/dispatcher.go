@@ -132,3 +132,18 @@ func (d *MemoryDispatcher) watchCommandContext(ctx context.Context, cmd domain.C
 	d.metrics.ObserveCommand(string(storedCmd.Kind), outcome, time.Since(storedCmd.IssuedAt))
 	_ = d.outbox.MarkDispatchFailed(context.Background(), storedCmd.ID, ctx.Err().Error(), time.Now())
 }
+
+// CancelByDevice aborts all inflight commands for deviceID and marks them as
+// dispatch_failed immediately.
+func (d *MemoryDispatcher) CancelByDevice(deviceID domain.DeviceID, reason string) {
+	if reason == "" {
+		reason = "device transport disconnected"
+	}
+	commands := d.inflight.cancelByDevice(deviceID)
+	now := time.Now()
+	for _, cmd := range commands {
+		d.metrics.DecCommandInflight()
+		d.metrics.ObserveCommand(string(cmd.Kind), telemetry.CommandOutcomeDispatchFailed, now.Sub(cmd.IssuedAt))
+		_ = d.outbox.MarkDispatchFailed(context.Background(), cmd.ID, reason, now)
+	}
+}

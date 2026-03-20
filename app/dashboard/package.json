@@ -7,11 +7,20 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "preview:prod": "vite preview --host 0.0.0.0 --port 4173",
+    "build:verify": "npm run build && npm run preview:prod",
     "test": "vitest",
     "type-check": "tsc --noEmit",
     "lint": "echo 'No lint configured yet'"
   },
   "dependencies": {
+    "@yume-chan/adb": "^2.5.1",
+    "@yume-chan/adb-credential-web": "^2.1.0",
+    "@yume-chan/adb-daemon-webusb": "^2.3.2",
+    "@yume-chan/adb-scrcpy": "^2.3.2",
+    "@yume-chan/scrcpy": "^2.3.0",
+    "@yume-chan/scrcpy-decoder-webcodecs": "^2.5.0",
+    "lucide-react": "^0.577.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.0"
@@ -23,6 +32,7 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "@yume-chan/fetch-scrcpy-server": "^1.0.0",
     "autoprefixer": "^10.4.27",
     "eslint": "^9.16.0",
     "postcss": "^8.5.8",

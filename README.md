@@ -71,6 +71,11 @@ curl -sS http://localhost:3000/workflows | jq '.[].name'
 ./scripts/ppp_create_task_private_dns.sh <DEVICE_ID> dns.quad9.net
 ```
 
+### 6) Panduan bikin workflow
+
+Lihat panduan lengkap authoring workflow YAML di:
+- `app/server-agent/config/examples/workflows/README.md`
+
 ---
 
 ## Full Setup (detail)
@@ -249,7 +254,7 @@ Pantau status task:
 curl -sS http://localhost:3000/tasks/<TASK_ID> | jq
 ```
 
-### 6. Troubleshooting Singkat
+### 7. Troubleshooting Singkat
 
 - `android-agent` tidak connect:
   - cek `adb devices`

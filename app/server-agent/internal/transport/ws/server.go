@@ -51,17 +51,36 @@ func (s *AgentServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := newConn(wsConn, s.log)
+	conn := newConn(wsConn, s.log, r.RemoteAddr)
 	s.log.Info("agent connected", "remote", r.RemoteAddr)
 	s.readLoop(r.Context(), conn)
 }
 
 func (s *AgentServer) readLoop(ctx context.Context, conn *Conn) {
 	defer func() {
-		// Clean up the session from the registry when the connection drops.
-		if id := conn.Session(); id != "" {
-			s.reg.Remove(id)
-			s.log.Info("session removed on disconnect", "sessionId", id)
+		if sessionID := conn.Session(); sessionID != "" {
+			deviceID := conn.DeviceID()
+			if deviceID == "" {
+				if sess, _, ok := s.reg.GetBySession(sessionID); ok {
+					deviceID = sess.DeviceID
+				}
+			}
+
+			// Treat transport close as an implicit disconnect.
+			s.agentHandler.HandleTransportDisconnect(context.Background(), deviceID, sessionID)
+			if deviceID != "" {
+				activeSession, _, stillConnected := s.reg.GetByDevice(deviceID)
+				shouldCancel := !stillConnected || activeSession.ID == sessionID
+				if shouldCancel {
+					type deviceInflightCanceler interface {
+						CancelByDevice(deviceID domain.DeviceID, reason string)
+					}
+					if canceler, ok := s.disp.(deviceInflightCanceler); ok {
+						canceler.CancelByDevice(deviceID, "websocket transport disconnected")
+					}
+				}
+			}
+			s.log.Info("session removed on disconnect", "sessionId", sessionID, "deviceId", deviceID)
 		}
 		_ = conn.Close()
 	}()
@@ -119,9 +138,9 @@ func (s *AgentServer) deliverResponse(conn *Conn, in inbound) {
 func (s *AgentServer) dispatch(ctx context.Context, req inbound, conn *Conn) {
 	switch req.Method {
 	case "agent.hello":
-		s.agentHandler.HandleHello(ctx, req.ID, req.Params, conn)
+		s.agentHandler.HandleHello(ctx, req.ID, req.Params, conn, conn.RemoteAddr())
 	case "agent.resume":
-		s.agentHandler.HandleResume(ctx, req.ID, req.Params, conn)
+		s.agentHandler.HandleResume(ctx, req.ID, req.Params, conn, conn.RemoteAddr())
 	case "agent.heartbeat":
 		s.agentHandler.HandleHeartbeat(ctx, req.ID, req.Params, conn)
 	case "agent.disconnect":

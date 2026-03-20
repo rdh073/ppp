@@ -1,104 +1,195 @@
-# Workflow YAML Examples
+# Workflow Authoring Guide
 
-Declarative `WorkflowDef` documents for the `server-agent` workflow engine.
+Panduan membuat workflow YAML untuk `server-agent`.
 
-## Loading
+## 1) Jalankan server dengan live reload workflow
 
 ```bash
-# Serve with live-reload from this directory
 cd app/server-agent
 go run ./cmd/server -workflow-dir ./config/examples/workflows
 ```
 
-Workflows are hot-reloaded every 5 s (configurable with `-workflow-poll`).
+Perubahan file workflow akan direload otomatis (default polling 5 detik).
 
-## StepDef schema
+## 2) Struktur minimum workflow
 
 ```yaml
 name: my-workflow
 version: 2
-entry: first_step   # step id to start from
+entry: start
 
 steps:
-  first_step:
-    # trigger: which device event activates this step.
-    # Empty trigger ({}) matches any event.
-    # Empty trigger + action/tool_call → auto-executed immediately when reached.
-    trigger:
-      kind: android.window.state_changed   # EventKind filter
-      package: com.android.settings        # packageName exact match
-      class_suffix: PrivateDnsSettings     # className suffix match
-      text_contains: "Private DNS"         # any text field substring
-
-    # action: typed device command (mutually exclusive with tool_call).
+  start:
+    trigger: {}
     action:
-      kind: click          # open_app | click | long_click | input_text | scroll | observe
+      kind: observe
+    on_success: terminal
+```
+
+## 3) Struktur step yang umum dipakai
+
+```yaml
+some_step:
+  trigger:
+    kind: android.window.state_changed
+    package: com.android.settings
+    text_contains: "Private DNS"
+
+  action:
+    kind: click
+    target:
+      kind: resource_id
+      value: "com.android.settings:id/save_button"
+
+  expect:
+    kind: android.window.state_changed
+    text_contains: "Saved"
+
+  timeout: 8s
+  max_retry: 2
+  on_success: next_step
+  on_failure: terminal
+```
+
+Keterangan:
+- `trigger`: event yang membuat step aktif.
+- `action`: command ke android-agent (`open_app`, `click`, `long_click`, `input_text`, `scroll`, `observe`).
+- `expect`: event konfirmasi hasil action.
+- `timeout` + `max_retry`: kontrol retry bila UI belum berubah.
+- `on_success` / `on_failure`: transisi ke step berikutnya.
+
+## 4) Input artifact dari task
+
+Gunakan placeholder `{{input.<key>}}` untuk membaca input saat task dibuat.
+
+Contoh:
+
+```yaml
+action:
+  kind: input_text
+  target:
+    kind: resource_id
+    value: "com.android.settings:id/edittext"
+  input_text: "{{input.private_dns_hostname}}"
+```
+
+Saat create task:
+
+```json
+{
+  "workflowName": "android-settings-private-dns",
+  "inputArtifacts": {
+    "private_dns_hostname": "dns.quad9.net"
+  }
+}
+```
+
+## 5) Rekomendasi selector biar stabil lintas device
+
+Urutan prioritas:
+1. `resource_id`
+2. `content_description`
+3. `text`
+4. `class`
+
+Hindari selector koordinat absolut untuk workflow umum lintas ukuran layar.
+
+## 6) Contoh workflow Private DNS
+
+```yaml
+name: android-settings-private-dns
+version: 2
+entry: open_settings
+
+steps:
+  open_settings:
+    trigger: {}
+    action:
+      kind: open_app
+      package: com.android.settings
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    on_success: open_network
+    on_failure: terminal
+
+  open_network:
+    trigger: {}
+    action:
+      kind: click
       target:
-        kind: text         # text | resource_id | content_description | class
-        value: "Save"      # supports {{input.key}} interpolation
-      input_text: "..."    # for input_text kind
-      package: "com.foo"   # for open_app kind
-      direction: down      # for scroll kind: up | down | left | right
+        kind: text
+        value: "Network & internet"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    on_success: open_private_dns
+    on_failure: terminal
 
-    # tool_call: invoke a registered catalog tool (mutually exclusive with action).
-    tool_call:
-      tool_name: identity.generate_indonesian_name
-      params:
-        gender: "{{input.gender}}"        # interpolated from state.Inputs
-      outputs:
-        fullName: username                # result JSON key → state.Inputs key
-      optional: false                     # if true, failure is skipped (OnSuccess path)
+  open_private_dns:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: text
+        value: "Private DNS"
+    expect:
+      kind: android.window.state_changed
+      text_contains: "Private DNS"
+    on_success: fill_private_dns
+    on_failure: terminal
 
-    # expect: event that confirms the action succeeded.
-    # Nil = advance immediately after action.
+  fill_private_dns:
+    trigger: {}
+    action:
+      kind: input_text
+      target:
+        kind: resource_id
+        value: "com.android.settings:id/private_dns_mode_hostname"
+      input_text: "{{input.private_dns_hostname}}"
     expect:
       kind: android.window.state_changed
       text_contains: "{{input.private_dns_hostname}}"
+    on_success: save
+    on_failure: terminal
 
-    timeout: 10s      # how long to wait for expect (default 10s)
-    max_retry: 3      # retries before following on_failure
-    on_success: next_step
+  save:
+    trigger: {}
+    action:
+      kind: click
+      target:
+        kind: resource_id
+        value: "com.android.settings:id/button1"
+    expect:
+      kind: android.window.state_changed
+      package: com.android.settings
+    on_success: terminal
     on_failure: terminal
 ```
 
-## Step execution model
-
-| Trigger | Action/ToolCall | Behaviour |
-|---------|----------------|-----------|
-| Non-empty | any | Wait for matching device event, then execute |
-| Empty | Action or ToolCall | Auto-execute immediately when reached via `advance()` |
-| Empty | None (routing only) | Wait for any device event |
-
-**"UI no transition" handling:** every action step arms an `expect` with a `timeout`.
-If the UI doesn't respond before the deadline, the next incoming event triggers a retry
-(`handleFailure`). After `max_retry` the step follows `on_failure`.
-
-## Available tool names (local catalog)
-
-| Tool | Params | Outputs |
-|------|--------|---------|
-| `identity.generate_indonesian_name` | `gender` (male\|female) | `fullName`, `firstName`, `lastName` |
-| `identity.generate_email` | `fullName`, `domain` | `email` |
-| `identity.generate_birth_date` | `minAge`, `maxAge`, `referenceDate` | `birthDate` |
-| `credential.generate_password` | `length`, `includeSymbols` | `password` |
-
-Model-backed and HTTP tools are loaded from `config/tools/` — see that directory's README.
-
-## Private DNS example
+## 7) Uji workflow via curl
 
 ```bash
-curl -X POST http://127.0.0.1:3000/tasks \
+# list workflow yang ter-load
+curl -sS http://127.0.0.1:3000/workflows | jq '.[].name'
+
+# buat task
+curl -sS -X POST http://127.0.0.1:3000/tasks \
   -H 'Content-Type: application/json' \
   -d '{
-    "goal": "set private dns",
-    "deviceId": "dev-123",
-    "workflowName": "android-settings-private-dns",
-    "inputArtifacts": {
-      "private_dns_hostname": "dns.example.com"
-    }
-  }'
+    "goal":"set private dns",
+    "deviceId":"<DEVICE_ID>",
+    "workflowName":"android-settings-private-dns",
+    "inputArtifacts":{"private_dns_hostname":"dns.quad9.net"}
+  }' | jq
+
+# cek status task
+curl -sS http://127.0.0.1:3000/tasks/<TASK_ID> | jq
 ```
 
-The workflow opens Settings, navigates to Private DNS, enters the hostname, and saves.
-Each step auto-executes immediately after the previous Expect event fires, so the full
-sequence runs with no extra events from the operator.
+## 8) Debug cepat saat workflow macet
+
+- Cek `expect` terlalu ketat atau tidak match event aktual.
+- Cek selector target masih valid di UI device saat ini.
+- Tambah step `observe` di titik rawan untuk membantu transisi state.
+- Kurangi ambiguitas text selector, utamakan `resource_id`.

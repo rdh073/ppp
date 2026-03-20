@@ -139,6 +139,41 @@ func TestEventPlaneHandler_ListAccepted_ExcludePayload(t *testing.T) {
 	}
 }
 
+func TestEventPlaneHandler_GetAcceptedPayloadPreview(t *testing.T) {
+	h, events, _, _ := newEventPlaneHandler(t)
+	event := domain.Event{
+		ID:         "dev-http-payload-preview:1",
+		Kind:       domain.EventKindScreenChanged,
+		DeviceID:   "dev-http-payload-preview",
+		SeqNo:      1,
+		OccurredAt: time.Now().UTC(),
+		Payload: map[string]any{
+			"message": "abcdefghijklmnopqrstuvwxyz",
+		},
+	}
+	if _, err := events.Accept(context.Background(), event); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events/accepted/dev-http-payload-preview:1/payload?maxBytes=8", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /events/accepted/{id}/payload: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload usecase.AcceptedPayloadPreview
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.EventID != "dev-http-payload-preview:1" {
+		t.Fatalf("unexpected event id: %#v", payload)
+	}
+	if payload.SizeBytes <= 8 || !payload.Truncated {
+		t.Fatalf("expected truncated payload preview, got %#v", payload)
+	}
+}
+
 func TestEventPlaneHandler_ListAccepted_TimeRange(t *testing.T) {
 	h, events, _, _ := newEventPlaneHandler(t)
 	for idx, event := range []domain.Event{

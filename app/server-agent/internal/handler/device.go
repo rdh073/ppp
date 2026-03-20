@@ -25,9 +25,9 @@ type deviceBindingController interface {
 //	GET /devices      — list all currently connected devices
 //	GET /devices/{id} — get a single device by deviceId
 type DeviceHandler struct {
-	reg registry.AgentRegistry
+	reg      registry.AgentRegistry
 	bindings deviceBindingController
-	log *slog.Logger
+	log      *slog.Logger
 }
 
 func NewDeviceHandler(reg registry.AgentRegistry, log *slog.Logger, bindings ...deviceBindingController) *DeviceHandler {
@@ -57,30 +57,34 @@ func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case len(parts) == 2 && parts[1] == "adb-ws":
+		h.adbWS(w, r, domain.DeviceID(parts[0]))
 	default:
-		h.handleAction(w, r, domain.DeviceID(parts[0]), parts[1])
+		h.handleBindingActions(w, r, domain.DeviceID(parts[0]), parts[1])
 	}
 }
 
 type deviceView struct {
-	DeviceID          string                               `json:"deviceId"`
-	Connected         bool                                 `json:"connected"`
-	SessionID         string                               `json:"sessionId,omitempty"`
-	AgentInstanceID   string                               `json:"agentInstanceId,omitempty"`
-	Capabilities      []domain.Capability                  `json:"capabilities"`
-	ConnectedAt       time.Time                            `json:"connectedAt"`
-	LastHeartbeatAt   time.Time                            `json:"lastHeartbeatAt"`
-	ADBSerial         string                               `json:"adbSerial,omitempty"`
-	ObservedAndroidID string                               `json:"observedAndroidId,omitempty"`
-	IdentityStatus    domain.DeviceIdentityStatus          `json:"identityStatus"`
+	DeviceID          string                                `json:"deviceId"`
+	AndroidIdentity   string                                `json:"androidIdentity,omitempty"`
+	Connected         bool                                  `json:"connected"`
+	SessionID         string                                `json:"sessionId,omitempty"`
+	AgentInstanceID   string                                `json:"agentInstanceId,omitempty"`
+	Capabilities      []domain.Capability                   `json:"capabilities"`
+	DeviceMetadata    domain.AgentDeviceMetadata            `json:"deviceMetadata,omitempty"`
+	ConnectedAt       time.Time                             `json:"connectedAt"`
+	LastHeartbeatAt   time.Time                             `json:"lastHeartbeatAt"`
+	ADBSerial         string                                `json:"adbSerial,omitempty"`
+	ObservedAndroidID string                                `json:"observedAndroidId,omitempty"`
+	IdentityStatus    domain.DeviceIdentityStatus           `json:"identityStatus"`
 	RemediationStatus domain.AccessibilityRemediationStatus `json:"remediationStatus"`
-	PendingEnable     bool                                 `json:"pendingEnable"`
-	ServiceComponent  string                               `json:"serviceComponent,omitempty"`
-	LastSeenAt        time.Time                            `json:"lastSeenAt"`
-	LastVerifiedAt    time.Time                            `json:"lastVerifiedAt"`
-	LastFailureAt     time.Time                            `json:"lastFailureAt"`
-	LastError         string                               `json:"lastError,omitempty"`
-	SerialSource      string                               `json:"serialSource,omitempty"`
+	PendingEnable     bool                                  `json:"pendingEnable"`
+	ServiceComponent  string                                `json:"serviceComponent,omitempty"`
+	LastSeenAt        time.Time                             `json:"lastSeenAt"`
+	LastVerifiedAt    time.Time                             `json:"lastVerifiedAt"`
+	LastFailureAt     time.Time                             `json:"lastFailureAt"`
+	LastError         string                                `json:"lastError,omitempty"`
+	SerialSource      string                                `json:"serialSource,omitempty"`
 }
 
 func sessionToView(s *domain.Session, binding *domain.DeviceBinding) deviceView {
@@ -99,8 +103,10 @@ func sessionToView(s *domain.Session, binding *domain.DeviceBinding) deviceView 
 		view.SessionID = string(s.ID)
 		view.AgentInstanceID = s.AgentInstanceID
 		view.Capabilities = caps
+		view.DeviceMetadata = s.DeviceMetadata
 		view.ConnectedAt = s.ConnectedAt
 		view.LastHeartbeatAt = s.LastHeartbeatAt
+		view.AndroidIdentity = androidIdentityFromMetadata(s.DeviceMetadata)
 	}
 	if binding != nil {
 		if view.DeviceID == "" {
@@ -118,7 +124,30 @@ func sessionToView(s *domain.Session, binding *domain.DeviceBinding) deviceView 
 		view.LastError = binding.LastError
 		view.SerialSource = binding.SerialSource
 	}
+	if view.AndroidIdentity == "" {
+		switch {
+		case view.ObservedAndroidID != "":
+			view.AndroidIdentity = view.ObservedAndroidID
+		case view.ADBSerial != "":
+			view.AndroidIdentity = view.ADBSerial
+		case view.DeviceID != "":
+			view.AndroidIdentity = view.DeviceID
+		}
+	}
 	return view
+}
+
+func androidIdentityFromMetadata(metadata domain.AgentDeviceMetadata) string {
+	switch {
+	case metadata.Manufacturer != "" && metadata.Model != "":
+		return strings.TrimSpace(metadata.Manufacturer + " " + metadata.Model)
+	case metadata.Model != "":
+		return metadata.Model
+	case metadata.Device != "":
+		return metadata.Device
+	default:
+		return ""
+	}
 }
 
 func (h *DeviceHandler) list(w http.ResponseWriter) {
@@ -180,7 +209,7 @@ func (h *DeviceHandler) get(w http.ResponseWriter, r *http.Request, id domain.De
 	_ = json.NewEncoder(w).Encode(sessionToView(s, binding))
 }
 
-func (h *DeviceHandler) handleAction(w http.ResponseWriter, r *http.Request, id domain.DeviceID, action string) {
+func (h *DeviceHandler) handleBindingActions(w http.ResponseWriter, r *http.Request, id domain.DeviceID, action string) {
 	if h.bindings == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

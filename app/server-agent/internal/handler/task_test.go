@@ -155,3 +155,66 @@ func TestTaskHandler_CreateWithConnectedDevice_Running(t *testing.T) {
 		t.Errorf("expected status=running, got %v", created["status"])
 	}
 }
+
+func TestTaskHandler_List(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+
+	recCreate1 := httptest.NewRecorder()
+	h.ServeHTTP(recCreate1, httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"task-one","workflowName":"wf-a"}`)))
+	if recCreate1.Code != http.StatusCreated {
+		t.Fatalf("create task one: %d %s", recCreate1.Code, recCreate1.Body.String())
+	}
+
+	recCreate2 := httptest.NewRecorder()
+	h.ServeHTTP(recCreate2, httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"task-two","workflowName":"wf-b"}`)))
+	if recCreate2.Code != http.StatusCreated {
+		t.Fatalf("create task two: %d %s", recCreate2.Code, recCreate2.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tasks?limit=10", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /tasks: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(payload) != 2 {
+		t.Fatalf("expected 2 tasks in list, got %d", len(payload))
+	}
+	if payload[0]["workflowName"] == nil {
+		t.Fatalf("expected workflowName in task payload: %#v", payload[0])
+	}
+}
+
+func TestTaskHandler_ListWithOffset(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+
+	recCreate1 := httptest.NewRecorder()
+	h.ServeHTTP(recCreate1, httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"task-one","workflowName":"wf-a"}`)))
+	if recCreate1.Code != http.StatusCreated {
+		t.Fatalf("create task one: %d %s", recCreate1.Code, recCreate1.Body.String())
+	}
+
+	recCreate2 := httptest.NewRecorder()
+	h.ServeHTTP(recCreate2, httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewBufferString(`{"goal":"task-two","workflowName":"wf-b"}`)))
+	if recCreate2.Code != http.StatusCreated {
+		t.Fatalf("create task two: %d %s", recCreate2.Code, recCreate2.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tasks?limit=1&offset=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /tasks: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected 1 task in list, got %d", len(payload))
+	}
+}

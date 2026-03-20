@@ -66,3 +66,20 @@ func (t *inflightTracker) cancel(id string) (domain.Command, bool) {
 	}
 	return entry.command, ok
 }
+
+// cancelByDevice closes and removes all pending channels for a device.
+func (t *inflightTracker) cancelByDevice(deviceID domain.DeviceID) []domain.Command {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	commands := make([]domain.Command, 0)
+	for id, entry := range t.pending {
+		if entry.command.DeviceID != deviceID {
+			continue
+		}
+		delete(t.pending, id)
+		close(entry.ch)
+		commands = append(commands, entry.command)
+	}
+	return commands
+}

@@ -27,6 +27,24 @@ export function getAcceptedEvent(eventId: string): Promise<EventRecord> {
   });
 }
 
+export interface AcceptedPayloadPreview {
+  eventId: string;
+  kind: string;
+  deviceId: string;
+  sizeBytes: number;
+  truncated: boolean;
+  payloadText: string;
+}
+
+export function getAcceptedEventPayload(eventId: string, maxBytes = 16_384): Promise<AcceptedPayloadPreview> {
+  return requestJson(`/events/accepted/${encodeURIComponent(eventId)}/payload`, {
+    method: 'GET',
+    query: {
+      maxBytes,
+    },
+  });
+}
+
 export function replayAcceptedEvent(eventId: string): Promise<void> {
   return requestJson(`/events/accepted/${encodeURIComponent(eventId)}/replay`, {
     method: 'POST',

@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
@@ -136,6 +137,7 @@ class AgentStateCoordinator(
     private val runtimeHooks: AgentRuntimeHooks,
     private val logger: AgentLogger,
     private val capabilitiesProvider: () -> List<Map<String, Any>> = { emptyList() },
+    private val deviceMetadataProvider: () -> Map<String, Any> = { emptyMap() },
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
     private val mutex = Mutex()
@@ -261,6 +263,7 @@ class AgentStateCoordinator(
                             put("deviceId", deviceId)
                             put("agentInstanceId", agentInstanceId)
                             put("capabilities", capabilitiesToJson())
+                            put("deviceMetadata", deviceMetadataToJson())
                         },
                 )
 
@@ -272,6 +275,7 @@ class AgentStateCoordinator(
                             put("deviceId", deviceId)
                             put("sessionId", effect.sessionId)
                             put("capabilities", capabilitiesToJson())
+                            put("deviceMetadata", deviceMetadataToJson())
                         },
                 )
 
@@ -427,6 +431,21 @@ class AgentStateCoordinator(
 
     private fun capabilitiesToJson(): JsonElement =
         AgentCapabilities.capabilitiesToJson(capabilitiesProvider())
+
+    private fun deviceMetadataToJson(): JsonElement =
+        buildJsonObject {
+            deviceMetadataProvider().forEach { (key, value) ->
+                when (value) {
+                    is String -> put(key, value)
+                    is Boolean -> put(key, value)
+                    is Int -> put(key, value)
+                    is Long -> put(key, value)
+                    is Float -> put(key, value)
+                    is Double -> put(key, value)
+                    else -> put(key, JsonPrimitive(value.toString()))
+                }
+            }
+        }
 }
 
 private fun JsonElement.sessionId(): String? =

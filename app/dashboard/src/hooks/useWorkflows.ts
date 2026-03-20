@@ -1,10 +1,10 @@
 import { useCallback, useMemo } from 'react';
 import { listWorkflows, getWorkflow } from '../api/workflows';
 import { useWorkflowStore } from '../store/workflows';
-import { POLL_MS } from '../config';
+import { WORKFLOW_POLL_MS } from '../config';
 import { usePolling } from './usePolling';
 
-export function useWorkflows(intervalMs: number = POLL_MS) {
+export function useWorkflows(intervalMs: number = WORKFLOW_POLL_MS) {
   const workflows = useWorkflowStore((state) => state.workflows);
   const selected = useWorkflowStore((state) => state.selected);
   const loading = useWorkflowStore((state) => state.loading);
@@ -14,18 +14,33 @@ export function useWorkflows(intervalMs: number = POLL_MS) {
   const setLoading = useWorkflowStore((state) => state.setLoading);
   const setError = useWorkflowStore((state) => state.setError);
 
-  const loadWorkflows = useCallback(async () => {
-    setLoading(true);
+  const loadWorkflows = useCallback(async (silent = false) => {
+    if (!silent || workflows.length === 0) {
+      setLoading(true);
+    }
     try {
       const payload = await listWorkflows();
-      setWorkflows(payload);
+      const sorted = [...payload].sort((a, b) => a.name.localeCompare(b.name));
+      setWorkflows(sorted);
     } catch (raw) {
       const message = raw instanceof Error ? raw.message : 'Failed to load workflows';
       setError(message);
     }
-  }, [setError, setLoading, setWorkflows]);
+  }, [setError, setLoading, setWorkflows, workflows.length]);
 
-  const refresh = usePolling(loadWorkflows, intervalMs, true);
+  const refresh = useCallback(() => {
+    void loadWorkflows(false);
+  }, [loadWorkflows]);
+
+  const refreshSilent = useCallback(async () => {
+    await loadWorkflows(true);
+  }, [loadWorkflows]);
+
+  usePolling(refreshSilent, intervalMs, {
+    enabled: true,
+    immediate: true,
+    pauseWhenHidden: true,
+  });
 
   const loadWorkflowByName = useCallback(
     async (name: string) => {

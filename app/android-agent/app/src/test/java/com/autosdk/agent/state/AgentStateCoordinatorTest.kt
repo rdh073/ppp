@@ -74,6 +74,13 @@ class AgentStateCoordinatorTest {
                     .jsonPrimitive
                     .content,
             )
+            assertEquals(
+                "Pixel 7",
+                request.params.jsonObject["deviceMetadata"]!!
+                    .jsonObject["model"]!!
+                    .jsonPrimitive
+                    .content,
+            )
         }
 
     @Test
@@ -260,6 +267,14 @@ private class CoordinatorFixture(
                         "available" to false,
                         "reason" to "Requires API 30+",
                     ),
+                )
+            },
+            deviceMetadataProvider = {
+                mapOf(
+                    "manufacturer" to "Google",
+                    "model" to "Pixel 7",
+                    "androidVersion" to "15",
+                    "sdkInt" to 35,
                 )
             },
             clock = { 1_700_000_000_000L },

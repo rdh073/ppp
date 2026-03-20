@@ -2,6 +2,7 @@ package com.autosdk.agent.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -180,6 +181,17 @@ class AgentAccessibilityService : AccessibilityService() {
         agentDeviceId = deviceId
         val serverUrl = resolveServerUrl()
         val capabilityProvider = { AgentCapabilities.buildCapabilityList() }
+        val deviceMetadataProvider = {
+            mapOf(
+                "manufacturer" to Build.MANUFACTURER,
+                "model" to Build.MODEL,
+                "device" to Build.DEVICE,
+                "brand" to Build.BRAND,
+                "product" to Build.PRODUCT,
+                "androidVersion" to (Build.VERSION.RELEASE ?: ""),
+                "sdkInt" to Build.VERSION.SDK_INT,
+            )
+        }
         val localStateStore = SharedPreferencesAgentStateStore.from(applicationContext)
         stateStore = localStateStore
         outboundEventSeqNo.set(localStateStore.read().lastOutboundEventSeqNo)
@@ -215,6 +227,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 runtimeHooks = ServiceRuntimeHooks(),
                 logger = ServiceAgentLogger(),
                 capabilitiesProvider = capabilityProvider,
+                deviceMetadataProvider = deviceMetadataProvider,
             )
         coordinator = localCoordinator
 

@@ -45,15 +45,17 @@ func NewAgentHandler(uc usecase.AgentLifecycle, log *slog.Logger) *AgentHandler 
 // --- inbound param types ---
 
 type helloParams struct {
-	DeviceID        string              `json:"deviceId"`
-	AgentInstanceID string              `json:"agentInstanceId"`
-	Capabilities    []domain.Capability `json:"capabilities"`
+	DeviceID        string                     `json:"deviceId"`
+	AgentInstanceID string                     `json:"agentInstanceId"`
+	Capabilities    []domain.Capability        `json:"capabilities"`
+	DeviceMetadata  domain.AgentDeviceMetadata `json:"deviceMetadata"`
 }
 
 type resumeParams struct {
-	DeviceID     string              `json:"deviceId"`
-	SessionID    string              `json:"sessionId"`
-	Capabilities []domain.Capability `json:"capabilities"`
+	DeviceID       string                     `json:"deviceId"`
+	SessionID      string                     `json:"sessionId"`
+	Capabilities   []domain.Capability        `json:"capabilities"`
+	DeviceMetadata domain.AgentDeviceMetadata `json:"deviceMetadata"`
 }
 
 type heartbeatParams struct {
@@ -68,7 +70,7 @@ type disconnectParams struct {
 
 // --- handlers ---
 
-func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams json.RawMessage, conn Conn) {
+func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams json.RawMessage, conn Conn, remoteAddr string) {
 	var p helloParams
 	if err := json.Unmarshal(rawParams, &p); err != nil || p.DeviceID == "" {
 		_ = conn.SendError(id, ErrInvalidParams, "invalid params: deviceId required")
@@ -79,6 +81,8 @@ func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams jso
 		DeviceID:        domain.DeviceID(p.DeviceID),
 		AgentInstanceID: p.AgentInstanceID,
 		Capabilities:    p.Capabilities,
+		DeviceMetadata:  p.DeviceMetadata,
+		RemoteAddr:      remoteAddr,
 	}, connAsSender(conn))
 	if err != nil {
 		h.log.Error("hello failed", "err", err)
@@ -94,7 +98,7 @@ func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams jso
 	})
 }
 
-func (h *AgentHandler) HandleResume(ctx context.Context, id string, rawParams json.RawMessage, conn Conn) {
+func (h *AgentHandler) HandleResume(ctx context.Context, id string, rawParams json.RawMessage, conn Conn, remoteAddr string) {
 	var p resumeParams
 	if err := json.Unmarshal(rawParams, &p); err != nil || p.DeviceID == "" || p.SessionID == "" {
 		_ = conn.SendError(id, ErrInvalidParams, "invalid params: deviceId and sessionId required")
@@ -102,9 +106,11 @@ func (h *AgentHandler) HandleResume(ctx context.Context, id string, rawParams js
 	}
 
 	resp, err := h.uc.Resume(ctx, usecase.ResumeRequest{
-		DeviceID:     domain.DeviceID(p.DeviceID),
-		SessionID:    domain.SessionID(p.SessionID),
-		Capabilities: p.Capabilities,
+		DeviceID:       domain.DeviceID(p.DeviceID),
+		SessionID:      domain.SessionID(p.SessionID),
+		Capabilities:   p.Capabilities,
+		DeviceMetadata: p.DeviceMetadata,
+		RemoteAddr:     remoteAddr,
 	}, connAsSender(conn))
 	if err != nil {
 		_ = conn.SendError(id, ErrSessionUnknown, fmt.Sprintf("session unknown: %s", p.SessionID))
@@ -137,6 +143,15 @@ func (h *AgentHandler) HandleDisconnect(ctx context.Context, id string, rawParam
 	}
 	h.uc.Disconnect(ctx, domain.DeviceID(p.DeviceID), domain.SessionID(p.SessionID))
 	_ = conn.SendSuccess(id, map[string]any{"accepted": true})
+}
+
+// HandleTransportDisconnect is invoked by the WebSocket transport when the
+// connection drops before an explicit agent.disconnect is received.
+func (h *AgentHandler) HandleTransportDisconnect(ctx context.Context, deviceID domain.DeviceID, sessionID domain.SessionID) {
+	if sessionID == "" {
+		return
+	}
+	h.uc.Disconnect(ctx, deviceID, sessionID)
 }
 
 // connAsSender adapts handler.Conn to registry.Sender (subset of the interface).

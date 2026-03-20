@@ -5,8 +5,11 @@ import { DevicePanel } from './components/agents/DevicePanel';
 import { TaskPanel } from './components/tasks/TaskPanel';
 import { WorkflowPanel } from './components/workflows/WorkflowPanel';
 import { EventPanel } from './components/events/EventPanel';
-import { API_URL, METRICS_URL, POLL_MS } from './config';
+import { API_URL, HEALTH_POLL_MS, METRICS_URL } from './config';
 import './index.css';
+
+type DashboardTheme = 'monokai' | 'light';
+const THEME_STORAGE_KEY = 'ppp-dashboard-theme';
 
 function renderPanel(active: Tab) {
   switch (active) {
@@ -26,6 +29,18 @@ function renderPanel(active: Tab) {
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('devices');
   const [healthStatus, setHealthStatus] = useState<'checking' | 'ok' | 'down'>('checking');
+  const [theme, setTheme] = useState<DashboardTheme>(() => {
+    if (typeof window === 'undefined') {
+      return 'monokai';
+    }
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return saved === 'light' ? 'light' : 'monokai';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     let closed = false;
@@ -45,7 +60,7 @@ export function App() {
     }
 
     void probeHealth();
-    const timer = window.setInterval(probeHealth, Math.max(2000, POLL_MS));
+    const timer = window.setInterval(probeHealth, Math.max(2000, HEALTH_POLL_MS));
     return () => {
       closed = true;
       window.clearInterval(timer);
@@ -60,6 +75,8 @@ export function App() {
           apiUrl={API_URL}
           metricsUrl={METRICS_URL}
           healthStatus={healthStatus}
+          theme={theme}
+          onToggleTheme={() => setTheme((current) => (current === 'monokai' ? 'light' : 'monokai'))}
         />
         <main className="content">
           <section className="tab-strip">

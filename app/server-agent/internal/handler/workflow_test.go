@@ -105,3 +105,56 @@ steps:
 	}
 }
 
+func TestWorkflowHandler_ListSortedByName(t *testing.T) {
+	h, _ := newWorkflowHandler()
+
+bodyB := `
+name: z-last
+entry: terminal
+steps:
+  terminal:
+    trigger: {}
+    on_success: terminal
+    on_failure: terminal
+`
+	recPutB := httptest.NewRecorder()
+	reqPutB := httptest.NewRequest(http.MethodPut, "/workflows/z-last", bytes.NewBufferString(bodyB))
+	h.ServeHTTP(recPutB, reqPutB)
+	if recPutB.Code != http.StatusOK {
+		t.Fatalf("put z-last: expected 200, got %d: %s", recPutB.Code, recPutB.Body.String())
+	}
+
+bodyA := `
+name: a-first
+entry: terminal
+steps:
+  terminal:
+    trigger: {}
+    on_success: terminal
+    on_failure: terminal
+`
+	recPutA := httptest.NewRecorder()
+	reqPutA := httptest.NewRequest(http.MethodPut, "/workflows/a-first", bytes.NewBufferString(bodyA))
+	h.ServeHTTP(recPutA, reqPutA)
+	if recPutA.Code != http.StatusOK {
+		t.Fatalf("put a-first: expected 200, got %d: %s", recPutA.Code, recPutA.Body.String())
+	}
+
+	recList := httptest.NewRecorder()
+	reqList := httptest.NewRequest(http.MethodGet, "/workflows", nil)
+	h.ServeHTTP(recList, reqList)
+	if recList.Code != http.StatusOK {
+		t.Fatalf("list workflows: expected 200, got %d: %s", recList.Code, recList.Body.String())
+	}
+
+	var payload []domain.WorkflowDef
+	if err := json.NewDecoder(recList.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(payload) != 2 {
+		t.Fatalf("expected 2 workflows, got %d", len(payload))
+	}
+	if payload[0].Name != "a-first" || payload[1].Name != "z-last" {
+		t.Fatalf("expected sorted order [a-first, z-last], got [%s, %s]", payload[0].Name, payload[1].Name)
+	}
+}

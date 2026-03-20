@@ -37,3 +37,5 @@ GEMINI.md
 plans/
 .claude/
 .agents/
+.codex/
+.agent

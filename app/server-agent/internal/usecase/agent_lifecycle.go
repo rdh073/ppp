@@ -4,11 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 )
+
+// AgentConnectedNotifier is called after a successful Hello or Resume so that
+// infrastructure layers (e.g. device binding) can record the agent's remote
+// address without the use-case layer depending on those packages.
+type AgentConnectedNotifier interface {
+	NoteAgentConnected(ctx context.Context, deviceID domain.DeviceID, inferredSerial string) error
+}
 
 // EventProcessor is the minimal orchestrator interface needed by use cases.
 // Extracted here so usecases don't import the orchestrator package directly,
@@ -21,11 +29,12 @@ type EventProcessor interface {
 // It manages sessions in the registry and notifies the orchestrator of
 // agent online/offline events so in-progress workflows can be paused/resumed.
 type AgentLifecycleUseCase struct {
-	reg          registry.AgentRegistry
-	orchestrator EventProcessor
-	assigner     *DeviceAssigner // optional; nil-safe
-	forgetDevice func(domain.DeviceID)
-	log          *slog.Logger
+	reg               registry.AgentRegistry
+	orchestrator      EventProcessor
+	assigner          *DeviceAssigner // optional; nil-safe
+	forgetDevice      func(domain.DeviceID)
+	connectedNotifier AgentConnectedNotifier // optional; nil-safe
+	log               *slog.Logger
 }
 
 func NewAgentLifecycle(
@@ -48,11 +57,20 @@ func (u *AgentLifecycleUseCase) SetForgetDevice(f func(domain.DeviceID)) {
 	u.forgetDevice = f
 }
 
+// SetConnectedNotifier wires the optional notifier that records the agent's
+// inferred ADB serial (derived from the WebSocket remote address) into the
+// device binding store the first time a device connects.
+func (u *AgentLifecycleUseCase) SetConnectedNotifier(n AgentConnectedNotifier) {
+	u.connectedNotifier = n
+}
+
 // HelloRequest carries parsed parameters from an agent.hello JSON-RPC call.
 type HelloRequest struct {
 	DeviceID        domain.DeviceID
 	AgentInstanceID string
 	Capabilities    []domain.Capability
+	DeviceMetadata  domain.AgentDeviceMetadata
+	RemoteAddr      string // network address of the WebSocket connection (host:port)
 }
 
 // HelloResponse is returned to the transport layer to send back to the agent.
@@ -74,6 +92,7 @@ func (u *AgentLifecycleUseCase) Hello(ctx context.Context, req HelloRequest, con
 		DeviceID:        req.DeviceID,
 		AgentInstanceID: req.AgentInstanceID,
 		Capabilities:    req.Capabilities,
+		DeviceMetadata:  req.DeviceMetadata,
 		ConnectedAt:     now,
 		LastHeartbeatAt: now,
 	}
@@ -106,14 +125,25 @@ func (u *AgentLifecycleUseCase) Hello(ctx context.Context, req HelloRequest, con
 		}
 	}
 
+	// Record inferred ADB serial from remote address (only if not already known).
+	if u.connectedNotifier != nil && req.RemoteAddr != "" {
+		if serial := inferredADBSerial(req.RemoteAddr); serial != "" {
+			if err := u.connectedNotifier.NoteAgentConnected(ctx, req.DeviceID, serial); err != nil {
+				u.log.Warn("NoteAgentConnected failed", "deviceId", req.DeviceID, "err", err)
+			}
+		}
+	}
+
 	return HelloResponse{SessionID: sessionID}, nil
 }
 
 // ResumeRequest carries parsed parameters from an agent.resume JSON-RPC call.
 type ResumeRequest struct {
-	DeviceID     domain.DeviceID
-	SessionID    domain.SessionID
-	Capabilities []domain.Capability
+	DeviceID       domain.DeviceID
+	SessionID      domain.SessionID
+	Capabilities   []domain.Capability
+	DeviceMetadata domain.AgentDeviceMetadata
+	RemoteAddr     string // network address of the WebSocket connection (host:port)
 }
 
 type ResumeResponse struct {
@@ -128,6 +158,7 @@ func (u *AgentLifecycleUseCase) Resume(ctx context.Context, req ResumeRequest, c
 
 	u.reg.Remove(existing.ID)
 	existing.Capabilities = req.Capabilities
+	existing.DeviceMetadata = req.DeviceMetadata
 	existing.LastHeartbeatAt = time.Now()
 	if err := u.reg.Add(existing, conn); err != nil {
 		return ResumeResponse{}, fmt.Errorf("re-add session to registry: %w", err)
@@ -156,6 +187,15 @@ func (u *AgentLifecycleUseCase) Resume(ctx context.Context, req ResumeRequest, c
 		}
 	}
 
+	// Record inferred ADB serial from remote address (only if not already known).
+	if u.connectedNotifier != nil && req.RemoteAddr != "" {
+		if serial := inferredADBSerial(req.RemoteAddr); serial != "" {
+			if err := u.connectedNotifier.NoteAgentConnected(ctx, req.DeviceID, serial); err != nil {
+				u.log.Warn("NoteAgentConnected on resume failed", "deviceId", req.DeviceID, "err", err)
+			}
+		}
+	}
+
 	return ResumeResponse{SessionID: req.SessionID}, nil
 }
 
@@ -167,6 +207,14 @@ func (u *AgentLifecycleUseCase) Heartbeat(_ context.Context, deviceID domain.Dev
 }
 
 func (u *AgentLifecycleUseCase) Disconnect(ctx context.Context, deviceID domain.DeviceID, sessionID domain.SessionID) {
+	session, _, ok := u.reg.GetBySession(sessionID)
+	if !ok {
+		return
+	}
+	if deviceID == "" {
+		deviceID = session.DeviceID
+	}
+
 	u.reg.Remove(sessionID)
 	u.log.Info("agent.disconnect", "deviceId", deviceID, "sessionId", sessionID)
 
@@ -192,4 +240,16 @@ func (u *AgentLifecycleUseCase) Disconnect(ctx context.Context, deviceID domain.
 	if err := u.orchestrator.ProcessEvent(ctx, event); err != nil {
 		u.log.Warn("orchestrator.ProcessEvent on disconnect failed", "err", err)
 	}
+}
+
+// inferredADBSerial derives a best-effort ADB serial from a WebSocket remote
+// address (host:port). It strips the port and appends the default ADB port
+// 5555, e.g. "192.168.1.10:54321" → "192.168.1.10:5555".
+// Returns "" if the address cannot be parsed.
+func inferredADBSerial(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil || host == "" {
+		return ""
+	}
+	return host + ":5555"
 }

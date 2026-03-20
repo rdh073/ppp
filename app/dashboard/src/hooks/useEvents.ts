@@ -2,10 +2,10 @@ import { useCallback, useMemo } from 'react';
 import { listAcceptedEvents } from '../api/events';
 import type { DeviceQueryParams } from '../types';
 import { useEventStore } from '../store/events';
-import { POLL_MS } from '../config';
+import { EVENT_POLL_MS } from '../config';
 import { usePolling } from './usePolling';
 
-export function useEvents(intervalMs: number = POLL_MS, params: DeviceQueryParams = {}) {
+export function useEvents(intervalMs: number = EVENT_POLL_MS, params: DeviceQueryParams = {}) {
   const entries = useEventStore((state) => state.entries);
   const loading = useEventStore((state) => state.loading);
   const error = useEventStore((state) => state.error);
@@ -29,8 +29,10 @@ export function useEvents(intervalMs: number = POLL_MS, params: DeviceQueryParam
   } = params;
 
   const loadEvents = useCallback(
-    async (append = false) => {
-      setLoading(true);
+    async (append = false, silent = false) => {
+      if (!silent || entries.length === 0) {
+        setLoading(true);
+      }
       const baseOffset =
         offset ??
         (append && pagination
@@ -59,15 +61,13 @@ export function useEvents(intervalMs: number = POLL_MS, params: DeviceQueryParam
         setError(message);
       }
     },
-    [appendPage, cursor, deviceId, from, includePayload, kind, limit, offset, order, pagination, setError, setList, setLoading, source, to],
+    [appendPage, cursor, deviceId, entries.length, from, includePayload, kind, limit, offset, order, pagination, setError, setList, setLoading, source, to],
   );
 
-  const refresh = useCallback(
-    () => loadEvents(false),
-    [loadEvents],
-  );
-
-  const loadMore = useCallback(() => loadEvents(true), [loadEvents]);
+  const loadMore = useCallback(() => loadEvents(true, false), [loadEvents]);
+  const refreshSilent = useCallback(async () => {
+    await loadEvents(false, true);
+  }, [loadEvents]);
 
   const hasMore = useMemo(() => {
     return pagination?.hasMore ?? false;
@@ -77,7 +77,11 @@ export function useEvents(intervalMs: number = POLL_MS, params: DeviceQueryParam
     entries,
     loading,
     error,
-    refresh: usePolling(refresh, intervalMs, true),
+    refresh: usePolling(refreshSilent, intervalMs, {
+      enabled: true,
+      immediate: true,
+      pauseWhenHidden: true,
+    }),
     loadMore,
     hasMore,
   };

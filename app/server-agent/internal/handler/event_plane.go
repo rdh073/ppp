@@ -44,6 +44,8 @@ func (h *EventPlaneHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && len(parts) == 1 && parts[0] == "accepted":
 		h.listAccepted(w, r)
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "accepted" && parts[2] == "payload":
+		h.getAcceptedPayload(w, r, parts[1])
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[0] == "accepted":
 		h.getAccepted(w, r, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "accepted" && parts[2] == "replay":
@@ -90,6 +92,20 @@ func (h *EventPlaneHandler) getAccepted(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	writeJSON(w, http.StatusOK, record)
+}
+
+func (h *EventPlaneHandler) getAcceptedPayload(w http.ResponseWriter, r *http.Request, eventID string) {
+	maxBytes, err := parseIntQueryParam(r, "maxBytes")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload, err := h.uc.GetAcceptedPayload(r.Context(), eventID, maxBytes)
+	if err != nil {
+		writeUseCaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (h *EventPlaneHandler) replayAccepted(w http.ResponseWriter, r *http.Request, eventID string) {

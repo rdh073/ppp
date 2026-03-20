@@ -19,15 +19,19 @@ type sessionInfo struct {
 // Conn wraps a gorilla WebSocket connection and implements handler.Conn.
 // It is safe for concurrent writes from multiple goroutines.
 type Conn struct {
-	ws      *websocket.Conn
-	writeMu sync.Mutex
-	log     *slog.Logger
-	info    atomic.Pointer[sessionInfo]
+	ws         *websocket.Conn
+	writeMu    sync.Mutex
+	log        *slog.Logger
+	info       atomic.Pointer[sessionInfo]
+	remoteAddr string
 }
 
-func newConn(ws *websocket.Conn, log *slog.Logger) *Conn {
-	return &Conn{ws: ws, log: log}
+func newConn(ws *websocket.Conn, log *slog.Logger, remoteAddr string) *Conn {
+	return &Conn{ws: ws, log: log, remoteAddr: remoteAddr}
 }
+
+// RemoteAddr returns the network address of the connected agent (host:port).
+func (c *Conn) RemoteAddr() string { return c.remoteAddr }
 
 // SetSession records which session this connection belongs to.
 // DeviceID is obtained from the registry via the session after Hello/Resume.

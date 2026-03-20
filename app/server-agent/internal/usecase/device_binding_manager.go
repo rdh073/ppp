@@ -41,6 +41,7 @@ type deviceBindingMetrics interface {
 
 type DeviceBindingCoordinator interface {
 	NoteDeviceEvent(ctx context.Context, deviceID domain.DeviceID, kind domain.EventKind, seqNo uint64, adbSerial, serviceComponent string, at time.Time) error
+	NoteAgentConnected(ctx context.Context, deviceID domain.DeviceID, inferredSerial string) error
 	Remediate(ctx context.Context, deviceID domain.DeviceID) (*domain.DeviceBinding, error)
 	ForgetDevice(deviceID domain.DeviceID)
 	ListBindings(ctx context.Context) ([]*domain.DeviceBinding, error)
@@ -128,6 +129,32 @@ func (m *DeviceBindingManager) NoteDeviceEvent(
 		m.refreshMetrics(ctx)
 	}
 	return nil
+}
+
+// NoteAgentConnected records an inferred ADB serial derived from the agent's
+// WebSocket remote address. It only sets the serial when the binding has no
+// serial yet, so explicitly configured or event-sourced serials are never
+// overwritten.
+func (m *DeviceBindingManager) NoteAgentConnected(ctx context.Context, deviceID domain.DeviceID, inferredSerial string) error {
+	if m == nil || m.store == nil || deviceID == "" || inferredSerial == "" {
+		return nil
+	}
+	return m.withDeviceLock(deviceID, func() error {
+		binding, err := m.loadOrNew(ctx, deviceID)
+		if err != nil {
+			return err
+		}
+		if binding.ADBSerial != "" {
+			// Already known — do not overwrite.
+			return nil
+		}
+		binding.ADBSerial = inferredSerial
+		binding.SerialSource = "inferred-connection"
+		if binding.IdentityStatus == domain.DeviceIdentityStatusUnknown {
+			binding.IdentityStatus = domain.DeviceIdentityStatusSerialKnownUnverified
+		}
+		return m.store.Save(ctx, binding)
+	})
 }
 
 func (m *DeviceBindingManager) Remediate(ctx context.Context, deviceID domain.DeviceID) (*domain.DeviceBinding, error) {

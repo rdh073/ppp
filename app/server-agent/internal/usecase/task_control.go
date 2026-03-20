@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
@@ -15,6 +17,7 @@ import (
 type TaskControlUseCase struct {
 	tasks        store.TaskStore
 	states       store.WorkflowStateStore
+	outbox       store.CommandOutboxStore
 	orchestrator EventProcessor
 	registry     registry.AgentRegistry
 	assigner     *DeviceAssigner // optional; nil-safe
@@ -43,6 +46,11 @@ func (u *TaskControlUseCase) SetAssigner(a *DeviceAssigner) {
 	u.assigner = a
 }
 
+// SetCommandOutbox wires command outbox lookup for task diagnostics.
+func (u *TaskControlUseCase) SetCommandOutbox(outbox store.CommandOutboxStore) {
+	u.outbox = outbox
+}
+
 // CreateTaskRequest specifies the task to create and which device to assign.
 // DeviceID is optional; if empty the task is created pending assignment.
 // WorkflowName is optional; if empty the server default workflow is used.
@@ -51,6 +59,22 @@ type CreateTaskRequest struct {
 	DeviceID       domain.DeviceID   // optional
 	WorkflowName   string            // optional
 	InputArtifacts map[string]string // optional
+}
+
+type ListTaskQuery struct {
+	Status       domain.TaskStatus // optional exact match
+	DeviceID     domain.DeviceID   // optional exact match
+	WorkflowName string            // optional exact match
+	Limit        int               // optional; default 100, max 500
+	Offset       int               // optional; default 0
+}
+
+type TaskSummary struct {
+	Task              *domain.Task
+	CurrentStep       string
+	RetryCount        int
+	LastCommandStatus domain.CommandOutboxStatus
+	LastCommandError  string
 }
 
 func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error) {
@@ -71,6 +95,16 @@ func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskReque
 	// Assign device if provided explicitly.
 	if req.DeviceID != "" {
 		if _, _, ok := u.registry.GetByDevice(req.DeviceID); ok {
+			activeTasks, err := u.tasks.ListActiveByDevice(ctx, req.DeviceID)
+			if err != nil {
+				return nil, fmt.Errorf("check active task for device %s: %w", req.DeviceID, err)
+			}
+			for _, active := range activeTasks {
+				if active.Status == domain.TaskStatusPaused {
+					continue
+				}
+				return nil, fmt.Errorf("device %s has active task %s (%s)", req.DeviceID, active.ID, active.Status)
+			}
 			task.AssignedDevice = req.DeviceID
 			task.Status = domain.TaskStatusRunning
 		} else {
@@ -133,4 +167,111 @@ func (u *TaskControlUseCase) CancelTask(ctx context.Context, taskID domain.TaskI
 
 func (u *TaskControlUseCase) GetTask(ctx context.Context, taskID domain.TaskID) (*domain.Task, error) {
 	return u.tasks.Get(ctx, taskID)
+}
+
+func (u *TaskControlUseCase) GetTaskSummary(ctx context.Context, taskID domain.TaskID) (*TaskSummary, error) {
+	task, err := u.tasks.Get(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	summaries, err := u.enrichTaskSummaries(ctx, []*domain.Task{task})
+	if err != nil {
+		return nil, err
+	}
+	if len(summaries) == 0 {
+		return nil, fmt.Errorf("task %s not found", taskID)
+	}
+	return &summaries[0], nil
+}
+
+func (u *TaskControlUseCase) ListTasks(ctx context.Context, query ListTaskQuery) ([]TaskSummary, error) {
+	tasks, err := u.tasks.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]*domain.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		if query.Status != "" && task.Status != query.Status {
+			continue
+		}
+		if query.DeviceID != "" && task.AssignedDevice != query.DeviceID {
+			continue
+		}
+		if query.WorkflowName != "" && !strings.EqualFold(task.WorkflowName, query.WorkflowName) {
+			continue
+		}
+		filtered = append(filtered, task)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(filtered) {
+		return []TaskSummary{}, nil
+	}
+
+	filtered = filtered[offset:]
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	return u.enrichTaskSummaries(ctx, filtered)
+}
+
+func (u *TaskControlUseCase) enrichTaskSummaries(ctx context.Context, tasks []*domain.Task) ([]TaskSummary, error) {
+	summaries := make([]TaskSummary, 0, len(tasks))
+
+	latestByTask := map[domain.TaskID]*domain.CommandOutboxRecord{}
+	if u.outbox != nil {
+		records, err := u.outbox.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list command outbox: %w", err)
+		}
+		for _, record := range records {
+			if record == nil || record.Command.TaskID == "" {
+				continue
+			}
+			prev, exists := latestByTask[record.Command.TaskID]
+			if !exists || record.UpdatedAt.After(prev.UpdatedAt) {
+				latestByTask[record.Command.TaskID] = record
+			}
+		}
+	}
+
+	for _, task := range tasks {
+		summary := TaskSummary{Task: task}
+
+		if task.AssignedDevice != "" {
+			state, err := u.states.Get(ctx, task.ID, task.AssignedDevice)
+			if err == nil && state != nil {
+				summary.CurrentStep = state.CurrentStep
+				summary.RetryCount = state.RetryCount
+			}
+		}
+
+		if record := latestByTask[task.ID]; record != nil {
+			summary.LastCommandStatus = record.Status
+			summary.LastCommandError = record.LastError
+		}
+		summaries = append(summaries, summary)
+	}
+
+	return summaries, nil
 }

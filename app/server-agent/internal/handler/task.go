@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
@@ -32,6 +33,8 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && id == "":
 		h.create(w, r)
+	case r.Method == http.MethodGet && id == "":
+		h.list(w, r)
 	case r.Method == http.MethodGet && id != "":
 		h.get(w, r, domain.TaskID(id))
 	case r.Method == http.MethodDelete && id != "":
@@ -39,6 +42,47 @@ func (h *TaskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+func (h *TaskHandler) list(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid offset", http.StatusBadRequest)
+			return
+		}
+		offset = parsed
+	}
+
+	items, err := h.uc.ListTasks(r.Context(), usecase.ListTaskQuery{
+		Status:       domain.TaskStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		DeviceID:     domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
+		WorkflowName: strings.TrimSpace(r.URL.Query().Get("workflowName")),
+		Limit:        limit,
+		Offset:       offset,
+	})
+	if err != nil {
+		http.Error(w, "failed to list tasks", http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]map[string]any, 0, len(items))
+	for i := range items {
+		resp = append(resp, taskSummaryJSON(&items[i]))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -71,13 +115,13 @@ func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) get(w http.ResponseWriter, r *http.Request, id domain.TaskID) {
-	task, err := h.uc.GetTask(r.Context(), id)
+	task, err := h.uc.GetTaskSummary(r.Context(), id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(taskJSON(task))
+	_ = json.NewEncoder(w).Encode(taskSummaryJSON(task))
 }
 
 func (h *TaskHandler) cancel(w http.ResponseWriter, r *http.Request, id domain.TaskID) {
@@ -89,13 +133,23 @@ func (h *TaskHandler) cancel(w http.ResponseWriter, r *http.Request, id domain.T
 }
 
 func taskJSON(t *domain.Task) map[string]any {
+	return taskSummaryJSON(&usecase.TaskSummary{Task: t})
+}
+
+func taskSummaryJSON(summary *usecase.TaskSummary) map[string]any {
+	t := summary.Task
 	return map[string]any{
-		"id":             string(t.ID),
-		"goal":           t.Goal,
-		"inputArtifacts": t.InputArtifacts,
-		"status":         string(t.Status),
-		"assignedDevice": string(t.AssignedDevice),
-		"createdAt":      t.CreatedAt,
-		"updatedAt":      t.UpdatedAt,
+		"id":                string(t.ID),
+		"goal":              t.Goal,
+		"inputArtifacts":    t.InputArtifacts,
+		"status":            string(t.Status),
+		"assignedDevice":    string(t.AssignedDevice),
+		"workflowName":      t.WorkflowName,
+		"currentStep":       summary.CurrentStep,
+		"retryCount":        summary.RetryCount,
+		"lastCommandStatus": string(summary.LastCommandStatus),
+		"lastCommandError":  summary.LastCommandError,
+		"createdAt":         t.CreatedAt,
+		"updatedAt":         t.UpdatedAt,
 	}
 }

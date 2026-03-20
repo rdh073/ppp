@@ -61,9 +61,9 @@ func freshState(taskID, deviceID string) *domain.WorkflowState {
 
 func anyEvent() domain.Event {
 	return domain.Event{
-		ID:      "ev-1",
-		Kind:    domain.EventKindScreenChanged,
-		SeqNo:   1,
+		ID:         "ev-1",
+		Kind:       domain.EventKindScreenChanged,
+		SeqNo:      1,
 		OccurredAt: time.Now(),
 	}
 }
@@ -111,10 +111,10 @@ func TestEngine_ActionStepArmsExpect(t *testing.T) {
 		Entry: "do_click",
 		Steps: map[string]domain.StepDef{
 			"do_click": {
-				Trigger: domain.EventMatch{},
-				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
-				Expect:  &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
-				Timeout: "5s",
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "OK"}},
+				Expect:    &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
+				Timeout:   "5s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
 			},
@@ -209,6 +209,96 @@ func TestEngine_ExpectTimeout(t *testing.T) {
 	}
 	if r3.State.TerminalSuccess {
 		t.Error("expected TerminalSuccess=false on failure path")
+	}
+}
+
+// TestEngine_OnFailureToEmptyTrigger_AutoExecutes verifies that when a step
+// fails and routes to an empty-trigger step, the failure branch executes in
+// the same Handle cycle (no extra event required).
+func TestEngine_OnFailureToEmptyTrigger_AutoExecutes(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "failure-empty-trigger",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+				Expect:    &domain.ExpectDef{Kind: "android.never.happens"},
+				Timeout:   "1ms",
+				MaxRetry:  0,
+				OnSuccess: "terminal",
+				OnFailure: "click_save",
+			},
+			"click_save": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindResourceID, Value: "android:id/button1"}},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "failure-empty-trigger", Task: task("t1"), Event: anyEvent()})
+	if r0.State == nil || r0.State.WaitingExpect == nil {
+		t.Fatal("expected WaitingExpect to be armed")
+	}
+	r0.State.DeadlineAt = time.Now().Add(-1 * time.Second)
+
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r0.State, WorkflowName: "failure-empty-trigger", Task: task("t1"), Event: anyEvent()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !r1.Terminal {
+		t.Fatal("expected terminal=true: on_failure empty-trigger branch should auto-execute")
+	}
+	if r1.State == nil || !r1.State.IsTerminal() {
+		t.Fatal("expected terminal workflow state")
+	}
+}
+
+// TestEngine_OnFailureToNonEmptyTrigger_WaitsEvent verifies failure routing to
+// non-empty trigger steps still waits for a future matching event.
+func TestEngine_OnFailureToNonEmptyTrigger_WaitsEvent(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "failure-nonempty-trigger",
+		Entry: "step1",
+		Steps: map[string]domain.StepDef{
+			"step1": {
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+				Expect:    &domain.ExpectDef{Kind: "android.never.happens"},
+				Timeout:   "1ms",
+				MaxRetry:  0,
+				OnSuccess: "terminal",
+				OnFailure: "wait_activity",
+			},
+			"wait_activity": {
+				Trigger:   domain.EventMatch{Kind: domain.EventKindActivityCreated},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	eng := buildEngine(def, successDispatcher{})
+	state := freshState("t1", "dev1")
+
+	r0, _ := eng.Handle(context.Background(), workflow.EngineCommand{State: state, WorkflowName: "failure-nonempty-trigger", Task: task("t1"), Event: anyEvent()})
+	if r0.State == nil || r0.State.WaitingExpect == nil {
+		t.Fatal("expected WaitingExpect to be armed")
+	}
+	r0.State.DeadlineAt = time.Now().Add(-1 * time.Second)
+
+	r1, err := eng.Handle(context.Background(), workflow.EngineCommand{State: r0.State, WorkflowName: "failure-nonempty-trigger", Task: task("t1"), Event: anyEvent()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r1.Terminal {
+		t.Fatal("should not be terminal: non-empty trigger failure target must wait next event")
+	}
+	if r1.State == nil || r1.State.CurrentStep != "wait_activity" {
+		t.Fatalf("expected state to route to wait_activity, got %+v", r1.State)
 	}
 }
 
@@ -445,10 +535,10 @@ func TestEngine_ActionAutoExecuteChain(t *testing.T) {
 			},
 			// Empty trigger → auto-dispatched when reached via advance().
 			"click_next": {
-				Trigger: domain.EventMatch{},
-				Action:  &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "Next"}},
-				Expect:  &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
-				Timeout: "5s",
+				Trigger:   domain.EventMatch{},
+				Action:    &domain.ActionDef{Kind: domain.ActionKindClick, Target: &domain.TargetDef{Kind: domain.TargetKindText, Value: "Next"}},
+				Expect:    &domain.ExpectDef{Kind: domain.EventKindScreenChanged},
+				Timeout:   "5s",
 				OnSuccess: "terminal",
 				OnFailure: "terminal",
 			},

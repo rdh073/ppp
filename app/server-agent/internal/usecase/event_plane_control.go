@@ -31,6 +31,15 @@ type AcceptedEventPage = store.AcceptedEventPage
 type DeadLetterListQuery = store.DeadLetterListQuery
 type DeadLetterPage = store.DeadLetterPage
 
+type AcceptedPayloadPreview struct {
+	EventID     string           `json:"eventId"`
+	Kind        domain.EventKind `json:"kind"`
+	DeviceID    domain.DeviceID  `json:"deviceId"`
+	SizeBytes   int              `json:"sizeBytes"`
+	Truncated   bool             `json:"truncated"`
+	PayloadText string           `json:"payloadText"`
+}
+
 type acceptedEventReplayer interface {
 	ReplayAcceptedEvent(ctx context.Context, event domain.Event) error
 }
@@ -95,6 +104,35 @@ func (u *EventPlaneControlUseCase) GetAccepted(ctx context.Context, eventID stri
 		}
 	}
 	return nil, fmt.Errorf("%w: accepted event %s", store.ErrNotFound, eventID)
+}
+
+func (u *EventPlaneControlUseCase) GetAcceptedPayload(ctx context.Context, eventID string, maxBytes int) (*AcceptedPayloadPreview, error) {
+	if maxBytes <= 0 {
+		maxBytes = 16 * 1024
+	}
+	if maxBytes > 256*1024 {
+		maxBytes = 256 * 1024
+	}
+
+	record, err := u.GetAccepted(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	raw := domain.MarshalEventPayload(record.Event)
+	payload := string(raw)
+	truncated := false
+	if len(raw) > maxBytes {
+		payload = string(raw[:maxBytes])
+		truncated = true
+	}
+	return &AcceptedPayloadPreview{
+		EventID:     record.Event.ID,
+		Kind:        record.Event.Kind,
+		DeviceID:    record.Event.DeviceID,
+		SizeBytes:   len(raw),
+		Truncated:   truncated,
+		PayloadText: payload,
+	}, nil
 }
 
 func (u *EventPlaneControlUseCase) GetDeadLetter(ctx context.Context, deadLetterID string) (*domain.DeadLetterRecord, error) {

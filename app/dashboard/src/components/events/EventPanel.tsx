@@ -1,41 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getAcceptedEvent } from '../../api/events';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  ArrowDown,
+  BellRing,
+  Filter,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
+import { getAcceptedEventPayload, type AcceptedPayloadPreview } from '../../api/events';
 import { useEvents } from '../../hooks/useEvents';
-import { POLL_MS } from '../../config';
+import { EVENT_POLL_MS } from '../../config';
 
-const MAX_PAYLOAD_CHARS = 60_000;
-
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  try {
-    return JSON.stringify(
-      value,
-      (_key, currentValue) => {
-        if (typeof currentValue === 'bigint') {
-          return currentValue.toString();
-        }
-        if (currentValue instanceof Error) {
-          return {
-            name: currentValue.name,
-            message: currentValue.message,
-            stack: currentValue.stack,
-          };
-        }
-        if (currentValue && typeof currentValue === 'object') {
-          if (seen.has(currentValue)) {
-            return '[Circular]';
-          }
-          seen.add(currentValue);
-        }
-        return currentValue;
-      },
-      2,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return `{"error":"failed_to_render_payload","message":${JSON.stringify(message)}}`;
-  }
-}
+const MAX_PAYLOAD_BYTES = 16_384;
+const MAX_CACHED_PAYLOADS = 10;
+const MAX_EVENTS_FOR_FILTERS = 200;
 
 function asText(value: unknown, fallback = '-'): string {
   if (typeof value === 'string') {
@@ -65,19 +44,29 @@ export function EventPanel() {
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [limit, setLimit] = useState(25);
   const [selected, setSelected] = useState('');
-  const [payloadById, setPayloadById] = useState<Record<string, unknown>>({});
+  const [payloadById, setPayloadById] = useState<Record<string, AcceptedPayloadPreview>>({});
   const [payloadLoadingId, setPayloadLoadingId] = useState('');
   const [payloadError, setPayloadError] = useState<string | null>(null);
-  const queryParams = useMemo(() => ({
-    limit,
-    kind: kindFilter || undefined,
-    source: sourceFilter || undefined,
-    order,
-    deviceId: deviceFilter || undefined,
-    includePayload: false,
-  }), [deviceFilter, kindFilter, limit, order, sourceFilter]);
 
-  const { entries, loading, error, refresh, loadMore, hasMore } = useEvents(POLL_MS, queryParams);
+  const deferredKindFilter = useDeferredValue(kindFilter);
+  const deferredSourceFilter = useDeferredValue(sourceFilter);
+  const deferredDeviceFilter = useDeferredValue(deviceFilter);
+  const deferredLimit = useDeferredValue(limit);
+  const deferredOrder = useDeferredValue(order);
+
+  const queryParams = useMemo(
+    () => ({
+      limit: deferredLimit,
+      kind: deferredKindFilter.trim() || undefined,
+      source: deferredSourceFilter.trim() || undefined,
+      order: deferredOrder,
+      deviceId: deferredDeviceFilter.trim() || undefined,
+      includePayload: false,
+    }),
+    [deferredDeviceFilter, deferredKindFilter, deferredLimit, deferredOrder, deferredSourceFilter],
+  );
+
+  const { entries, loading, error, refresh, loadMore, hasMore } = useEvents(EVENT_POLL_MS, queryParams);
 
   const rows = useMemo(() => {
     return entries
@@ -92,32 +81,95 @@ export function EventPanel() {
         if (!id) {
           return null;
         }
+        const kind = asText(eventRecord.Kind);
+        const source = asText(raw.source);
+        const deviceId = asText(eventRecord.DeviceID);
+        const occurredAtRaw = asText(eventRecord.OccurredAt);
+        const acceptedAtRaw = asText(raw.acceptedAt);
 
         return {
           id,
-          key: `${id}-${asText(raw.acceptedAt, '')}`,
-          kind: asText(eventRecord.Kind),
-          deviceId: asText(eventRecord.DeviceID),
+          key: `${id}-${acceptedAtRaw}`,
+          kind,
+          deviceId,
           seqNo: asText(eventRecord.SeqNo),
-          occurredAt: formatTimestamp(eventRecord.OccurredAt),
-          acceptedAt: formatTimestamp(raw.acceptedAt),
-          source: asText(raw.source),
-          payload: eventRecord.Payload ?? null,
+          source,
+          occurredAt: formatTimestamp(occurredAtRaw),
+          acceptedAt: formatTimestamp(acceptedAtRaw),
         };
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
   }, [entries]);
 
   const selectedPayload = useMemo(() => {
-    const row = rows.find((entry) => entry.id === selected);
-    const cachedPayload = selected ? payloadById[selected] : undefined;
-    const sourcePayload = cachedPayload !== undefined ? cachedPayload : row?.payload ?? null;
-    const serialized = safeStringify(sourcePayload);
-    if (serialized.length <= MAX_PAYLOAD_CHARS) {
-      return serialized;
+    if (!selected) {
+      return '';
     }
-    return `${serialized.slice(0, MAX_PAYLOAD_CHARS)}\n\n... payload truncated (${serialized.length - MAX_PAYLOAD_CHARS} chars omitted)`;
-  }, [payloadById, rows, selected]);
+    const payload = payloadById[selected];
+    if (!payload) {
+      return '';
+    }
+    if (!payload.truncated) {
+      return payload.payloadText || '(empty payload)';
+    }
+    const omitted = Math.max(0, payload.sizeBytes - payload.payloadText.length);
+    return `${payload.payloadText}\n\n... payload truncated (${omitted} bytes omitted)`;
+  }, [payloadById, selected]);
+
+  const summary = useMemo(() => {
+    const uniqueKinds = new Set<string>();
+    const uniqueSources = new Set<string>();
+    const uniqueDevices = new Set<string>();
+
+    for (const row of rows) {
+      if (row.kind !== '-') {
+        uniqueKinds.add(row.kind);
+      }
+      if (row.source !== '-') {
+        uniqueSources.add(row.source);
+      }
+      if (row.deviceId !== '-') {
+        uniqueDevices.add(row.deviceId);
+      }
+    }
+
+    return {
+      visibleRows: rows.length,
+      uniqueKinds: uniqueKinds.size,
+      uniqueSources: uniqueSources.size,
+      uniqueDevices: uniqueDevices.size,
+    };
+  }, [rows]);
+
+  const topKinds = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of rows.slice(0, MAX_EVENTS_FOR_FILTERS)) {
+      if (row.kind === '-') {
+        continue;
+      }
+      map.set(row.kind, (map.get(row.kind) ?? 0) + 1);
+    }
+
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name]) => name);
+  }, [rows]);
+
+  const selectedRow = useMemo(() => {
+    if (!selected) {
+      return null;
+    }
+    return rows.find((row) => row.id === selected) ?? null;
+  }, [rows, selected]);
+
+  const clearFilters = () => {
+    setKindFilter('');
+    setSourceFilter('');
+    setDeviceFilter('');
+    setOrder('desc');
+    setLimit(25);
+  };
 
   useEffect(() => {
     if (!selected || payloadById[selected] !== undefined) {
@@ -128,15 +180,19 @@ export function EventPanel() {
     setPayloadError(null);
     setPayloadLoadingId(selected);
 
-    void getAcceptedEvent(selected)
+    void getAcceptedEventPayload(selected, MAX_PAYLOAD_BYTES)
       .then((record) => {
         if (cancelled) {
           return;
         }
-        setPayloadById((prev) => ({
-          ...prev,
-          [selected]: record.event?.Payload ?? null,
-        }));
+        setPayloadById((prev) => {
+          const next: Record<string, AcceptedPayloadPreview> = { ...prev, [selected]: record };
+          const keys = Object.keys(next);
+          if (keys.length > MAX_CACHED_PAYLOADS) {
+            delete next[keys[0]];
+          }
+          return next;
+        });
       })
       .catch((raw) => {
         if (cancelled) {
@@ -159,37 +215,82 @@ export function EventPanel() {
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2>Events</h2>
-        <div className="row">
-          <button type="button" onClick={() => refresh()}>
-            {loading ? 'Refreshing...' : 'Refresh'}
+        <div className="event-title">
+          <BellRing className="event-title-icon" aria-hidden="true" />
+          <h2>Event Stream</h2>
+          <span className="event-count-badge">{summary.visibleRows} shown</span>
+        </div>
+        <div className="event-actions">
+          <button type="button" className="btn-secondary" onClick={() => refresh()}>
+            <RefreshCw className={loading ? 'event-spin' : ''} aria-hidden="true" />
+            {loading ? 'Syncing…' : 'Refresh'}
           </button>
         </div>
       </div>
 
+      <div className="event-summary">
+        <article className="event-metric">
+          <Activity aria-hidden="true" />
+          <span className="event-metric-label">Visible</span>
+          <strong>{summary.visibleRows}</strong>
+        </article>
+        <article className="event-metric">
+          <Search aria-hidden="true" />
+          <span className="event-metric-label">Kinds</span>
+          <strong>{summary.uniqueKinds}</strong>
+        </article>
+        <article className="event-metric">
+          <Filter aria-hidden="true" />
+          <span className="event-metric-label">Sources / Devices</span>
+          <strong>
+            {summary.uniqueSources}/{summary.uniqueDevices}
+          </strong>
+        </article>
+      </div>
+
       <div className="event-filters">
-        <label>
+        <label className="event-filter-label" htmlFor="event-kind-filter">
           Kind
-          <input value={kindFilter} onChange={(event) => setKindFilter(event.target.value)} />
+          <input
+            id="event-kind-filter"
+            value={kindFilter}
+            onChange={(event) => setKindFilter(event.target.value)}
+            placeholder="filter by kind"
+          />
         </label>
-        <label>
+        <label className="event-filter-label" htmlFor="event-source-filter">
           Source
-          <input value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} />
+          <input
+            id="event-source-filter"
+            value={sourceFilter}
+            onChange={(event) => setSourceFilter(event.target.value)}
+            placeholder="filter by source"
+          />
         </label>
-        <label>
-          Device ID
-          <input value={deviceFilter} onChange={(event) => setDeviceFilter(event.target.value)} />
+        <label className="event-filter-label" htmlFor="event-device-filter">
+          Device
+          <input
+            id="event-device-filter"
+            value={deviceFilter}
+            onChange={(event) => setDeviceFilter(event.target.value)}
+            placeholder="device id"
+          />
         </label>
-        <label>
+        <label className="event-filter-label" htmlFor="event-order-filter">
           Order
-          <select value={order} onChange={(event) => setOrder(event.target.value as 'asc' | 'desc')}>
+          <select
+            id="event-order-filter"
+            value={order}
+            onChange={(event) => setOrder(event.target.value as 'asc' | 'desc')}
+          >
             <option value="desc">desc</option>
             <option value="asc">asc</option>
           </select>
         </label>
-        <label>
+        <label className="event-filter-label" htmlFor="event-limit-filter">
           Limit
           <input
+            id="event-limit-filter"
             value={limit}
             type="number"
             min={1}
@@ -209,69 +310,163 @@ export function EventPanel() {
             }}
           />
         </label>
-      </div>
-
-      {error && <p className="error">{error}</p>}
-
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Kind</th>
-              <th>Device ID</th>
-              <th>Seq</th>
-              <th>Occurred</th>
-              <th>Accepted</th>
-              <th>Source</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && !loading ? (
-              <tr>
-                <td colSpan={8}>No events in the current filter.</td>
-              </tr>
-            ) : (
-              rows.map((row) => (
-                <tr key={row.key}>
-                  <td>{row.id}</td>
-                  <td>{row.kind}</td>
-                  <td>{row.deviceId}</td>
-                  <td>{row.seqNo}</td>
-                  <td>{row.occurredAt}</td>
-                  <td>{row.acceptedAt}</td>
-                  <td>{row.source}</td>
-                  <td>
-                    <button type="button" onClick={() => setSelected(row.id)}>
-                      Show payload
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {hasMore && (
-        <div className="row">
-          <button type="button" onClick={() => void loadMore()} disabled={loading}>
-            Load older events
+        <div className="event-filter-actions">
+          <button type="button" className="event-filter-clear" onClick={clearFilters}>
+            <X aria-hidden="true" />
+            Clear
           </button>
         </div>
-      )}
+      </div>
 
-      {selected && (
-        <div>
-          <div className="row">
-            <button type="button" onClick={() => setSelected('')}>Hide payload</button>
-          </div>
-          {payloadLoadingId === selected && <p>Loading payload...</p>}
-          {payloadError && <p className="error">{payloadError}</p>}
-          <pre className="payload">{selectedPayload}</pre>
+      {topKinds.length > 0 && (
+        <div className="event-chip-row" aria-label="top kinds">
+          {topKinds.map((kind) => (
+            <button
+              type="button"
+              key={kind}
+              className={`event-chip ${kindFilter === kind ? 'event-chip-active' : ''}`}
+              onClick={() => setKindFilter((prev) => (prev === kind ? '' : kind))}
+            >
+              {kind}
+            </button>
+          ))}
         </div>
       )}
+
+      <div className="event-layout">
+        <div className="event-stream">
+          <div className="panel-subhead">
+            <span>Timeline</span>
+            {loading && <span className="field-hint">syncing…</span>}
+          </div>
+
+          {error && <p role="alert" className="error">{error}</p>}
+
+          <div className="table-wrap event-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Kind</th>
+                  <th>Device</th>
+                  <th>Seq</th>
+                  <th>Occurred</th>
+                  <th>Accepted</th>
+                  <th>Source</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && !loading ? (
+                  <tr>
+                    <td colSpan={8} className="event-empty">
+                      No events in the current filter.
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((row) => (
+                    <tr
+                      key={row.key}
+                      className={selected === row.id ? 'event-row--active' : ''}
+                    >
+                      <td className="event-mono">{row.id}</td>
+                      <td>
+                        <span className="event-kind-pill">{row.kind}</span>
+                      </td>
+                      <td className="event-mono">{row.deviceId}</td>
+                      <td>{row.seqNo}</td>
+                      <td>{row.occurredAt}</td>
+                      <td>{row.acceptedAt}</td>
+                      <td>{row.source}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="task-inline-link"
+                          onClick={() => setSelected(row.id)}
+                        >
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {hasMore && (
+            <div className="row">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void loadMore()}
+                disabled={loading}
+              >
+                <ArrowDown aria-hidden="true" />
+                Load older events
+              </button>
+            </div>
+          )}
+        </div>
+
+        <aside className="event-detail">
+          <div className="panel-subhead">
+            <span>Payload</span>
+            {selected && (
+              <button
+                type="button"
+                className="event-inline-action"
+                onClick={() => setSelected('')}
+              >
+                Hide
+              </button>
+            )}
+          </div>
+
+          {!selectedRow ? (
+            <p className="field-hint">Select a row to inspect event payload.</p>
+          ) : (
+            <div className="event-detail-body">
+              <div className="event-detail-meta">
+                <span>
+                  <span className="event-detail-key">ID</span>
+                  {selectedRow.id}
+                </span>
+                <span>
+                  <span className="event-detail-key">Kind</span>
+                  {selectedRow.kind}
+                </span>
+                <span>
+                  <span className="event-detail-key">Device</span>
+                  {selectedRow.deviceId}
+                </span>
+                <span>
+                  <span className="event-detail-key">Source</span>
+                  {selectedRow.source}
+                </span>
+                <span>
+                  <span className="event-detail-key">Occurred</span>
+                  {selectedRow.occurredAt}
+                </span>
+                <span>
+                  <span className="event-detail-key">Accepted</span>
+                  {selectedRow.acceptedAt}
+                </span>
+              </div>
+
+              {payloadLoadingId === selected && <p className="status">Loading payload...</p>}
+              {payloadError && <p role="alert" className="error">{payloadError}</p>}
+              <pre className="payload event-payload">{selectedPayload || '(empty payload)'}</pre>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      {loading && rows.length === 0 ? (
+        <p className="status" aria-live="polite">
+          Syncing events…
+        </p>
+      ) : null}
     </section>
   );
 }

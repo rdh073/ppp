@@ -51,32 +51,31 @@ steps:
       package: com.android.settings
     expect:
       kind: android.screen.changed
-      package: com.android.settings
+      text_contains: "Private DNS"
       ui:
         ui_ready: true
-    timeout: 15s
-    max_retry: 2
-    on_success: click_network
+    timeout: 10s
+    max_retry: 1
+    on_success: click_private_dns
     on_failure: terminal
 
-  # ── Step 2: tap "Network & internet" ───────────────────────────────────────
-  # Empty trigger → auto-executes immediately after open_settings succeeds.
+  # ── Step 2: optional tap "Network & internet" from Settings homepage ───────
+  # Kept as fallback/manual branch helper; not on the main path for Waydroid.
   click_network:
     trigger: {}
     action:
       kind: click
       target:
-        kind: semantic_key
-        value: "text.network_internet"
+        kind: text
+        value: "Network & internet"
     expect:
       kind: android.screen.changed
-      package: com.android.settings
       ui:
         ui_ready: true
     timeout: 10s
-    max_retry: 3
+    max_retry: 1
     on_success: click_private_dns
-    on_failure: terminal
+    on_failure: click_private_dns
 
   # ── Step 3: tap "Private DNS" ──────────────────────────────────────────────
   click_private_dns:
@@ -84,18 +83,17 @@ steps:
     action:
       kind: click
       target:
-        kind: semantic_key
-        value: "text.private_dns"
+        kind: text
+        value: "Private DNS"
     expect:
       kind: android.screen.changed
-      package: com.android.settings
-      text_contains: "Private DNS"
+      text_contains: "Select Private DNS Mode"
       ui:
         ui_ready: true
-    timeout: 10s
-    max_retry: 3
+    timeout: 5s
+    max_retry: 0
     on_success: click_hostname_option
-    on_failure: terminal
+    on_failure: click_hostname_option
 
   # ── Step 4: choose "Private DNS provider hostname" ─────────────────────────
   click_hostname_option:
@@ -103,18 +101,17 @@ steps:
     action:
       kind: click
       target:
-        kind: semantic_key
-        value: "text.private_dns_provider_hostname"
+        kind: resource_id
+        value: "com.android.settings:id/private_dns_mode_provider"
     expect:
       kind: android.screen.changed
-      package: com.android.settings
+      text_contains: "Enter hostname of DNS provider"
       ui:
         ui_ready: true
-        form_key: form.primary
-    timeout: 10s
-    max_retry: 2
+    timeout: 5s
+    max_retry: 0
     on_success: input_hostname
-    on_failure: terminal
+    on_failure: input_hostname
 
   # ── Step 5: type the hostname ──────────────────────────────────────────────
   # {{input.private_dns_hostname}} is interpolated from task.inputArtifacts.
@@ -126,16 +123,8 @@ steps:
         kind: resource_id
         value: "com.android.settings:id/private_dns_mode_provider_hostname"
       input_text: "{{input.private_dns_hostname}}"
-    expect:
-      kind: android.screen.changed
-      package: com.android.settings
-      ui:
-        ui_ready: true
-        form_key: form.primary
-    timeout: 10s
-    max_retry: 2
     on_success: click_save
-    on_failure: terminal
+    on_failure: click_save
 
   # ── Step 6: tap "Save" ─────────────────────────────────────────────────────
   click_save:
@@ -145,15 +134,5 @@ steps:
       target:
         kind: resource_id
         value: "android:id/button1"
-    # Expect Settings package to remain on screen after dialog is dismissed.
-    # No text_contains: the hostname may not appear verbatim in snapshotAfter
-    # (device may show "Couldn't connect" or other status text instead).
-    expect:
-      kind: android.screen.changed
-      package: com.android.settings
-      ui:
-        ui_ready: true
-    timeout: 15s
-    max_retry: 2
     on_success: terminal
     on_failure: terminal

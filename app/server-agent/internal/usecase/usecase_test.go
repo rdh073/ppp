@@ -55,7 +55,7 @@ func loopWorkflowDef() *domain.WorkflowDef {
 		Steps: map[string]domain.StepDef{
 			"run": {
 				Trigger:   domain.EventMatch{}, // matches any event
-				OnSuccess: "run",              // stay in same step
+				OnSuccess: "run",               // stay in same step
 				OnFailure: "terminal",
 			},
 		},
@@ -80,6 +80,10 @@ func TestHello_RegistersSessionAndFiresOnlineEvent(t *testing.T) {
 		DeviceID:        "dev-1",
 		AgentInstanceID: "inst-1",
 		Capabilities:    []domain.Capability{{Name: "observe"}},
+		DeviceMetadata: domain.AgentDeviceMetadata{
+			Manufacturer: "Google",
+			Model:        "Pixel 7",
+		},
 	}, noopSender{})
 	if err != nil {
 		t.Fatalf("Hello: %v", err)
@@ -89,6 +93,10 @@ func TestHello_RegistersSessionAndFiresOnlineEvent(t *testing.T) {
 	_, _, ok := reg.GetByDevice("dev-1")
 	if !ok {
 		t.Error("session not found by device after Hello")
+	}
+	session, _, _ := reg.GetByDevice("dev-1")
+	if session.DeviceMetadata.Model != "Pixel 7" {
+		t.Errorf("expected metadata model Pixel 7, got %q", session.DeviceMetadata.Model)
 	}
 	// SessionID must be returned.
 	if resp.SessionID == "" {
@@ -174,6 +182,25 @@ func TestDisconnect_RemovesSessionAndFiresOfflineEvent(t *testing.T) {
 	}
 	if len(proc.events) != 1 || proc.events[0].Kind != domain.EventKindAgentOffline {
 		t.Errorf("expected AgentOffline event, got %v", proc.events)
+	}
+}
+
+func TestDisconnect_Idempotent_NoDuplicateOfflineEvent(t *testing.T) {
+	reg := registry.New()
+	proc := &recordingProcessor{}
+	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+
+	resp, _ := uc.Hello(context.Background(), usecase.HelloRequest{DeviceID: "dev-idempotent"}, noopSender{})
+	proc.events = nil
+
+	uc.Disconnect(context.Background(), "dev-idempotent", resp.SessionID)
+	uc.Disconnect(context.Background(), "dev-idempotent", resp.SessionID)
+
+	if len(proc.events) != 1 {
+		t.Fatalf("expected exactly one offline event, got %d", len(proc.events))
+	}
+	if proc.events[0].Kind != domain.EventKindAgentOffline {
+		t.Fatalf("expected offline event kind, got %s", proc.events[0].Kind)
 	}
 }
 
@@ -288,6 +315,33 @@ func TestCreateTask_WithUnconnectedDevice_Error(t *testing.T) {
 	}
 }
 
+func TestCreateTask_WithConnectedDevice_Busy_Error(t *testing.T) {
+	reg := registry.New()
+	sess := &domain.Session{ID: "sess-busy", DeviceID: "dev-busy", ConnectedAt: time.Now(), LastHeartbeatAt: time.Now()}
+	_ = reg.Add(sess, noopSender{})
+
+	uc, _ := newTaskUC(reg)
+
+	first, err := uc.CreateTask(context.Background(), usecase.CreateTaskRequest{
+		Goal:     "first task",
+		DeviceID: "dev-busy",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask first: %v", err)
+	}
+	if first.Status != domain.TaskStatusRunning {
+		t.Fatalf("expected first task running, got %s", first.Status)
+	}
+
+	_, err = uc.CreateTask(context.Background(), usecase.CreateTaskRequest{
+		Goal:     "second task",
+		DeviceID: "dev-busy",
+	})
+	if err == nil {
+		t.Fatal("expected error when creating second active task on same device")
+	}
+}
+
 func TestCreateTask_EmptyGoal_Error(t *testing.T) {
 	reg := registry.New()
 	uc, _ := newTaskUC(reg)
@@ -350,5 +404,66 @@ func TestGetTask_NotFound_Error(t *testing.T) {
 	_, err := uc.GetTask(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing task")
+	}
+}
+
+func TestListTasks_EnrichesWorkflowAndOutbox(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	tasks := store.NewMemoryTaskStore()
+	states := store.NewMemoryWorkflowStateStore()
+	outbox := store.NewMemoryCommandOutboxStore()
+	uc := usecase.NewTaskControl(tasks, states, &recordingProcessor{}, reg, newLog())
+	uc.SetCommandOutbox(outbox)
+
+	task := &domain.Task{
+		ID:             domain.TaskID("task-list-1"),
+		Goal:           "list me",
+		Status:         domain.TaskStatusRunning,
+		AssignedDevice: domain.DeviceID("dev-list"),
+		WorkflowName:   "android-settings-private-dns",
+		CreatedAt:      time.Now().Add(-2 * time.Minute),
+		UpdatedAt:      time.Now().Add(-1 * time.Minute),
+	}
+	if err := tasks.Save(ctx, task); err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	ws := domain.NewWorkflowState(task.ID, task.AssignedDevice)
+	ws.CurrentStep = "click_save"
+	ws.RetryCount = 2
+	if err := states.Save(ctx, ws); err != nil {
+		t.Fatalf("save workflow state: %v", err)
+	}
+
+	cmd := domain.Command{
+		ID:       "cmd-list-1",
+		Kind:     domain.CommandKindExecute,
+		DeviceID: task.AssignedDevice,
+		TaskID:   task.ID,
+		IssuedAt: time.Now().Add(-30 * time.Second),
+	}
+	if err := outbox.SaveIssued(ctx, cmd); err != nil {
+		t.Fatalf("save issued command: %v", err)
+	}
+	if err := outbox.MarkDispatchFailed(ctx, cmd.ID, "context deadline exceeded", time.Now()); err != nil {
+		t.Fatalf("mark dispatch failed: %v", err)
+	}
+
+	items, err := uc.ListTasks(ctx, usecase.ListTaskQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 task summary, got %d", len(items))
+	}
+	if items[0].CurrentStep != "click_save" || items[0].RetryCount != 2 {
+		t.Fatalf("unexpected workflow diagnostics: %+v", items[0])
+	}
+	if items[0].LastCommandStatus != domain.CommandOutboxStatusDispatchFailed {
+		t.Fatalf("unexpected last command status: %+v", items[0])
+	}
+	if items[0].LastCommandError == "" {
+		t.Fatalf("expected last command error to be set")
 	}
 }

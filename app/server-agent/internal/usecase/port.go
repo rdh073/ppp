@@ -19,7 +19,9 @@ type AgentLifecycle interface {
 // TaskControl is the primary port for the HTTP task handler.
 type TaskControl interface {
 	CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error)
+	ListTasks(ctx context.Context, query ListTaskQuery) ([]TaskSummary, error)
 	GetTask(ctx context.Context, taskID domain.TaskID) (*domain.Task, error)
+	GetTaskSummary(ctx context.Context, taskID domain.TaskID) (*TaskSummary, error)
 	CancelTask(ctx context.Context, taskID domain.TaskID) error
 }
 
@@ -28,6 +30,7 @@ type EventPlaneControl interface {
 	ListAccepted(ctx context.Context, query AcceptedEventListQuery) (AcceptedEventPage, error)
 	ListDeadLetters(ctx context.Context, query DeadLetterListQuery) (DeadLetterPage, error)
 	GetAccepted(ctx context.Context, eventID string) (*domain.AcceptedEventRecord, error)
+	GetAcceptedPayload(ctx context.Context, eventID string, maxBytes int) (*AcceptedPayloadPreview, error)
 	GetDeadLetter(ctx context.Context, deadLetterID string) (*domain.DeadLetterRecord, error)
 	ReplayAccepted(ctx context.Context, eventID string) error
 	ReplayDeadLetter(ctx context.Context, deadLetterID string) error

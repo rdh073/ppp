@@ -1,21 +1,50 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
-export function usePolling(fetcher: () => Promise<void>, intervalMs: number, enabled: boolean): () => void {
+interface PollingOptions {
+  enabled?: boolean;
+  immediate?: boolean;
+  pauseWhenHidden?: boolean;
+}
+
+export function usePolling(
+  fetcher: () => Promise<void>,
+  intervalMs: number,
+  options: PollingOptions = {},
+): () => void {
+  const { enabled = true, immediate = true, pauseWhenHidden = true } = options;
+  const inFlightRef = useRef(false);
+  const timerRef = useRef<number | null>(null);
+
   const run = useCallback(() => {
-    void fetcher();
-  }, [fetcher]);
+    if (inFlightRef.current) {
+      return;
+    }
+    if (pauseWhenHidden && document.visibilityState === 'hidden') {
+      return;
+    }
+    inFlightRef.current = true;
+    void fetcher().finally(() => {
+      inFlightRef.current = false;
+    });
+  }, [fetcher, pauseWhenHidden]);
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
 
-    run();
-    const id = window.setInterval(run, intervalMs);
+    if (immediate) {
+      run();
+    }
+
+    timerRef.current = window.setInterval(run, intervalMs);
     return () => {
-      window.clearInterval(id);
+      if (timerRef.current !== null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [run, intervalMs, enabled]);
+  }, [enabled, immediate, intervalMs, run]);
 
   return run;
 }

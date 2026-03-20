@@ -218,6 +218,7 @@ func main() {
 
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, runtime, reg, log)
 	taskUC.SetAssigner(assigner)
+	taskUC.SetCommandOutbox(commandOutbox)
 
 	orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
 	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
@@ -230,6 +231,7 @@ func main() {
 	go bindingManager.Run(serverCtx, cfg.ADB.ReconcileInterval.D())
 	eventUC := usecase.NewEventIngestionWithBindings(runtime, bindingManager, log)
 	lifecycleUC.SetForgetDevice(eventUC.ForgetDevice)
+	lifecycleUC.SetConnectedNotifier(bindingManager)
 	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log, metricsRegistry)
 
 	// --- handlers ---

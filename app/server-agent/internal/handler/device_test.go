@@ -82,6 +82,10 @@ func TestDeviceHandler_GetMergesSessionAndBinding(t *testing.T) {
 		DeviceID:        "dev-1",
 		AgentInstanceID: "agent-1",
 		Capabilities:    []domain.Capability{{Name: "observe"}},
+		DeviceMetadata: domain.AgentDeviceMetadata{
+			Manufacturer: "Google",
+			Model:        "Pixel 7",
+		},
 		ConnectedAt:     now,
 		LastHeartbeatAt: now.Add(time.Minute),
 	}
@@ -121,6 +125,9 @@ func TestDeviceHandler_GetMergesSessionAndBinding(t *testing.T) {
 	}
 	if got.ADBSerial != "emulator-5554" {
 		t.Fatalf("ADBSerial = %q, want emulator-5554", got.ADBSerial)
+	}
+	if got.AndroidIdentity != "Google Pixel 7" {
+		t.Fatalf("AndroidIdentity = %q, want %q", got.AndroidIdentity, "Google Pixel 7")
 	}
 	if got.IdentityStatus != domain.DeviceIdentityStatusVerified {
 		t.Fatalf("IdentityStatus = %q, want %q", got.IdentityStatus, domain.DeviceIdentityStatusVerified)

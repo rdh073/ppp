@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,15 @@ func (h *WorkflowHandler) list(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	sort.SliceStable(defs, func(i, j int) bool {
+		if defs[i] == nil {
+			return false
+		}
+		if defs[j] == nil {
+			return true
+		}
+		return defs[i].Name < defs[j].Name
+	})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(defs)
 }

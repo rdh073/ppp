@@ -244,6 +244,8 @@ config/tools/
   prompts/                LLM prompt files (referenced from manifests)
 ```
 
+Setup detail per provider: `config/tools/README.md`.
+
 ### Supported Provider Kinds
 
 | Kind | Description | Required Env Vars |

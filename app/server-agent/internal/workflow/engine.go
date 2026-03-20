@@ -167,7 +167,7 @@ func (e *Engine) executeStep(
 	}
 
 	if out.Err != nil {
-		return e.handleFailure(state, step)
+		return e.routeFailure(ctx, state, step, def, task)
 	}
 
 	// Merge node outputs into state before routing; advance() will clone once.
@@ -207,14 +207,14 @@ func (e *Engine) processWaiting(
 				next.RetryCount++
 				return e.executeStep(ctx, next, step, task, def)
 			}
-			return e.handleFailure(state, step)
+			return e.routeFailure(ctx, state, step, def, task)
 		}
 		return nil, false, nil // deadline not yet reached; ignore
 	}
 
 	// Deadline expired: treat as step failure.
 	if !state.DeadlineAt.IsZero() && time.Now().After(state.DeadlineAt) {
-		return e.handleFailure(state, step)
+		return e.routeFailure(ctx, state, step, def, task)
 	}
 	// Confirming event arrived.
 	if MatchExpect(*state.WaitingExpect, event) {
@@ -309,6 +309,29 @@ func (e *Engine) handleFailure(state *domain.WorkflowState, step domain.StepDef)
 	next.RetryCount = 0
 	next.CurrentStep = step.OnFailure
 	return next, next.IsTerminal(), nil
+}
+
+// routeFailure applies retry/on_failure routing and immediately executes
+// empty-trigger failure branches in the same cycle.
+func (e *Engine) routeFailure(
+	ctx context.Context,
+	state *domain.WorkflowState,
+	step domain.StepDef,
+	def *domain.WorkflowDef,
+	task *domain.Task,
+) (*domain.WorkflowState, bool, error) {
+	next, terminal, err := e.handleFailure(state, step)
+	if err != nil || terminal || next == nil {
+		return next, terminal, err
+	}
+	if next.CurrentStep == "" {
+		return next, false, nil
+	}
+	target, ok := def.Steps[next.CurrentStep]
+	if !ok || !target.Trigger.IsEmpty() {
+		return next, false, nil
+	}
+	return e.advance(ctx, next, next.CurrentStep, def, task)
 }
 
 func (e *Engine) resolveDef(ctx context.Context, name string) (*domain.WorkflowDef, error) {
