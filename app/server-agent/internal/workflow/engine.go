@@ -101,16 +101,16 @@ func (e *Engine) Handle(ctx context.Context, cmd EngineCommand) (EngineResult, e
 	//      The watchdog fires a tick so retries happen within one tick interval
 	//      instead of waiting for the next device-originated event (up to 30 s).
 	if event.Kind == domain.EventKindWorkflowTick {
-		if state.RetryCount > 0 && step.Action != nil {
+		if state.RetryCount > 0 && (step.Action != nil || step.Script != nil) {
 			newState, terminal, err := e.executeStep(ctx, state, step, task, def)
 			return EngineResult{State: newState, Terminal: terminal}, err
 		}
 		return EngineResult{}, nil
 	}
 
-	// Retry: trigger was already matched once; re-execute the action on the
+	// Retry: trigger was already matched once; re-execute the action/script on the
 	// first incoming event (any kind) without re-matching the trigger.
-	if state.RetryCount > 0 && step.Action != nil {
+	if state.RetryCount > 0 && (step.Action != nil || step.Script != nil) {
 		newState, terminal, err := e.executeStep(ctx, state, step, task, def)
 		return EngineResult{State: newState, Terminal: terminal}, err
 	}
@@ -132,6 +132,9 @@ func (e *Engine) nodeFor(step domain.StepDef) Node {
 	if step.ToolCall != nil {
 		return &ToolCallNode{tools: e.tools}
 	}
+	if step.Script != nil {
+		return &ScriptNode{disp: e.disp}
+	}
 	return routingNode{}
 }
 
@@ -152,7 +155,7 @@ func (e *Engine) executeStep(
 	def *domain.WorkflowDef,
 ) (*domain.WorkflowState, bool, error) {
 	// Action-less expect (unusual but valid: wait for an event without dispatching).
-	if step.Action == nil && step.ToolCall == nil && step.Expect != nil {
+	if step.Action == nil && step.ToolCall == nil && step.Script == nil && step.Expect != nil {
 		timeout := parseDuration(step.Timeout, defaultStepTimeout)
 		next := cloneState(state)
 		exp := *step.Expect
@@ -200,7 +203,7 @@ func (e *Engine) processWaiting(
 			// If retry budget remains and there is an action, re-execute immediately
 			// rather than deferring to the next device event. This ensures the retry
 			// fires within one watchdog interval even when no device event is pending.
-			if state.RetryCount < step.MaxRetry && step.Action != nil {
+			if state.RetryCount < step.MaxRetry && (step.Action != nil || step.Script != nil) {
 				next := cloneState(state)
 				next.WaitingExpect = nil
 				next.DeadlineAt = time.Time{}
@@ -260,7 +263,7 @@ func (e *Engine) advance(
 		if !ok || !step.Trigger.IsEmpty() {
 			break // stop: step waits for a device event to activate
 		}
-		if step.ToolCall == nil && step.Action == nil {
+		if step.ToolCall == nil && step.Action == nil && step.Script == nil {
 			break // stop: pure routing step — auto-executing would loop if OnSuccess points back here
 		}
 

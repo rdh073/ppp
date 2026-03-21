@@ -236,7 +236,7 @@ func main() {
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
-	deviceHandler := handler.NewDeviceHandler(reg, log, bindingManager)
+	deviceHandler := handler.NewDeviceHandler(reg, log, bindingManager).WithDispatcher(disp)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)

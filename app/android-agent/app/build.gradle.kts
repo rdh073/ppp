@@ -8,6 +8,13 @@ android {
     namespace = "com.autosdk.agent"
     compileSdk = 34
 
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.autosdk.agent"
         minSdk = 26
@@ -43,6 +50,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    implementation(libs.rhino)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
 }

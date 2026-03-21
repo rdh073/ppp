@@ -29,9 +29,19 @@ func Validate(def *domain.WorkflowDef) error {
 		if !isValidTarget(def, step.OnFailure) {
 			errs = append(errs, fmt.Errorf("step %q: on_failure %q is not a valid step or \"terminal\"", id, step.OnFailure))
 		}
-		// (c) A step must not have both Action and ToolCall set.
-		if step.Action != nil && step.ToolCall != nil {
-			errs = append(errs, fmt.Errorf("step %q: action and tool_call are mutually exclusive", id))
+		// (c) At most one of action, tool_call, or script may be set.
+		exclusiveCount := 0
+		if step.Action != nil {
+			exclusiveCount++
+		}
+		if step.ToolCall != nil {
+			exclusiveCount++
+		}
+		if step.Script != nil {
+			exclusiveCount++
+		}
+		if exclusiveCount > 1 {
+			errs = append(errs, fmt.Errorf("step %q: action, tool_call, and script are mutually exclusive", id))
 		}
 		errs = append(errs, validateStep(id, step)...)
 	}
@@ -64,7 +74,23 @@ func validateStep(stepID string, step domain.StepDef) []error {
 	if step.Action != nil {
 		errs = append(errs, validateAction(stepID, *step.Action)...)
 	}
+	if step.Script != nil {
+		errs = append(errs, validateScript(stepID, *step.Script)...)
+	}
 
+	return errs
+}
+
+func validateScript(stepID string, script domain.ScriptDef) []error {
+	var errs []error
+	if strings.TrimSpace(script.Source) == "" {
+		errs = append(errs, fmt.Errorf("step %q: script.source is required", stepID))
+	}
+	if script.Timeout != "" {
+		if _, err := time.ParseDuration(script.Timeout); err != nil {
+			errs = append(errs, fmt.Errorf("step %q: script.timeout %q: %w", stepID, script.Timeout, err))
+		}
+	}
 	return errs
 }
 

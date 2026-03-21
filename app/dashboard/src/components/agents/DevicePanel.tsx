@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useDevices } from '../../hooks/useDevices';
 import { getAndroidIdentity } from '../../utils/deviceIdentity';
 import { ScrcpyView } from './ScrcpyView';
+import { GroupMirrorView } from './GroupMirrorView';
+import { useGroupStore, type DeviceGroup } from '../../store/groups';
+import { executeDeviceAction } from '../../api/devices';
 import type { Device } from '../../types';
 
 const DEFAULT_MAX_SCRCPY_SESSIONS = 6;
@@ -237,9 +240,10 @@ interface BulkBarProps {
   count: number;
   onClear: () => void;
   onScrcpyAll: () => void;
+  onCreateGroup?: () => void;
 }
 
-function BulkBar({ count, onClear, onScrcpyAll }: BulkBarProps) {
+function BulkBar({ count, onClear, onScrcpyAll, onCreateGroup }: BulkBarProps) {
   if (count === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 transition-all duration-200"
@@ -252,6 +256,12 @@ function BulkBar({ count, onClear, onScrcpyAll }: BulkBarProps) {
           onClick={onScrcpyAll}>
           Mirror selected
         </button>
+        {count >= 2 && onCreateGroup && (
+          <button type="button" className="btn-secondary" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.6rem' }}
+            onClick={onCreateGroup}>
+            Create group
+          </button>
+        )}
         <button type="button" className="btn-secondary" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.6rem' }}
           onClick={onClear}>
           Deselect all
@@ -422,11 +432,16 @@ function capScrcpySessions(sessions: ScrcpySession[], maxSessions: number): Scrc
 
 export function DevicePanel() {
   const { devices, loading, error, refresh } = useDevices();
+  const { groups, addGroup, removeGroup } = useGroupStore();
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [scrcpySessions, setScrcpySessions] = useState<ScrcpySession[]>([]);
   const [maxScrcpySessions, setMaxScrcpySessions] = useState<number>(() => readStoredScrcpySessionLimit());
+  const [groupCreating, setGroupCreating] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupMaster, setGroupMaster] = useState('');
+  const [activeMirrorGroup, setActiveMirrorGroup] = useState<DeviceGroup | null>(null);
 
   const filtered = filterDevices(devices, search);
 
@@ -504,7 +519,61 @@ export function DevicePanel() {
     }
   }
 
+  function startGroupCreation() {
+    const selectedIds = [...selected];
+    setGroupMaster(selectedIds[0]);
+    setGroupName('Group ' + (groups.length + 1));
+    setGroupCreating(true);
+  }
+
+  function confirmGroupCreation() {
+    const slaveIds = [...selected].filter((id) => id !== groupMaster);
+    if (!groupMaster || slaveIds.length === 0) return;
+    addGroup({
+      id: `group-${Date.now()}`,
+      name: groupName.trim() || 'Group ' + (groups.length + 1),
+      masterDeviceId: groupMaster,
+      slaveDeviceIds: slaveIds,
+    });
+    setGroupCreating(false);
+    setGroupName('');
+    setGroupMaster('');
+    setSelected(new Set());
+  }
+
+  function mirrorGroup(group: DeviceGroup) {
+    setActiveMirrorGroup(group);
+  }
+
+  /** Returns an onTouchDevice callback for master devices that fans out taps to slaves. */
+  function makeTouchFanout(deviceId: string): ((type: 'down' | 'move' | 'up', x: number, y: number) => void) | undefined {
+    const group = groups.find((g) => g.masterDeviceId === deviceId);
+    if (!group || group.slaveDeviceIds.length === 0) return undefined;
+    return (type, x, y) => {
+      if (type !== 'down') return; // fan out taps only; move/up would flood
+      const value = `${x},${y}`;
+      for (const slaveId of group.slaveDeviceIds) {
+        void executeDeviceAction(slaveId, {
+          kind: 'click',
+          target: { kind: 'coordinate', value },
+        }).catch(() => {});
+      }
+    };
+  }
+
   const allSelected = filtered.length > 0 && filtered.every((d) => selected.has(d.deviceId));
+
+  if (activeMirrorGroup) {
+    return (
+      <section className="panel">
+        <GroupMirrorView
+          group={activeMirrorGroup}
+          devices={devices}
+          onExit={() => setActiveMirrorGroup(null)}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="panel">
@@ -578,7 +647,89 @@ export function DevicePanel() {
         count={selected.size}
         onClear={() => setSelected(new Set())}
         onScrcpyAll={handleScrcpySelected}
+        onCreateGroup={startGroupCreation}
       />
+
+      {/* inline group creation form */}
+      {groupCreating && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 mt-2"
+          style={{ borderColor: 'var(--border)', background: 'var(--surface-strong)' }}>
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--muted)' }}>New group</span>
+          <input
+            type="text"
+            placeholder="Group name"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            style={{ width: '160px' }}
+            aria-label="Group name"
+          />
+          <label htmlFor="group-master-select" className="flex items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+            Master:
+            <select
+              id="group-master-select"
+              value={groupMaster}
+              onChange={(e) => setGroupMaster(e.target.value)}
+              style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem' }}
+            >
+              {[...selected].map((id) => {
+                const d = devices.find((x) => x.deviceId === id);
+                return (
+                  <option key={id} value={id}>
+                    {d ? getAndroidIdentity(d) || id : id}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          <div className="flex gap-2 ml-auto">
+            <button type="button" className="topbar-link" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.8rem' }}
+              onClick={confirmGroupCreation}>
+              Save group
+            </button>
+            <button type="button" className="btn-secondary" style={{ minHeight: '30px', fontSize: '0.73rem', padding: '0.25rem 0.6rem' }}
+              onClick={() => setGroupCreating(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* groups section */}
+      {groups.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {groups.map((group) => {
+            const masterDevice = devices.find((d) => d.deviceId === group.masterDeviceId);
+            const masterName = masterDevice ? getAndroidIdentity(masterDevice) || group.masterDeviceId : group.masterDeviceId;
+            return (
+              <div key={group.id} className="flex items-center gap-2 rounded-xl border px-3 py-1.5"
+                style={{ borderColor: 'var(--border)', background: 'var(--surface)', fontSize: '0.75rem' }}>
+                <span className="font-semibold">{group.name}</span>
+                <span className="inline-flex items-center gap-1" style={{ color: 'var(--muted)' }}>
+                  {/* master crown icon */}
+                  <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 20h20M5 20V9l7-5 7 5v11" />
+                  </svg>
+                  {masterName}
+                </span>
+                <span style={{ color: 'var(--muted)' }}>
+                  {group.slaveDeviceIds.length} slave{group.slaveDeviceIds.length !== 1 ? 's' : ''}
+                </span>
+                <button type="button" className="btn-secondary" style={{ minHeight: '24px', fontSize: '0.68rem', padding: '0.1rem 0.5rem' }}
+                  onClick={() => mirrorGroup(group)}>
+                  Mirror
+                </button>
+                <button type="button" className="btn-danger" style={{ minHeight: '24px', fontSize: '0.68rem', padding: '0.1rem 0.4rem' }}
+                  onClick={() => removeGroup(group.id)}
+                  aria-label={`Delete group ${group.name}`}>
+                  <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* content */}
       {filtered.length === 0 ? (
@@ -655,6 +806,7 @@ export function DevicePanel() {
                 adbSerial={session.adbSerial}
                 deviceName={session.deviceName}
                 onClose={() => closeScrcpyBySessionId(session.id)}
+                onTouchDevice={makeTouchFanout(session.deviceId)}
               />
             ))}
           </div>

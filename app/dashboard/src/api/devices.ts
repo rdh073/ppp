@@ -12,3 +12,14 @@ export function getDevice(deviceId: string): Promise<Device> {
     method: 'GET',
   });
 }
+
+export function executeDeviceAction(
+  deviceId: string,
+  action: { kind: string; target?: { kind: string; value: string }; [key: string]: unknown },
+): Promise<unknown> {
+  return requestJson(`/devices/${encodeURIComponent(deviceId)}/execute`, {
+    method: 'POST',
+    body: { action },
+    timeoutMs: 15_000,
+  });
+}

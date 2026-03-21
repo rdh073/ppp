@@ -7,13 +7,18 @@ import com.autosdk.agent.action.FieldFill
 import com.autosdk.agent.action.ScrollDirection
 import com.autosdk.agent.action.Selector
 import com.autosdk.agent.action.SelectorKind
+import com.autosdk.agent.agent.script.JsAutomationBridge
+import com.autosdk.agent.agent.script.JsRuntime
 import com.autosdk.agent.observation.UiSnapshot
 import com.autosdk.agent.observation.UiTarget
 import com.autosdk.agent.state.AgentEvent
 import com.autosdk.agent.transport.AgentTransport
 import com.autosdk.agent.transport.JsonRpcErrorCode
 import com.autosdk.agent.transport.JsonRpcRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
@@ -23,7 +28,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import okhttp3.OkHttpClient
 
 private const val TAG = "AgentRuntime"
 
@@ -48,6 +55,7 @@ class AgentRuntime(
     private val automationDriver: AgentAutomationDriver,
     private val deviceId: String,
     private val capabilities: List<Map<String, Any>>,
+    private val okHttpClient: OkHttpClient = OkHttpClient(),
     private val onExecutionEvent: suspend (AgentEvent) -> Unit = {},
 ) {
 
@@ -66,6 +74,7 @@ class AgentRuntime(
                 "device.query" -> handleQuery(req)
                 "device.execute" -> handleExecute(req)
                 "device.capabilities.get" -> handleCapabilitiesGet(req)
+                "device.script" -> handleScript(req)
                 else -> transport.sendError(
                     req.id,
                     JsonRpcErrorCode.METHOD_NOT_FOUND,
@@ -229,6 +238,53 @@ class AgentRuntime(
 
     private suspend fun handleCapabilitiesGet(req: JsonRpcRequest) {
         transport.sendSuccess(req.id, AgentCapabilities.capabilitiesToJson(capabilities))
+    }
+
+    private suspend fun handleScript(req: JsonRpcRequest) {
+        val params = req.params.jsonObject
+        val source = params["script"]?.jsonPrimitive?.contentOrNull
+            ?: run {
+                sendTrackedError(req.id, JsonRpcErrorCode.INVALID_PARAMS, "Missing 'script'")
+                return
+            }
+        val scriptParams = params["params"]?.jsonObject
+            ?.entries?.associate { (k, v) -> k to (v.jsonPrimitive.contentOrNull ?: "") }
+            ?: emptyMap()
+        val timeoutMs = params["timeout"]?.jsonPrimitive?.longOrNull ?: 30_000L
+
+        val logs = mutableListOf<String>()
+        val bridge = JsAutomationBridge(snapshotBuilder, automationDriver, okHttpClient, logs)
+        val runtime = JsRuntime(bridge)
+
+        val result = withContext(Dispatchers.IO) {
+            runtime.execute(source, scriptParams, timeoutMs)
+        }
+
+        result.fold(
+            onSuccess = { r ->
+                sendTrackedSuccess(
+                    req.id,
+                    buildJsonObject {
+                        put("output", buildJsonObject {
+                            r.output.forEach { (k, v) ->
+                                when (v) {
+                                    is Boolean -> put(k, v)
+                                    is Number -> put(k, v.toDouble())
+                                    is String -> put(k, v)
+                                    null -> put(k, JsonNull)
+                                    else -> put(k, v.toString())
+                                }
+                            }
+                        })
+                        put("logs", buildJsonArray { r.logs.forEach { add(it) } })
+                        put("durationMs", r.durationMs)
+                    },
+                )
+            },
+            onFailure = { e ->
+                sendTrackedError(req.id, JsonRpcErrorCode.SCRIPT_ERROR, e.message ?: "Script error")
+            },
+        )
     }
 
     private suspend fun sendTrackedSuccess(

@@ -12,6 +12,7 @@ const (
 	CommandKindQuery        CommandKind = "device.query"
 	CommandKindExecute      CommandKind = "device.execute"
 	CommandKindCapabilities CommandKind = "device.capabilities.get"
+	CommandKindScript       CommandKind = "device.script"
 )
 
 // Command is an instruction the server sends to an android-agent via JSON-RPC.

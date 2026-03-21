@@ -78,6 +78,76 @@ func TestValidate_BothActionAndToolCall(t *testing.T) {
 	}
 }
 
+func TestValidate_BothActionAndScript(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Action:    &domain.ActionDef{Kind: domain.ActionKindObserve},
+		Script:    &domain.ScriptDef{Source: "return {};"},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	if err := workflow.Validate(def); err == nil {
+		t.Fatal("expected error when both action and script are set")
+	}
+}
+
+func TestValidate_BothToolCallAndScript(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		ToolCall:  &domain.ToolCallDef{ToolName: "some.tool"},
+		Script:    &domain.ScriptDef{Source: "return {};"},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	if err := workflow.Validate(def); err == nil {
+		t.Fatal("expected error when both tool_call and script are set")
+	}
+}
+
+func TestValidate_ScriptMissingSource(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Script:    &domain.ScriptDef{Source: ""},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error when script.source is empty")
+	}
+	if !strings.Contains(err.Error(), "script.source") {
+		t.Fatalf("expected script.source in error, got: %v", err)
+	}
+}
+
+func TestValidate_ScriptValidTimeout(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Script:    &domain.ScriptDef{Source: "return {};", Timeout: "45s"},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	if err := workflow.Validate(def); err != nil {
+		t.Fatalf("expected valid script def to pass, got: %v", err)
+	}
+}
+
+func TestValidate_ScriptInvalidTimeout(t *testing.T) {
+	def := validDef()
+	def.Steps["start"] = domain.StepDef{
+		Script:    &domain.ScriptDef{Source: "return {};", Timeout: "not-valid"},
+		OnSuccess: "terminal",
+		OnFailure: "terminal",
+	}
+	err := workflow.Validate(def)
+	if err == nil {
+		t.Fatal("expected error for invalid script.timeout")
+	}
+	if !strings.Contains(err.Error(), "script.timeout") {
+		t.Fatalf("expected script.timeout in error, got: %v", err)
+	}
+}
+
 func TestValidate_MultiStep_AllValid(t *testing.T) {
 	def := &domain.WorkflowDef{
 		Name:  "multi",

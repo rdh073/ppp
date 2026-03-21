@@ -26,9 +26,15 @@ interface Props {
   /** Known ADB serial (e.g. "192.168.1.10:5555"). Used as-is when provided. */
   adbSerial?: string;
   deviceName?: string;
+  /**
+   * Called on each pointer event with device-space coordinates.
+   * Use this to fan out touch events to slave devices in a group.
+   * Only fires when video coordinates are available (after stream starts).
+   */
+  onTouchDevice?: (type: 'down' | 'move' | 'up', x: number, y: number) => void;
 }
 
-export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdbSerial, deviceName }: Props) {
+export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdbSerial, deviceName, onTouchDevice }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [mode, setMode] = useState<Mode>(deviceId ? 'network' : 'usb');
@@ -216,6 +222,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         buttons: 0,
       })
       .catch(() => {});
+    onTouchDevice?.('down', coords.x, coords.y);
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -235,6 +242,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         buttons: 0,
       })
       .catch(() => {});
+    onTouchDevice?.('move', coords.x, coords.y);
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
@@ -254,6 +262,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         buttons: 0,
       })
       .catch(() => {});
+    onTouchDevice?.('up', coords.x, coords.y);
   }
 
   const modeLabel = mode === 'usb' ? 'Scrcpy (USB)' : 'Scrcpy (Network)';

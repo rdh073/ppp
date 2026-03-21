@@ -29,7 +29,8 @@ type WorkflowDef struct {
 //	            is auto-executed immediately without waiting for a new device event.
 //	Action    — typed device command. Nil = routing or tool-call-only step.
 //	ToolCall  — synchronous tool invocation. Outputs are merged into WorkflowState.Inputs.
-//	            A step may have Action or ToolCall, not both.
+//	Script    — JS script executed on-device via device.script JSON-RPC. Return value
+//	            becomes step outputs. A step may have at most one of Action, ToolCall, Script.
 //	Expect    — event that confirms the action succeeded. Nil = advance immediately.
 //	OnSuccess — step id to advance to on success, or "terminal".
 //	OnFailure — step id to advance to on failure, or "terminal".
@@ -39,11 +40,23 @@ type StepDef struct {
 	Trigger   EventMatch   `yaml:"trigger"              json:"trigger"`
 	Action    *ActionDef   `yaml:"action,omitempty"     json:"action,omitempty"`
 	ToolCall  *ToolCallDef `yaml:"tool_call,omitempty"  json:"tool_call,omitempty"`
+	Script    *ScriptDef   `yaml:"script,omitempty"     json:"script,omitempty"`
 	Expect    *ExpectDef   `yaml:"expect,omitempty"     json:"expect,omitempty"`
 	OnSuccess string       `yaml:"on_success"           json:"on_success"`
 	OnFailure string       `yaml:"on_failure"           json:"on_failure"`
 	Timeout   string       `yaml:"timeout,omitempty"    json:"timeout,omitempty"`
 	MaxRetry  int          `yaml:"max_retry,omitempty"  json:"max_retry,omitempty"`
+}
+
+// ScriptDef runs a JS script on-device via the device.script JSON-RPC method.
+// Source is required. Params values support {{input.key}} interpolation.
+// Outputs maps top-level keys in the script return value to WorkflowState.Inputs keys.
+// Timeout overrides the step-level timeout (default 30s for scripts, longer than action default).
+type ScriptDef struct {
+	Source  string            `yaml:"source"             json:"source"`
+	Params  map[string]string `yaml:"params,omitempty"   json:"params,omitempty"`
+	Outputs map[string]string `yaml:"outputs,omitempty"  json:"outputs,omitempty"`
+	Timeout string            `yaml:"timeout,omitempty"  json:"timeout,omitempty"`
 }
 
 // ToolCallDef invokes a registered tool synchronously when a step is activated.

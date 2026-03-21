@@ -56,4 +56,5 @@ object JsonRpcErrorCode {
     const val TRANSITION_TIMEOUT = -32005
     const val TARGET_NOT_ACTIONABLE = -32006
     const val INPUT_REJECTED = -32007
+    const val SCRIPT_ERROR = -32008
 }

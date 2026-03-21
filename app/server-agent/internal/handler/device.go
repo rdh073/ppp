@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -20,13 +21,21 @@ type deviceBindingController interface {
 	Remediate(ctx context.Context, deviceID domain.DeviceID) (*domain.DeviceBinding, error)
 }
 
+// deviceCommandDispatcher dispatches a device.* command and returns a channel
+// that receives exactly one CommandResult then is closed.
+type deviceCommandDispatcher interface {
+	Dispatch(ctx context.Context, cmd domain.Command) (<-chan domain.CommandResult, error)
+}
+
 // DeviceHandler serves the connected-device API.
 //
-//	GET /devices      — list all currently connected devices
-//	GET /devices/{id} — get a single device by deviceId
+//	GET  /devices          — list all currently connected devices
+//	GET  /devices/{id}     — get a single device by deviceId
+//	POST /devices/{id}/execute — dispatch a device.execute command directly
 type DeviceHandler struct {
 	reg      registry.AgentRegistry
 	bindings deviceBindingController
+	disp     deviceCommandDispatcher
 	log      *slog.Logger
 }
 
@@ -36,6 +45,12 @@ func NewDeviceHandler(reg registry.AgentRegistry, log *slog.Logger, bindings ...
 		controller = bindings[0]
 	}
 	return &DeviceHandler{reg: reg, bindings: controller, log: log}
+}
+
+// WithDispatcher attaches a command dispatcher so that POST /devices/{id}/execute is served.
+func (h *DeviceHandler) WithDispatcher(disp deviceCommandDispatcher) *DeviceHandler {
+	h.disp = disp
+	return h
 }
 
 func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +74,8 @@ func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case len(parts) == 2 && parts[1] == "adb-ws":
 		h.adbWS(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "execute":
+		h.handleExecute(w, r, domain.DeviceID(parts[0]))
 	default:
 		h.handleBindingActions(w, r, domain.DeviceID(parts[0]), parts[1])
 	}
@@ -207,6 +224,55 @@ func (h *DeviceHandler) get(w http.ResponseWriter, r *http.Request, id domain.De
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessionToView(s, binding))
+}
+
+// handleExecute dispatches a device.execute command directly to the connected agent
+// and streams back the raw result.  Body must be valid JSON matching the
+// device.execute params schema: {"action": {"kind": "...", ...}}.
+func (h *DeviceHandler) handleExecute(w http.ResponseWriter, r *http.Request, id domain.DeviceID) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.disp == nil {
+		http.Error(w, "execute not configured", http.StatusNotImplemented)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	cmd := domain.Command{
+		ID:       domain.NewCommandID(),
+		Kind:     domain.CommandKindExecute,
+		DeviceID: id,
+		Params:   json.RawMessage(body),
+		IssuedAt: time.Now(),
+	}
+	ch, err := h.disp.Dispatch(r.Context(), cmd)
+	if err != nil {
+		http.Error(w, "dispatch: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	select {
+	case result := <-ch:
+		w.Header().Set("Content-Type", "application/json")
+		if !result.Success {
+			w.WriteHeader(http.StatusBadGateway)
+			msg := "command failed"
+			if result.Err != nil {
+				msg = result.Err.Message
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+			return
+		}
+		_, _ = w.Write(result.Raw)
+	case <-ctx.Done():
+		http.Error(w, "command timeout", http.StatusGatewayTimeout)
+	}
 }
 
 func (h *DeviceHandler) handleBindingActions(w http.ResponseWriter, r *http.Request, id domain.DeviceID, action string) {

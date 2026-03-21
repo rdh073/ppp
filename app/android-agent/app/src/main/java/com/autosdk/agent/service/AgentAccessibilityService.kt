@@ -25,6 +25,7 @@ import com.autosdk.agent.state.CoroutineHeartbeatScheduler
 import com.autosdk.agent.state.PendingAccessibilityDisabledEvent
 import com.autosdk.agent.state.SharedPreferencesAgentStateStore
 import com.autosdk.agent.state.toStatus
+import com.autosdk.agent.transport.createSharedClient
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -291,6 +292,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 automationDriver = automationDriver,
                 deviceId = deviceId,
                 capabilities = capabilityProvider(),
+                okHttpClient = createSharedClient(),
                 onExecutionEvent = { event -> localCoordinator.dispatch(event) },
             )
         runtime = rt

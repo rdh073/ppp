@@ -2147,6 +2147,163 @@
   }
 }
 
+/* ── Group Mirror View ─────────────────────────────────────────────────── */
+
+.group-mirror-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.group-mirror-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.group-mirror-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.group-mirror-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.group-mirror-count {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+}
+
+.group-mirror-legend {
+  display: flex;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.group-mirror-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.group-mirror-legend-master {
+  color: #e0af68;
+}
+
+.group-mirror-legend-slave {
+  color: var(--accent);
+}
+
+.group-mirror-layout {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+/* ── Master side ── */
+.group-mirror-master-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.group-mirror-master-label,
+.group-mirror-slave-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  padding: 0 0.25rem;
+}
+
+.group-mirror-master-label {
+  color: #e0af68;
+}
+
+.group-mirror-slave-label {
+  color: var(--accent);
+}
+
+.group-mirror-master-panel .scrcpy-shell {
+  margin-top: 0;
+  border-color: rgba(224, 175, 104, 0.5);
+}
+
+/* ── Slaves side ── */
+.group-mirror-slaves-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.group-mirror-slaves-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
+  align-content: start;
+}
+
+.group-mirror-slave-card .scrcpy-shell {
+  margin-top: 0;
+  padding: 0.6rem;
+}
+
+.group-mirror-slave-card .panel-subhead {
+  margin-bottom: 0.4rem;
+}
+
+.group-mirror-slave-card .scrcpy-session-badge {
+  font-size: 0.6rem;
+}
+
+.group-mirror-slave-card .btn-secondary {
+  min-height: 24px;
+  font-size: 0.68rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.group-mirror-offline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.5rem;
+  border-radius: 1rem;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 @keyframes panel-enter {
   from {
     opacity: 0;
