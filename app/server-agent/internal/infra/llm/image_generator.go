@@ -7,41 +7,52 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
+// ImageGeneratorConfig holds the endpoint and credentials for image generation.
+type ImageGeneratorConfig struct {
+	APIKey string
+	Model  string // default: "dall-e-3"
+	APIURL string // default: "https://api.openai.com/v1/images/generations"
+}
+
 // DallE3ImageGenerator calls OpenAI DALL-E 3 to generate an image.
 type DallE3ImageGenerator struct {
-	apiKey     string
+	cfg        ImageGeneratorConfig
 	httpClient *http.Client
 }
 
-func NewDallE3ImageGenerator() (*DallE3ImageGenerator, error) {
-	key := os.Getenv("AUTO_TOOL_OPENAI_API_KEY")
-	if key == "" {
-		return nil, fmt.Errorf("AUTO_TOOL_OPENAI_API_KEY is not set")
+func NewDallE3ImageGenerator(cfg ImageGeneratorConfig) (*DallE3ImageGenerator, error) {
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("image generation: api_key not configured")
+	}
+	if cfg.Model == "" {
+		cfg.Model = "dall-e-3"
+	}
+	if cfg.APIURL == "" {
+		cfg.APIURL = "https://api.openai.com/v1/images/generations"
 	}
 	return &DallE3ImageGenerator{
-		apiKey:     key,
+		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 	}, nil
 }
 
 func (g *DallE3ImageGenerator) GenerateImage(ctx context.Context, prompt string) ([]byte, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model":           "dall-e-3",
+		"model":           g.cfg.Model,
 		"prompt":          prompt,
 		"n":               1,
 		"size":            "1024x1024",
 		"response_format": "url",
 	})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/images/generations", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.cfg.APIURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Authorization", "Bearer "+g.cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.httpClient.Do(req)

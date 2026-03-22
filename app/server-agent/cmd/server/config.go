@@ -45,6 +45,7 @@ type Config struct {
 	Pruning      PruningConfig      `toml:"pruning"`
 	ADB          ADBConfig          `toml:"adb"`
 	Tools        ToolsConfig        `toml:"tools"`
+	LLM          LLMConfig          `toml:"llm"`
 }
 
 type ServerConfig struct {
@@ -108,6 +109,84 @@ type LLMToolConfig struct {
 	APIKey string `toml:"api_key"` // overridden by AUTO_TOOL_LLM_API_KEY env var
 }
 
+// ---------------------------------------------------------------------------
+// LLM provider registry + concern-based config
+// ---------------------------------------------------------------------------
+
+// LLMConfig organises all LLM settings by concern. Each concern references a
+// provider from the Providers map. This replaces the scattered env-var approach.
+type LLMConfig struct {
+	Providers       map[string]LLMProviderConfig `toml:"providers"`
+	AgentLoop       LLMConcernConfig             `toml:"agent_loop"`
+	TextGeneration  LLMConcernConfig             `toml:"text_generation"`
+	ImageGeneration LLMConcernConfig             `toml:"image_generation"`
+	Vision          LLMConcernConfig             `toml:"vision"`
+	ToolCatalog     LLMConcernConfig             `toml:"tool_catalog"`
+}
+
+// LLMProviderConfig holds credentials and endpoint for a single LLM provider.
+type LLMProviderConfig struct {
+	APIURL     string `toml:"api_url"`
+	APIKey     string `toml:"api_key"`
+	Model      string `toml:"model"`
+	APIVersion string `toml:"api_version"` // anthropic only
+}
+
+// LLMConcernConfig points a concern to a provider and allows per-concern overrides.
+type LLMConcernConfig struct {
+	Provider string `toml:"provider"` // key into LLMConfig.Providers
+	Fallback string `toml:"fallback"` // optional fallback provider key
+	Model    string `toml:"model"`    // override model for this concern
+}
+
+// ResolveProvider returns a ModelToolConfig and API version for the given concern
+// by looking up the referenced provider and applying concern-level overrides.
+func (c *LLMConfig) ResolveProvider(concern LLMConcernConfig) (LLMProviderConfig, bool) {
+	if concern.Provider == "" {
+		return LLMProviderConfig{}, false
+	}
+	p, ok := c.Providers[concern.Provider]
+	if !ok {
+		return LLMProviderConfig{}, false
+	}
+	if concern.Model != "" {
+		p.Model = concern.Model
+	}
+	return p, true
+}
+
+// ResolveFallback returns the fallback provider config for a concern, if set.
+func (c *LLMConfig) ResolveFallback(concern LLMConcernConfig) (LLMProviderConfig, bool) {
+	if concern.Fallback == "" {
+		return LLMProviderConfig{}, false
+	}
+	p, ok := c.Providers[concern.Fallback]
+	if !ok {
+		return LLMProviderConfig{}, false
+	}
+	return p, true
+}
+
+// SeedToolEnvVars sets AUTO_TOOL_<PROVIDER>_* environment variables from the
+// LLM provider registry so the existing providers.yaml mechanism picks them up.
+// Already-set env vars are never overwritten.
+func (c *LLMConfig) SeedToolEnvVars() {
+	seed := func(envKey, value string) {
+		if value != "" && os.Getenv(envKey) == "" {
+			os.Setenv(envKey, value)
+		}
+	}
+	for name, p := range c.Providers {
+		prefix := "AUTO_TOOL_" + strings.ToUpper(name)
+		seed(prefix+"_API_URL", p.APIURL)
+		seed(prefix+"_API_KEY", p.APIKey)
+		seed(prefix+"_MODEL", p.Model)
+		if p.APIVersion != "" {
+			seed(prefix+"_API_VERSION", p.APIVersion)
+		}
+	}
+}
+
 // DefaultConfig returns a Config populated with the same built-in defaults
 // that were previously hardcoded in main.go.
 func DefaultConfig() *Config {
@@ -160,6 +239,9 @@ func DefaultConfig() *Config {
 				APIURL: "",
 				Model:  "",
 			},
+		},
+		LLM: LLMConfig{
+			Providers: make(map[string]LLMProviderConfig),
 		},
 	}
 }
@@ -327,6 +409,101 @@ func (c *Config) applyEnvOverrides() error {
 	if v := envTrimmed("AUTO_TOOL_LLM_API_KEY"); v != "" {
 		c.Tools.LLM.APIKey = v
 	}
+
+	// --- LLM provider registry env overrides ---
+	// Pattern: AUTO_LLM_<PROVIDER>_<FIELD> overrides llm.providers.<provider>.<field>
+	for _, name := range []string{"openai", "anthropic", "deepseek", "gemini"} {
+		prefix := "AUTO_LLM_" + strings.ToUpper(name)
+		if v := envTrimmed(prefix + "_API_URL"); v != "" {
+			p := c.LLM.Providers[name]
+			p.APIURL = v
+			c.LLM.Providers[name] = p
+		}
+		if v := envTrimmed(prefix + "_API_KEY"); v != "" {
+			p := c.LLM.Providers[name]
+			p.APIKey = v
+			c.LLM.Providers[name] = p
+		}
+		if v := envTrimmed(prefix + "_MODEL"); v != "" {
+			p := c.LLM.Providers[name]
+			p.Model = v
+			c.LLM.Providers[name] = p
+		}
+		if v := envTrimmed(prefix + "_API_VERSION"); v != "" {
+			p := c.LLM.Providers[name]
+			p.APIVersion = v
+			c.LLM.Providers[name] = p
+		}
+	}
+
+	// Concern-level provider overrides.
+	if v := envTrimmed("AUTO_LLM_AGENT_LOOP_PROVIDER"); v != "" {
+		c.LLM.AgentLoop.Provider = v
+	}
+	if v := envTrimmed("AUTO_LLM_TEXT_GENERATION_PROVIDER"); v != "" {
+		c.LLM.TextGeneration.Provider = v
+	}
+	if v := envTrimmed("AUTO_LLM_IMAGE_GENERATION_PROVIDER"); v != "" {
+		c.LLM.ImageGeneration.Provider = v
+	}
+	if v := envTrimmed("AUTO_LLM_VISION_PROVIDER"); v != "" {
+		c.LLM.Vision.Provider = v
+	}
+	if v := envTrimmed("AUTO_LLM_TOOL_CATALOG_PROVIDER"); v != "" {
+		c.LLM.ToolCatalog.Provider = v
+	}
+
+	// --- Legacy env var compatibility ---
+	// Map old AUTO_TOOL_<PROVIDER>_* into llm.providers if not already set from TOML or AUTO_LLM_*.
+	legacyProviders := []struct {
+		name      string
+		keyEnv    string
+		modelEnv  string
+		urlEnv    string
+		verEnv    string
+		defaultURL string
+	}{
+		{"openai", "AUTO_TOOL_OPENAI_API_KEY", "AUTO_TOOL_OPENAI_MODEL", "AUTO_TOOL_OPENAI_API_URL", "", "https://api.openai.com/v1/chat/completions"},
+		{"anthropic", "AUTO_TOOL_ANTHROPIC_API_KEY", "AUTO_TOOL_ANTHROPIC_MODEL", "AUTO_TOOL_ANTHROPIC_API_URL", "AUTO_TOOL_ANTHROPIC_API_VERSION", "https://api.anthropic.com/v1/messages"},
+		{"deepseek", "AUTO_TOOL_DEEPSEEK_API_KEY", "AUTO_TOOL_DEEPSEEK_MODEL", "AUTO_TOOL_DEEPSEEK_API_URL", "", "https://api.deepseek.com/chat/completions"},
+		{"gemini", "AUTO_TOOL_GEMINI_API_KEY", "AUTO_TOOL_GEMINI_MODEL", "AUTO_TOOL_GEMINI_API_URL", "", "https://generativelanguage.googleapis.com/v1beta"},
+	}
+	for _, lp := range legacyProviders {
+		p := c.LLM.Providers[lp.name]
+		if p.APIKey == "" {
+			if v := envTrimmed(lp.keyEnv); v != "" {
+				p.APIKey = v
+			}
+		}
+		if p.Model == "" {
+			if v := envTrimmed(lp.modelEnv); v != "" {
+				p.Model = v
+			}
+		}
+		if p.APIURL == "" {
+			if v := envTrimmed(lp.urlEnv); v != "" {
+				p.APIURL = v
+			} else if p.APIKey != "" {
+				p.APIURL = lp.defaultURL
+			}
+		}
+		if lp.verEnv != "" && p.APIVersion == "" {
+			if v := envTrimmed(lp.verEnv); v != "" {
+				p.APIVersion = v
+			}
+		}
+		if p.APIKey != "" {
+			c.LLM.Providers[lp.name] = p
+		}
+	}
+
+	// Legacy AUTO_AGENT_LOOP_KIND → llm.agent_loop.provider (if not already set).
+	if c.LLM.AgentLoop.Provider == "" {
+		if v := envTrimmed("AUTO_AGENT_LOOP_KIND"); v != "" {
+			c.LLM.AgentLoop.Provider = v
+		}
+	}
+
 	return nil
 }
 

@@ -893,6 +893,107 @@
     @apply flex flex-wrap items-center gap-2;
   }
 
+  /* ── record macro modal ──────────────────────────────────────────────── */
+
+  .record-macro-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background: rgba(2, 6, 23, 0.65);
+    backdrop-filter: blur(4px);
+    z-index: 120;
+  }
+
+  .record-macro-modal {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1rem;
+    width: min(1400px, 100%);
+    max-height: min(92vh, 860px);
+    overflow: hidden;
+    border-radius: 1rem;
+    border: 1px solid var(--border);
+    background: var(--surface-strong);
+    box-shadow: 0 24px 64px rgba(2, 6, 23, 0.5);
+    padding: 1rem;
+  }
+
+  .record-macro-modal-scrcpy {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .record-macro-modal-controls {
+    min-width: 0;
+    max-height: min(88vh, 820px);
+    overflow-y: auto;
+  }
+
+  .record-macro-modal-connecting {
+    @apply flex items-center justify-center gap-2 rounded-xl border;
+    border-color: var(--border);
+    background: rgba(255, 255, 255, 0.02);
+    min-height: 300px;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  /* ── replay macro modal ───────────────────────────────────────────────────── */
+
+  .replay-macro-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background: rgba(2, 6, 23, 0.65);
+    backdrop-filter: blur(4px);
+    z-index: 120;
+  }
+
+  .replay-macro-modal {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    width: min(1400px, 100%);
+    max-height: min(92vh, 860px);
+    overflow: hidden;
+    border-radius: 1rem;
+    border: 1px solid var(--border);
+    background: var(--surface-strong);
+    box-shadow: 0 24px 64px rgba(2, 6, 23, 0.5);
+  }
+
+  .replay-macro-modal-left {
+    min-width: 0;
+    padding: 1.25rem;
+    overflow-y: auto;
+    max-height: min(92vh, 860px);
+  }
+
+  .replay-macro-modal-right {
+    min-width: 0;
+    padding: 1.25rem;
+    overflow-y: auto;
+    max-height: min(92vh, 860px);
+    border-left: 1px solid var(--border);
+  }
+
+  @media (max-width: 700px) {
+    .replay-macro-modal {
+      grid-template-columns: 1fr;
+      max-height: 95vh;
+    }
+    .replay-macro-modal-right {
+      border-left: none;
+      border-top: 1px solid var(--border);
+    }
+  }
+
   .field-hint {
     @apply m-0 text-xs leading-relaxed;
     color: var(--muted);
@@ -2139,6 +2240,21 @@
     .task-device-status {
       grid-column: 2;
       justify-self: start;
+    }
+
+    .record-macro-modal-backdrop {
+      padding: 0;
+      align-items: stretch;
+    }
+
+    .record-macro-modal {
+      grid-template-columns: 1fr;
+      width: 100%;
+      max-height: 100vh;
+      height: 100vh;
+      border-radius: 0;
+      padding: 0.75rem;
+      overflow-y: auto;
     }
 
     table {

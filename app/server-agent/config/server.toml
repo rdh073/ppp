@@ -39,6 +39,11 @@ accepted_events_age = "168h"
 dead_letters_age = "168h"
 command_outbox_age = "24h"
 
+[account_store]
+# driver = "file"   # "file" | "postgres"
+# When driver = "postgres", set the DSN via env var or here:
+# database_url = ""  # overridden by AUTO_ACCOUNT_DATABASE_URL env var
+
 [adb]
 host = "localhost"
 port = 5037
@@ -49,3 +54,48 @@ reconcile_interval = "30s"
 api_url = "https://api.openai.com/v1/chat/completions"
 model = "gpt-4.1-mini"
 api_key = "REPLACE_WITH_OPENAI_API_KEY"
+
+# ---------------------------------------------------------------------------
+# LLM Provider Registry — define credentials once, reference by concern
+# ---------------------------------------------------------------------------
+
+[llm.providers.openai]
+api_url = "https://api.openai.com/v1/chat/completions"
+api_key = "REPLACE_WITH_OPENAI_API_KEY"
+model   = "gpt-4o-mini"
+
+[llm.providers.anthropic]
+api_url     = "https://api.anthropic.com/v1/messages"
+api_key     = "REPLACE_WITH_ANTHROPIC_API_KEY"
+model       = "claude-sonnet-4-20250514"
+api_version = "2023-06-01"
+
+# [llm.providers.deepseek]
+# api_url = "https://api.deepseek.com/chat/completions"
+# api_key = ""
+# model   = "deepseek-chat"
+
+# [llm.providers.gemini]
+# api_url = "https://generativelanguage.googleapis.com/v1beta"
+# api_key = ""
+# model   = "gemini-2.0-flash"
+
+# ---------------------------------------------------------------------------
+# LLM Concerns — each picks a provider from the registry above
+# ---------------------------------------------------------------------------
+
+[llm.agent_loop]
+provider = "anthropic"    # AI-driven recording loop
+
+[llm.text_generation]
+provider = "anthropic"    # caption generation, content tools
+fallback = "openai"       # try this if primary fails
+
+[llm.image_generation]
+provider = "openai"       # DALL-E 3
+
+[llm.vision]
+provider = "anthropic"    # captcha solving, image analysis
+
+# [llm.tool_catalog]
+# provider = ""           # leave empty: tool catalog uses providers.yaml

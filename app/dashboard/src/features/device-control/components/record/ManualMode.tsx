@@ -20,7 +20,7 @@ export function ManualMode({ runState, seq, onStart, onStop }: ManualModeProps) 
         className="flex items-center gap-3 rounded-xl border px-3 py-2.5"
         style={{
           borderColor: isRecording ? 'rgba(239,68,68,0.35)' : 'var(--border)',
-          background: isRecording ? 'rgba(239,68,68,0.07)' : 'rgba(2,6,23,0.6)',
+          background: isRecording ? 'rgba(239,68,68,0.07)' : 'var(--surface)',
           transition: 'all 200ms ease',
         }}
       >

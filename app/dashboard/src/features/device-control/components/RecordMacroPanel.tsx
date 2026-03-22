@@ -14,7 +14,7 @@ function ModeTab({ active, onClick, children }: { active: boolean; onClick: () =
       type="button"
       onClick={onClick}
       style={{
-        background: active ? 'linear-gradient(180deg, var(--accent), var(--accent-strong))' : 'rgba(8,15,31,0.8)',
+        background: active ? 'linear-gradient(180deg, var(--accent), var(--accent-strong))' : 'var(--surface)',
         color: active ? 'var(--on-accent)' : 'var(--muted)',
         borderColor: active ? 'var(--accent)' : 'var(--border)',
         flex: 1,
@@ -53,8 +53,8 @@ export function RecordMacroPanel({ deviceId, deviceLabel, onClose }: RecordMacro
       className="rounded-2xl border"
       style={{
         borderColor: 'var(--border-strong)',
-        background: 'linear-gradient(180deg, rgba(8,15,31,0.98), rgba(2,6,23,0.96))',
-        boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        background: 'var(--surface-strong)',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.15)',
         overflow: 'hidden',
       }}
     >
@@ -93,7 +93,7 @@ export function RecordMacroPanel({ deviceId, deviceLabel, onClose }: RecordMacro
 
       <div className="p-4 grid gap-4">
         {/* mode tabs */}
-        <div className="flex gap-1.5 rounded-xl border p-1" style={{ borderColor: 'var(--border)', background: 'rgba(2,6,23,0.7)' }}>
+        <div className="flex gap-1.5 rounded-xl border p-1" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
           <ModeTab active={mode === 'manual'} onClick={() => handleModeChange('manual')}>
             <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="3" />

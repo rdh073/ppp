@@ -361,66 +361,79 @@ func wireInfra(serverCtx context.Context, serverCancel context.CancelFunc, cfg *
 	}
 }
 
-// wireLLM creates the LLM-backed components: captcha vision client and agent loop.
-// All configuration is sourced from environment variables.
+// wireLLM creates the LLM-backed components: captcha vision client, agent loop,
+// caption generator, and image generator. All configuration is sourced from
+// cfg.LLM (TOML provider registry + concern routing).
 func wireLLM(cfg *Config, log *slog.Logger) llmDeps {
-	// captcha handler (vision LLM; nil-safe: returns 503 when unconfigured)
-	anthropicAPIURL := os.Getenv("AUTO_TOOL_ANTHROPIC_API_URL")
-	if anthropicAPIURL == "" {
-		anthropicAPIURL = "https://api.anthropic.com/v1/messages"
+	// Seed AUTO_TOOL_* env vars from TOML provider registry so the existing
+	// providers.yaml mechanism picks them up without config duplication.
+	cfg.LLM.SeedToolEnvVars()
+
+	// --- Vision concern (captcha solver) ---
+	var captchaVision llm.VisionModelClient
+	if visionCfg, ok := cfg.LLM.ResolveProvider(cfg.LLM.Vision); ok {
+		apiVersion := visionCfg.APIVersion
+		if apiVersion == "" {
+			apiVersion = "2023-06-01"
+		}
+		captchaVision = llm.NewAnthropicVisionClient(
+			llm.ModelToolConfig{APIURL: visionCfg.APIURL, APIKey: visionCfg.APIKey, Model: visionCfg.Model},
+			apiVersion,
+			log,
+		)
+	} else {
+		// Nil-safe: captcha handler returns 503 when unconfigured.
+		captchaVision = llm.NewAnthropicVisionClient(llm.ModelToolConfig{}, "", log)
 	}
-	captchaVision := llm.NewAnthropicVisionClient(
-		llm.ModelToolConfig{
-			APIURL: anthropicAPIURL,
-			APIKey: os.Getenv("AUTO_TOOL_ANTHROPIC_API_KEY"),
-			Model:  os.Getenv("AUTO_TOOL_ANTHROPIC_MODEL"),
-		},
-		os.Getenv("AUTO_TOOL_ANTHROPIC_API_VERSION"),
-		log,
-	)
 	captchaH := handler.NewCaptchaHandler(captchaVision, log)
 
-	// AUTO_AGENT_LOOP_KIND selects the provider: "anthropic" (default) or "openai".
-	// Uses AUTO_AGENT_LOOP_* env vars; falls back to AUTO_TOOL_ANTHROPIC_* if unset.
-	agentLoopKind := os.Getenv("AUTO_AGENT_LOOP_KIND")
-	agentLoopAPIURL := os.Getenv("AUTO_AGENT_LOOP_API_URL")
-	if agentLoopAPIURL == "" {
-		switch agentLoopKind {
-		case "openai":
-			agentLoopAPIURL = os.Getenv("AUTO_TOOL_OPENAI_API_URL")
-		default:
-			agentLoopAPIURL = os.Getenv("AUTO_TOOL_ANTHROPIC_API_URL")
-		}
+	// --- Agent loop concern ---
+	agentLoopKind := cfg.LLM.AgentLoop.Provider
+	if agentLoopKind == "" {
+		agentLoopKind = "anthropic"
 	}
-	agentLoopAPIKey := os.Getenv("AUTO_AGENT_LOOP_API_KEY")
-	if agentLoopAPIKey == "" {
-		switch agentLoopKind {
-		case "openai":
-			agentLoopAPIKey = os.Getenv("AUTO_TOOL_OPENAI_API_KEY")
-		default:
-			agentLoopAPIKey = os.Getenv("AUTO_TOOL_ANTHROPIC_API_KEY")
-		}
+	var agentLoopCfg llm.ModelToolConfig
+	var agentLoopAPIVersion string
+	if p, ok := cfg.LLM.ResolveProvider(cfg.LLM.AgentLoop); ok {
+		agentLoopCfg = llm.ModelToolConfig{APIURL: p.APIURL, APIKey: p.APIKey, Model: p.Model}
+		agentLoopAPIVersion = p.APIVersion
 	}
-	agentLoopModel := os.Getenv("AUTO_AGENT_LOOP_MODEL")
-	if agentLoopModel == "" {
-		switch agentLoopKind {
-		case "openai":
-			agentLoopModel = os.Getenv("AUTO_TOOL_OPENAI_MODEL")
-		default:
-			agentLoopModel = os.Getenv("AUTO_TOOL_ANTHROPIC_MODEL")
-		}
-	}
-	agentLoopAPIVersion := os.Getenv("AUTO_AGENT_LOOP_API_VERSION")
-	if agentLoopAPIVersion == "" {
-		agentLoopAPIVersion = os.Getenv("AUTO_TOOL_ANTHROPIC_API_VERSION")
-	}
-	agentLoop := llm.NewAgentLoop(agentLoopKind, llm.ModelToolConfig{
-		APIURL: agentLoopAPIURL,
-		APIKey: agentLoopAPIKey,
-		Model:  agentLoopModel,
-	}, agentLoopAPIVersion, log)
+	agentLoop := llm.NewAgentLoop(agentLoopKind, agentLoopCfg, agentLoopAPIVersion, log)
 
 	return llmDeps{captchaHandler: captchaH, agentLoop: agentLoop}
+}
+
+// wireCaptionGenerator creates a caption generator wired from the LLM concern config.
+func wireCaptionGenerator(cfg *Config) *infrallm.LLMCaptionGenerator {
+	toCaptionCfg := func(p LLMProviderConfig, kind string) infrallm.CaptionProviderConfig {
+		return infrallm.CaptionProviderConfig{
+			Kind:       kind,
+			APIURL:     p.APIURL,
+			APIKey:     p.APIKey,
+			Model:      p.Model,
+			APIVersion: p.APIVersion,
+		}
+	}
+	var primary, fallback infrallm.CaptionProviderConfig
+	if p, ok := cfg.LLM.ResolveProvider(cfg.LLM.TextGeneration); ok {
+		primary = toCaptionCfg(p, cfg.LLM.TextGeneration.Provider)
+	}
+	if fb, ok := cfg.LLM.ResolveFallback(cfg.LLM.TextGeneration); ok {
+		fallback = toCaptionCfg(fb, cfg.LLM.TextGeneration.Fallback)
+	}
+	return infrallm.NewLLMCaptionGenerator(primary, fallback)
+}
+
+// wireImageGenerator creates an image generator wired from the LLM concern config.
+func wireImageGenerator(cfg *Config) (*infrallm.DallE3ImageGenerator, error) {
+	if p, ok := cfg.LLM.ResolveProvider(cfg.LLM.ImageGeneration); ok {
+		return infrallm.NewDallE3ImageGenerator(infrallm.ImageGeneratorConfig{
+			APIKey: p.APIKey,
+			Model:  p.Model,
+			APIURL: p.APIURL,
+		})
+	}
+	return nil, fmt.Errorf("image generation: no provider configured (set [llm.providers.openai] + [llm.image_generation])")
 }
 
 // wireMux creates all HTTP handlers, registers routes, and returns the mux.
@@ -506,8 +519,8 @@ func wireMux(
 	instagramLoginCfg := accountmanager.InstagramLoginConfig()
 	igLoginService := accountmanager.NewLoginRunService(taskUC, projectedAccountStore, adbShellRunner, projectionHub, log, instagramLoginCfg.ServiceCfg)
 	igLoginHandler := accountmanager.NewLoginRunHandler(igLoginService, instagramLoginCfg.PathPrefix)
-	captionGen := infrallm.NewLLMCaptionGenerator()
-	imgGen, imgGenErr := infrallm.NewDallE3ImageGenerator()
+	captionGen := wireCaptionGenerator(cfg)
+	imgGen, imgGenErr := wireImageGenerator(cfg)
 	if imgGenErr != nil {
 		log.Info("DALL-E 3 image generation disabled", "reason", imgGenErr)
 	}

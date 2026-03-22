@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listMacros, deleteMacro, promoteMacro, type SavedMacro } from '../api/macros';
 import { CopyButton } from '../../../components/ui/CopyButton';
+import { ReplayMacroModal } from './ReplayMacroModal';
 
 // ── macro detail ──────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ function MacroDetail({ macro, onDelete }: { macro: SavedMacro; onDelete: () => v
 
 // ── macro row ─────────────────────────────────────────────────────────────────
 
-function MacroRow({ macro, onDelete }: { macro: SavedMacro; onDelete: () => void }) {
+function MacroRow({ macro, onDelete, onReplay }: { macro: SavedMacro; onDelete: () => void; onReplay: () => void }) {
   const [expanded, setExpanded] = useState(false);
 
   const date = new Date(macro.createdAt);
@@ -159,6 +160,21 @@ function MacroRow({ macro, onDelete }: { macro: SavedMacro; onDelete: () => void
           <span style={{ color: 'var(--muted)', opacity: 0.7 }}>{dateStr} {timeStr}</span>
         </div>
 
+        {/* replay button */}
+        <span
+          role="button"
+          tabIndex={0}
+          className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[0.68rem] font-semibold cursor-pointer"
+          style={{ background: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', transition: 'background 150ms ease' }}
+          onClick={(e) => { e.stopPropagation(); onReplay(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onReplay(); } }}
+        >
+          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          Replay
+        </span>
+
         {/* chevron */}
         <svg
           viewBox="0 0 24 24"
@@ -195,6 +211,7 @@ export function MacroLibraryPanel() {
   const [macros, setMacros] = useState<SavedMacro[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [replayingMacro, setReplayingMacro] = useState<SavedMacro | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -257,9 +274,13 @@ export function MacroLibraryPanel() {
 
       <div className="grid gap-2 mt-2">
         {macros.map((macro) => (
-          <MacroRow key={macro.id} macro={macro} onDelete={() => handleDelete(macro.id)} />
+          <MacroRow key={macro.id} macro={macro} onDelete={() => handleDelete(macro.id)} onReplay={() => setReplayingMacro(macro)} />
         ))}
       </div>
+
+      {replayingMacro && (
+        <ReplayMacroModal macro={replayingMacro} onClose={() => setReplayingMacro(null)} />
+      )}
     </section>
   );
 }

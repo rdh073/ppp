@@ -5,7 +5,8 @@
 #
 # Secrets: prefer environment variables for production deployments.
 #   AUTO_REDIS_PASSWORD       — Redis authentication password (env only)
-#   AUTO_TOOL_LLM_API_KEY     — Bearer token for the LLM tool endpoint (env overrides tools.llm.api_key)
+#   AUTO_ACCOUNT_DATABASE_URL — PostgreSQL DSN for account/persona persistence (env overrides account_store.database_url)
+#   AUTO_LLM_<PROVIDER>_API_KEY — per-provider API keys (env overrides llm.providers.<provider>.api_key)
 #
 # Usage:
 #   go run ./cmd/server -config ./config/server.toml
@@ -83,6 +84,21 @@
 # command_outbox_age  = "24h"   # Prune command outbox records older than this
 
 # ---------------------------------------------------------------------------
+# Account & Persona store (optional PostgreSQL persistence)
+# ---------------------------------------------------------------------------
+[account_store]
+# driver = "file"   # "file" | "postgres"
+#
+# file:     accounts and personas persisted to JSON files in data_dir (default)
+# postgres: accounts and personas persisted to PostgreSQL
+#
+# When driver = "postgres", provide the DSN:
+# database_url = "postgres://user:pass@localhost:5432/ppp"
+#
+# Prefer env var for production: AUTO_ACCOUNT_DATABASE_URL
+# Tables are auto-created on first startup (IF NOT EXISTS).
+
+# ---------------------------------------------------------------------------
 # ADB (Android Debug Bridge) — accessibility auto-enabler
 # ---------------------------------------------------------------------------
 [adb]
@@ -96,10 +112,65 @@
 # "real-device-01"  = "R58M41XXYYY"
 
 # ---------------------------------------------------------------------------
-# Tool LLM backend (model-backed tools such as vision.analyze)
+# Tool LLM backend (legacy; model-backed tools such as vision.analyze)
 # ---------------------------------------------------------------------------
 [tools.llm]
-# OpenAI-compatible chat-completions endpoint.
+# OpenAI-compatible chat-completions endpoint (used by builtin tool provider).
 # api_url = "https://api.openai.com/v1/chat/completions"
 # model   = "gpt-4o"
 # api_key = ""   # overridden by AUTO_TOOL_LLM_API_KEY env var (env takes precedence)
+
+# ---------------------------------------------------------------------------
+# LLM Provider Registry
+# ---------------------------------------------------------------------------
+# Define provider credentials once. Each concern below references a provider
+# by key. Env override pattern: AUTO_LLM_<PROVIDER>_API_KEY, AUTO_LLM_<PROVIDER>_MODEL, etc.
+#
+# Legacy env vars (AUTO_TOOL_OPENAI_API_KEY, AUTO_TOOL_ANTHROPIC_API_KEY, etc.)
+# are still read as fallbacks if the new config is not set.
+
+# [llm.providers.openai]
+# api_url = "https://api.openai.com/v1/chat/completions"
+# api_key = ""
+# model   = "gpt-4o-mini"
+
+# [llm.providers.anthropic]
+# api_url     = "https://api.anthropic.com/v1/messages"
+# api_key     = ""
+# model       = "claude-sonnet-4-20250514"
+# api_version = "2023-06-01"
+
+# [llm.providers.deepseek]
+# api_url = "https://api.deepseek.com/chat/completions"
+# api_key = ""
+# model   = "deepseek-chat"
+
+# [llm.providers.gemini]
+# api_url = "https://generativelanguage.googleapis.com/v1beta"
+# api_key = ""
+# model   = "gemini-2.0-flash"
+
+# ---------------------------------------------------------------------------
+# LLM Concerns — each picks a provider from the registry above
+# ---------------------------------------------------------------------------
+
+# AI-driven recording loop provider.
+# [llm.agent_loop]
+# provider = "anthropic"
+
+# Caption/content text generation. Supports fallback chain.
+# [llm.text_generation]
+# provider = "anthropic"
+# fallback = "openai"        # optional: try if primary fails
+
+# Image generation (DALL-E 3).
+# [llm.image_generation]
+# provider = "openai"
+
+# Vision analysis (captcha solving, image inspection).
+# [llm.vision]
+# provider = "anthropic"
+
+# Tool catalog (leave empty to use providers.yaml as-is).
+# [llm.tool_catalog]
+# provider = ""

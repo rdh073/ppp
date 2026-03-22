@@ -5,7 +5,7 @@ import { useScrcpySessions } from '../hooks/useScrcpySessions';
 import { useGroupManagement } from '../hooks/useGroupManagement';
 import { getAndroidIdentity } from '../../../utils/deviceIdentity';
 import { GroupMirrorView } from './GroupMirrorView';
-import { RecordMacroPanel } from './RecordMacroPanel';
+import { RecordMacroModal } from './RecordMacroModal';
 import { ScrcpySessionsSection } from './ScrcpySessionsSection';
 import { DeviceCard } from './device/DeviceCard';
 import { DeviceRow } from './device/DeviceRow';
@@ -234,23 +234,28 @@ export function DevicePanel() {
         </div>
       )}
 
-      {/* record macro panel */}
+      {/* record macro modal — scrcpy left, controls right */}
       {recordingDeviceId && (() => {
         const dev = devices.find((d) => d.deviceId === recordingDeviceId);
-        return dev ? (
-          <div className="mt-4">
-            <RecordMacroPanel
-              deviceId={recordingDeviceId}
-              deviceLabel={getAndroidIdentity(dev)}
-              onClose={() => setRecordingDeviceId(null)}
-            />
-          </div>
-        ) : null;
+        if (!dev) return null;
+        if (!scrcpy.isActive(dev.deviceId)) {
+          queueMicrotask(() => scrcpy.openSession(dev));
+        }
+        const session = scrcpy.sessions.find((s) => s.deviceId === recordingDeviceId);
+        return (
+          <RecordMacroModal
+            device={dev}
+            session={session ?? null}
+            scrcpy={scrcpy}
+            makeTouchFanout={groupMgmt.makeTouchFanout}
+            onClose={() => setRecordingDeviceId(null)}
+          />
+        );
       })()}
 
-      {/* scrcpy sessions */}
+      {/* scrcpy sessions — exclude the one embedded in the record modal */}
       <ScrcpySessionsSection
-        sessions={scrcpy.sessions}
+        sessions={scrcpy.sessions.filter((s) => s.deviceId !== recordingDeviceId)}
         maxSessions={scrcpy.maxSessions}
         onCloseAll={scrcpy.closeAll}
         onCloseSession={scrcpy.closeBySessionId}
