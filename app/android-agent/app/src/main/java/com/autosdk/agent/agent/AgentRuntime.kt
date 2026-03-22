@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -269,13 +270,7 @@ class AgentRuntime(
                     buildJsonObject {
                         put("output", buildJsonObject {
                             r.output.forEach { (k, v) ->
-                                when (v) {
-                                    is Boolean -> put(k, v)
-                                    is Number -> put(k, v.toDouble())
-                                    is String -> put(k, v)
-                                    null -> put(k, JsonNull)
-                                    else -> put(k, v.toString())
-                                }
+                                put(k, anyToJsonElement(v))
                             }
                         })
                         put("logs", buildJsonArray { r.logs.forEach { add(it) } })
@@ -351,6 +346,18 @@ private fun logError(
 
 private fun logWarn(message: String) {
     runCatching { Log.w(TAG, message) }
+}
+
+private fun anyToJsonElement(value: Any?): JsonElement = when (value) {
+    null -> JsonNull
+    is Boolean -> JsonPrimitive(value)
+    is Number -> JsonPrimitive(value.toDouble())
+    is String -> JsonPrimitive(value)
+    is List<*> -> buildJsonArray { value.forEach { add(anyToJsonElement(it)) } }
+    is Map<*, *> -> buildJsonObject {
+        value.forEach { (k, v) -> put(k.toString(), anyToJsonElement(v)) }
+    }
+    else -> JsonPrimitive(value.toString())
 }
 
 // ---- serializers ----

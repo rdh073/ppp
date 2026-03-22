@@ -123,6 +123,19 @@ class AgentRuntimeScriptTest {
         assertNotNull(duration)
         assertTrue(duration!! >= 0)
     }
+
+    @Test
+    fun `device_script serializes array output correctly`() = runBlocking {
+        val (_, transport) = makeRuntime()
+        transport.emitRequest(scriptReq(source = "return { items: [1, 'x', true] };"))
+        assertEquals(1, transport.successes.size)
+        val items = transport.successes[0].result.jsonObject["output"]?.jsonObject?.get("items")?.jsonArray
+        assertNotNull(items)
+        assertEquals(3, items!!.size)
+        assertEquals("1.0", items[0].jsonPrimitive.content)
+        assertEquals("x", items[1].jsonPrimitive.content)
+        assertEquals("true", items[2].jsonPrimitive.content)
+    }
 }
 
 // ---- test doubles ----

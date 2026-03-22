@@ -3,6 +3,7 @@ package com.autosdk.agent.agent.script
 import org.mozilla.javascript.Context
 import org.mozilla.javascript.ContextFactory
 import org.mozilla.javascript.EcmaError
+import org.mozilla.javascript.NativeArray
 import org.mozilla.javascript.NativeObject
 import org.mozilla.javascript.RhinoException
 import org.mozilla.javascript.ScriptableObject
@@ -93,17 +94,21 @@ class JsRuntime(private val bridge: JsAutomationBridge) {
     // ---- helpers ----
 
     private fun nativeObjectToMap(value: Any?): Map<String, Any?> {
-        if (value !is NativeObject) return emptyMap()
-        return value.ids.filterIsInstance<String>().associate { key ->
-            val v = value.get(key, value)
-            key to when (v) {
-                is Boolean -> v
-                is Number -> v
-                is String -> v
-                Context.getUndefinedValue() -> null
-                is NativeObject -> nativeObjectToMap(v)
-                else -> v?.toString()
-            }
+        val converted = nativeToKotlin(value)
+        @Suppress("UNCHECKED_CAST")
+        return if (converted is Map<*, *>) converted as Map<String, Any?> else emptyMap()
+    }
+
+    private fun nativeToKotlin(value: Any?): Any? = when (value) {
+        null -> null
+        is Boolean -> value
+        is Number -> value.toDouble()
+        is String -> value
+        Context.getUndefinedValue() -> null
+        is NativeArray -> value.toArray().map { nativeToKotlin(it) }
+        is NativeObject -> value.ids.filterIsInstance<String>().associate { key ->
+            key to nativeToKotlin(value.get(key, value))
         }
+        else -> value.toString()
     }
 }

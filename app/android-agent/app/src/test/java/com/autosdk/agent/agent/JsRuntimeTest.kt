@@ -236,6 +236,39 @@ class JsRuntimeTest {
         assertEquals("hello", action!!.value)
         assertEquals(SelectorKind.RESOURCE_ID, action.selector.kind)
     }
+
+    // ---- array and nested object support ----
+
+    @Test
+    fun `script returning array in object emits list`() {
+        val (runtime, _) = makeRuntime()
+        val result = runtime.execute("return { items: [1, 'a', true] };", emptyMap(), 5_000L)
+        assertTrue(result.isSuccess)
+        assertEquals(listOf(1.0, "a", true), result.getOrThrow().output["items"])
+    }
+
+    @Test
+    fun `script returning nested object emits map`() {
+        val (runtime, _) = makeRuntime()
+        val result = runtime.execute("return { nested: { x: 1, y: 'two' } };", emptyMap(), 5_000L)
+        assertTrue(result.isSuccess)
+        @Suppress("UNCHECKED_CAST")
+        val nested = result.getOrThrow().output["nested"] as Map<String, Any?>
+        assertEquals(1.0, nested["x"])
+        assertEquals("two", nested["y"])
+    }
+
+    @Test
+    fun `script returning array of objects emits list of maps`() {
+        val (runtime, _) = makeRuntime()
+        val result = runtime.execute("return { rows: [{a:1},{a:2}] };", emptyMap(), 5_000L)
+        assertTrue(result.isSuccess)
+        @Suppress("UNCHECKED_CAST")
+        val rows = result.getOrThrow().output["rows"] as List<Map<String, Any?>>
+        assertEquals(2, rows.size)
+        assertEquals(1.0, rows[0]["a"])
+        assertEquals(2.0, rows[1]["a"])
+    }
 }
 
 // ---- test doubles ----

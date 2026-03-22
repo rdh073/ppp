@@ -296,6 +296,22 @@ func (h *DeviceHandler) handleLLMRun(w http.ResponseWriter, r *http.Request, id 
 	var entries []RecordedEntry
 	seq := 0
 
+	// execAndRecord dispatches an execute command and records the result as a RecordedEntry.
+	execAndRecord := func(ctx context.Context, actionParams json.RawMessage) (json.RawMessage, error) {
+		result, err := h.dispatchExecute(ctx, id, actionParams)
+		if err != nil {
+			return nil, err
+		}
+		seq++
+		entries = append(entries, RecordedEntry{
+			Sequence:      seq,
+			ActionParams:  actionParams,
+			SnapshotAfter: result,
+			RecordedAt:    time.Now(),
+		})
+		return json.RawMessage(`"ok"`), nil
+	}
+
 	// execTool is the ToolExecutor callback: bridges LLM tool calls to device operations.
 	execTool := func(ctx context.Context, toolName string, input json.RawMessage) (json.RawMessage, error) {
 		switch toolName {
@@ -309,23 +325,11 @@ func (h *DeviceHandler) handleLLMRun(w http.ResponseWriter, r *http.Request, id 
 
 		case "tap":
 			// LLM sends: {"kind":"click","target":{...}} or {"kind":"open_intent","intentAction":"..."}
-			// Wrap into execute body: {"action": <input>}
 			actionParams, err := buildActionParams(input)
 			if err != nil {
 				return nil, err
 			}
-			result, err := h.dispatchExecute(ctx, id, actionParams)
-			if err != nil {
-				return nil, err
-			}
-			seq++
-			entries = append(entries, RecordedEntry{
-				Sequence:      seq,
-				ActionParams:  actionParams,
-				SnapshotAfter: result,
-				RecordedAt:    time.Now(),
-			})
-			return json.RawMessage(`"ok"`), nil
+			return execAndRecord(ctx, actionParams)
 
 		case "input":
 			// LLM sends: {"selector":{"kind":"...","value":"..."},"text":"..."}
@@ -342,18 +346,7 @@ func (h *DeviceHandler) handleLLMRun(w http.ResponseWriter, r *http.Request, id 
 				"inputText": inp.Text,
 			})
 			actionParams, _ := json.Marshal(map[string]json.RawMessage{"action": actionJSON})
-			result, err := h.dispatchExecute(ctx, id, actionParams)
-			if err != nil {
-				return nil, err
-			}
-			seq++
-			entries = append(entries, RecordedEntry{
-				Sequence:      seq,
-				ActionParams:  actionParams,
-				SnapshotAfter: result,
-				RecordedAt:    time.Now(),
-			})
-			return json.RawMessage(`"ok"`), nil
+			return execAndRecord(ctx, actionParams)
 
 		case "scroll":
 			var sc struct {
@@ -365,34 +358,12 @@ func (h *DeviceHandler) handleLLMRun(w http.ResponseWriter, r *http.Request, id 
 			}
 			actionJSON, _ := json.Marshal(map[string]string{"kind": "scroll", "direction": sc.Direction})
 			actionParams, _ := json.Marshal(map[string]json.RawMessage{"action": actionJSON})
-			result, err := h.dispatchExecute(ctx, id, actionParams)
-			if err != nil {
-				return nil, err
-			}
-			seq++
-			entries = append(entries, RecordedEntry{
-				Sequence:      seq,
-				ActionParams:  actionParams,
-				SnapshotAfter: result,
-				RecordedAt:    time.Now(),
-			})
-			return json.RawMessage(`"ok"`), nil
+			return execAndRecord(ctx, actionParams)
 
 		case "back", "home":
 			actionJSON, _ := json.Marshal(map[string]string{"kind": toolName})
 			actionParams, _ := json.Marshal(map[string]json.RawMessage{"action": actionJSON})
-			result, err := h.dispatchExecute(ctx, id, actionParams)
-			if err != nil {
-				return nil, err
-			}
-			seq++
-			entries = append(entries, RecordedEntry{
-				Sequence:      seq,
-				ActionParams:  actionParams,
-				SnapshotAfter: result,
-				RecordedAt:    time.Now(),
-			})
-			return json.RawMessage(`"ok"`), nil
+			return execAndRecord(ctx, actionParams)
 
 		case "done":
 			return nil, llm.ErrAgentDone
