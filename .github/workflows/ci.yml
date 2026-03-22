@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat-**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/server-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/server-agent/go.mod
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm type-check
+      - run: pnpm test -- --run
+
+  android-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/android-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew test

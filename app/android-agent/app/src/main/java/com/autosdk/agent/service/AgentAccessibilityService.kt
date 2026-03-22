@@ -6,14 +6,10 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.autosdk.agent.agent.AgentRuntime
 import com.autosdk.agent.state.AgentEvent
-import com.autosdk.agent.state.AgentLogger
-import com.autosdk.agent.state.AgentRuntimeHooks
 import com.autosdk.agent.state.AgentState
-import com.autosdk.agent.state.AgentStateStore
 import com.autosdk.agent.state.AgentStateCoordinator
-import com.autosdk.agent.state.AgentStatus
+import com.autosdk.agent.state.AgentStateStore
 import com.autosdk.agent.state.AgentTransportPhase
-import com.autosdk.agent.state.SharedPreferencesAgentStateStore
 import com.autosdk.agent.state.toStatus
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
@@ -89,8 +85,6 @@ class AgentAccessibilityService : AccessibilityService() {
             nextSeqNo = { outboundEventSeqNo.incrementAndGet() },
         )
     }
-    @Volatile private var wasTransportConnected = false
-
     /**
      * Guards against double-initialisation. Uses CAS so that exactly one of
      * [onServiceConnected] or the first [onAccessibilityEvent] wins the race.
@@ -237,8 +231,8 @@ class AgentAccessibilityService : AccessibilityService() {
                 snapshotProvider = snapshotProvider,
                 eventAwaiter = eventAwaiter,
                 awaitSettle = { awaitSettle() },
-                runtimeHooks = ServiceRuntimeHooks(),
-                logger = ServiceAgentLogger(),
+                runtimeHooks = ServiceRuntimeHooks(this, serviceScope, accessibilityDisabledNotifier, TAG),
+                logger = ServiceAgentLogger(TAG),
             ).bootstrap()
 
         agentDeviceId = runtimeBundle.deviceId
@@ -295,25 +289,4 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    private inner class ServiceRuntimeHooks : AgentRuntimeHooks {
-        override fun clearInflightCommand() {
-            // Runtime execution event wiring will own this more precisely in PR6.
-        }
-
-        override fun onStatusChanged(status: AgentStatus) {
-            val isConnected = status.transport == "connected"
-            if (isConnected && !wasTransportConnected) {
-                serviceScope.launch { accessibilityDisabledNotifier.flushPending() }
-            }
-            wasTransportConnected = isConnected
-            AgentNotificationManager.update(this@AgentAccessibilityService, status)
-            Log.d(TAG, "status ${status.toDebugString()}")
-        }
-    }
-
-    private inner class ServiceAgentLogger : AgentLogger {
-        override fun log(message: String) {
-            Log.i(TAG, message)
-        }
-    }
 }

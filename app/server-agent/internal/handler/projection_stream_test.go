@@ -46,6 +46,64 @@ func TestProjectionStreamHandler_BackfillsMissedEventsFromLastEventID(t *testing
 	}
 }
 
+func TestProjectionStreamHandler_FreshConnect_NoLastEventID_WritesConnectedComment(t *testing.T) {
+	history := store.NewMemoryProjectionEventStore(8)
+	hub := projection.NewHub(history, newLog())
+	stream := handler.NewProjectionStreamHandler(hub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/events/stream", nil).WithContext(ctx)
+	// No Last-Event-ID header.
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		stream.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	if !strings.Contains(body, ": connected\n\n") {
+		t.Fatalf("expected SSE connected comment in body, got %q", body)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestProjectionStreamHandler_PublishedEvent_CarriesIDField(t *testing.T) {
+	history := store.NewMemoryProjectionEventStore(8)
+	hub := projection.NewHub(history, newLog())
+	stream := handler.NewProjectionStreamHandler(hub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/events/stream", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		stream.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	hub.PublishProjection(projection.Event{Topic: "tasks", Type: "upsert", EntityID: "t-1"})
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "id: ") {
+		t.Fatalf("expected SSE id field in body for reconnect support, got %q", body)
+	}
+}
+
 func TestProjectionStreamHandler_EmitsResetWhenBackfillUnavailable(t *testing.T) {
 	history := store.NewMemoryProjectionEventStore(1)
 	hub := projection.NewHub(history, newLog())

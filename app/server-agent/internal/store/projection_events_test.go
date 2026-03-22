@@ -53,3 +53,52 @@ func TestMemoryProjectionEventStore_ReturnsBackfillUnavailableWhenCursorIsPruned
 		t.Fatalf("expected ErrBackfillUnavailable, got %v", err)
 	}
 }
+
+func TestMemoryProjectionEventStore_IDsAreMonotonicallyIncreasing(t *testing.T) {
+	s := store.NewMemoryProjectionEventStore(8)
+
+	first, err := s.Append(projection.Event{Topic: "tasks", Type: "upsert", EntityID: "t-1"})
+	if err != nil {
+		t.Fatalf("Append(first): %v", err)
+	}
+	second, err := s.Append(projection.Event{Topic: "tasks", Type: "upsert", EntityID: "t-2"})
+	if err != nil {
+		t.Fatalf("Append(second): %v", err)
+	}
+
+	if first.ID == "" {
+		t.Fatal("expected non-empty ID for first event")
+	}
+	if second.ID == "" {
+		t.Fatal("expected non-empty ID for second event")
+	}
+	if first.ID >= second.ID {
+		// IDs are numeric strings; lexicographic compare is safe for same-length strings.
+		// Compare numerically via ListAfter to avoid string-ordering ambiguity.
+		items, err := s.ListAfter(first.ID, nil)
+		if err != nil {
+			t.Fatalf("ListAfter(first.ID): %v", err)
+		}
+		if len(items) == 0 || items[0].ID != second.ID {
+			t.Fatalf("second event not found after first cursor: first=%s second=%s", first.ID, second.ID)
+		}
+	}
+}
+
+func TestMemoryProjectionEventStore_ListAfterEmptyCursor_ReturnsAllEvents(t *testing.T) {
+	s := store.NewMemoryProjectionEventStore(8)
+
+	for _, entityID := range []string{"t-1", "t-2", "t-3"} {
+		if _, err := s.Append(projection.Event{Topic: "tasks", Type: "upsert", EntityID: entityID}); err != nil {
+			t.Fatalf("Append(%s): %v", entityID, err)
+		}
+	}
+
+	items, err := s.ListAfter("", nil)
+	if err != nil {
+		t.Fatalf("ListAfter(empty): %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 events from empty cursor, got %d", len(items))
+	}
+}
