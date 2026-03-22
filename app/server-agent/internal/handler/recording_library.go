@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/autosdk/ppp/server-agent/internal/devicectrl"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 )
 
@@ -133,7 +134,7 @@ func (h *MacroLibraryHandler) handlePromote(w http.ResponseWriter, r *http.Reque
 		name = "macro-" + macro.ID
 	}
 
-	yaml := generateWorkflowYAML(name, macro.Script)
+	yaml := devicectrl.GenerateWorkflowYAML(name, macro.Script)
 	safeName := sanitizeFilename(name)
 	filePath := filepath.Join(h.workflowDir, safeName+".yaml")
 

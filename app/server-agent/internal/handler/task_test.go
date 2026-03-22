@@ -15,10 +15,10 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
-// noopProcessor satisfies usecase.EventProcessor — does nothing.
+// noopProcessor satisfies workflowruntime.EventProcessor — does nothing.
 type noopProcessor struct{}
 
 func (noopProcessor) ProcessEvent(_ context.Context, _ domain.Event) error { return nil }
@@ -37,7 +37,7 @@ func newTestHandler(t *testing.T) (http.Handler, *store.MemoryTaskStore, *regist
 	states := store.NewMemoryWorkflowStateStore()
 	reg := registry.New()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	uc := usecase.NewTaskControl(tasks, states, noopProcessor{}, reg, log)
+	uc := workflowruntime.NewTaskControl(tasks, states, noopProcessor{}, reg, log)
 	return handler.NewTaskHandler(uc, log), tasks, reg
 }
 

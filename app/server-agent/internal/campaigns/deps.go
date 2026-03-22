@@ -1,0 +1,29 @@
+package campaigns
+
+import (
+	"context"
+
+	"github.com/autosdk/ppp/server-agent/internal/appport"
+	"github.com/autosdk/ppp/server-agent/internal/projection"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
+)
+
+type TaskControl = appport.TaskControl
+
+type CaptionGenerator interface {
+	GenerateCaption(ctx context.Context, prompt string) (string, error)
+}
+
+type ImageGenerator interface {
+	GenerateImage(ctx context.Context, prompt string) ([]byte, error)
+}
+
+type AdbFilePusher = appport.AdbFilePusher
+
+type ProjectionPublisher = projection.Publisher
+
+type ProjectionEvent = projection.Event
+
+type CreateTaskRequest = workflowruntime.CreateTaskRequest
+
+var pollTaskUntilTerminal = workflowruntime.PollTaskUntilTerminal

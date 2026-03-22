@@ -10,11 +10,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
 var upgrader = websocket.Upgrader{
@@ -28,7 +28,7 @@ var upgrader = websocket.Upgrader{
 // or the dispatcher (response correlation).
 type AgentServer struct {
 	agentHandler *handler.AgentHandler
-	eventUC      usecase.EventIngestion
+	eventUC      appport.EventIngestion
 	reg          registry.AgentRegistry
 	disp         dispatcher.Dispatcher
 	log          *slog.Logger
@@ -36,7 +36,7 @@ type AgentServer struct {
 
 func NewAgentServer(
 	h *handler.AgentHandler,
-	eventUC usecase.EventIngestion,
+	eventUC appport.EventIngestion,
 	reg registry.AgentRegistry,
 	disp dispatcher.Dispatcher,
 	log *slog.Logger,

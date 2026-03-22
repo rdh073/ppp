@@ -17,8 +17,10 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/autosdk/ppp/server-agent/internal/devicectrl"
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/eventing"
 	"github.com/autosdk/ppp/server-agent/internal/eventruntime"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
@@ -26,8 +28,8 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 // buildTestServer spins up a complete server-agent HTTP server using
@@ -77,24 +79,24 @@ func buildTestServer(t *testing.T, workflowDef *domain.WorkflowDef) *httptest.Se
 	}
 
 	// --- use cases ---
-	recoveryUC := usecase.NewRuntimeRecovery(taskStore, stateStore, log)
+	recoveryUC := workflowruntime.NewRuntimeRecovery(taskStore, stateStore, log)
 	recoveryUC.SetQueue(taskQueue)
 	if _, err := recoveryUC.Recover(context.Background()); err != nil {
 		t.Fatalf("runtime recovery: %v", err)
 	}
 
-	assigner := usecase.NewDeviceAssigner(taskStore, taskQueue, reg, runtime, log)
+	assigner := workflowruntime.NewDeviceAssigner(taskStore, taskQueue, reg, runtime, log)
 	orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
 
-	lifecycleUC := usecase.NewAgentLifecycle(reg, runtime, nil, nil, log)
+	lifecycleUC := devicectrl.NewAgentLifecycle(reg, runtime, nil, nil, log)
 	lifecycleUC.SetAssigner(assigner)
 
-	taskUC := usecase.NewTaskControl(taskStore, stateStore, runtime, reg, log)
+	taskUC := workflowruntime.NewTaskControl(taskStore, stateStore, runtime, reg, log)
 	taskUC.SetAssigner(assigner)
 
 	// noop auto-enabler — no ADB in tests
-	eventUC := usecase.NewEventIngestion(runtime)
-	eventPlaneUC := usecase.NewEventPlaneControl(eventStore, runtime, eventUC, log)
+	eventUC := eventing.NewEventIngestion(runtime)
+	eventPlaneUC := eventing.NewEventPlaneControl(eventStore, runtime, eventUC, log)
 
 	// --- handlers ---
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)

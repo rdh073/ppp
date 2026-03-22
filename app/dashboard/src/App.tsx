@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Header } from './components/layout/Header';
 import { TabNav, type Tab } from './components/layout/TabNav';
-import { DevicePanel } from './components/agents/DevicePanel';
-import { TaskPanel } from './components/tasks/TaskPanel';
-import { WorkflowPanel } from './components/workflows/WorkflowPanel';
-import { EventPanel } from './components/events/EventPanel';
-import { MacroLibraryPanel } from './components/macros/MacroLibraryPanel';
-import { CampaignPanel } from './components/campaign/CampaignPanel';
+import { DevicePanel } from './features/device-control/components/DevicePanel';
+import { TaskPanel } from './features/tasks/components/TaskPanel';
+import { WorkflowPanel } from './features/workflows/components/WorkflowPanel';
+import { EventPanel } from './features/events/components/EventPanel';
+import { MacroLibraryPanel } from './features/macros/components/MacroLibraryPanel';
+import { AccountManagerPanel } from './features/account-manager/components/AccountManagerPanel';
+import { PostCampaignPanel } from './features/campaigns/components/PostCampaignPanel';
 import { API_URL, HEALTH_POLL_MS, METRICS_URL } from './config';
 import './index.css';
 
@@ -80,7 +81,8 @@ export function App() {
             {activeTab === 'workflows' && <WorkflowPanel />}
             {activeTab === 'events' && <EventPanel />}
             {activeTab === 'macros' && <MacroLibraryPanel />}
-            {activeTab === 'campaigns' && <CampaignPanel />}
+            {activeTab === 'accountCreation' && <AccountManagerPanel />}
+            {activeTab === 'campaign' && <PostCampaignPanel />}
           </section>
         </main>
       </div>

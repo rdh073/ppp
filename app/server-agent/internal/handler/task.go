@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 // TaskHandler exposes task lifecycle over HTTP REST.
@@ -17,11 +18,11 @@ import (
 //	GET    /tasks/{id}     → get task
 //	DELETE /tasks/{id}     → cancel task
 type TaskHandler struct {
-	uc  usecase.TaskControl
+	uc  appport.TaskControl
 	log *slog.Logger
 }
 
-func NewTaskHandler(uc usecase.TaskControl, log *slog.Logger) *TaskHandler {
+func NewTaskHandler(uc appport.TaskControl, log *slog.Logger) *TaskHandler {
 	return &TaskHandler{uc: uc, log: log}
 }
 
@@ -64,7 +65,7 @@ func (h *TaskHandler) list(w http.ResponseWriter, r *http.Request) {
 		offset = parsed
 	}
 
-	items, err := h.uc.ListTasks(r.Context(), usecase.ListTaskQuery{
+	items, err := h.uc.ListTasks(r.Context(), workflowruntime.ListTaskQuery{
 		Status:       domain.TaskStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
 		DeviceID:     domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		WorkflowName: strings.TrimSpace(r.URL.Query().Get("workflowName")),
@@ -97,7 +98,7 @@ func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.uc.CreateTask(r.Context(), usecase.CreateTaskRequest{
+	task, err := h.uc.CreateTask(r.Context(), workflowruntime.CreateTaskRequest{
 		Goal:           body.Goal,
 		DeviceID:       domain.DeviceID(body.DeviceID),
 		WorkflowName:   body.WorkflowName,
@@ -133,10 +134,10 @@ func (h *TaskHandler) cancel(w http.ResponseWriter, r *http.Request, id domain.T
 }
 
 func taskJSON(t *domain.Task) map[string]any {
-	return taskSummaryJSON(&usecase.TaskSummary{Task: t})
+	return taskSummaryJSON(&workflowruntime.TaskSummary{Task: t})
 }
 
-func taskSummaryJSON(summary *usecase.TaskSummary) map[string]any {
+func taskSummaryJSON(summary *workflowruntime.TaskSummary) map[string]any {
 	t := summary.Task
 	return map[string]any{
 		"id":                string(t.ID),

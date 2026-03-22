@@ -1,0 +1,33 @@
+import { describe, expect, it } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { CollapsibleForm, collapsibleFormReducer } from './CollapsibleForm';
+
+describe('CollapsibleForm', () => {
+  it('reduces open/close transitions correctly', () => {
+    expect(collapsibleFormReducer(false, 'open')).toBe(true);
+    expect(collapsibleFormReducer(true, 'close')).toBe(false);
+    expect(collapsibleFormReducer(false, 'close')).toBe(false);
+  });
+
+  it('renders trigger when closed', () => {
+    const html = renderToStaticMarkup(
+      <CollapsibleForm triggerLabel="Start Account Creation">
+        {() => <div>form-content</div>}
+      </CollapsibleForm>,
+    );
+
+    expect(html).toContain('+ Start Account Creation');
+    expect(html).not.toContain('form-content');
+  });
+
+  it('renders form content when initially open', () => {
+    const html = renderToStaticMarkup(
+      <CollapsibleForm triggerLabel="Start Account Creation" initialOpen>
+        {() => <div>form-content</div>}
+      </CollapsibleForm>,
+    );
+
+    expect(html).toContain('form-content');
+    expect(html).not.toContain('+ Start Account Creation');
+  });
+});

@@ -11,7 +11,7 @@
     "build:verify": "npm run build && npm run preview:prod",
     "test": "vitest",
     "type-check": "tsc --noEmit",
-    "lint": "echo 'No lint configured yet'"
+    "lint": "node ./scripts/check-feature-boundaries.mjs"
   },
   "dependencies": {
     "@yume-chan/adb": "^2.5.1",

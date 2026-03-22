@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
+	"github.com/autosdk/ppp/server-agent/internal/eventing"
 )
 
 // EventPlaneHandler exposes inspection and replay for accepted events and dead letters.
@@ -23,11 +24,11 @@ import (
 //	GET  /events/deadletters/{deadLetterId}
 //	POST /events/deadletters/{deadLetterId}/replay
 type EventPlaneHandler struct {
-	uc  usecase.EventPlaneControl
+	uc  appport.EventPlaneControl
 	log *slog.Logger
 }
 
-func NewEventPlaneHandler(uc usecase.EventPlaneControl, log *slog.Logger) *EventPlaneHandler {
+func NewEventPlaneHandler(uc appport.EventPlaneControl, log *slog.Logger) *EventPlaneHandler {
 	return &EventPlaneHandler{uc: uc, log: log}
 }
 
@@ -160,9 +161,9 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeUseCaseError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, usecase.ErrNotFound):
+	case errors.Is(err, eventing.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, usecase.ErrInvalidEventListQuery):
+	case errors.Is(err, eventing.ErrInvalidEventListQuery):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case strings.Contains(err.Error(), "not replayable"), strings.Contains(err.Error(), "has no event kind"):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -171,38 +172,38 @@ func writeUseCaseError(w http.ResponseWriter, err error) {
 	}
 }
 
-func parseAcceptedEventListQuery(r *http.Request) (usecase.AcceptedEventListQuery, error) {
+func parseAcceptedEventListQuery(r *http.Request) (eventing.AcceptedEventListQuery, error) {
 	limit, offset, err := parseLimitOffset(r)
 	if err != nil {
-		return usecase.AcceptedEventListQuery{}, err
+		return eventing.AcceptedEventListQuery{}, err
 	}
 	from, to, err := parseTimeRange(r)
 	if err != nil {
-		return usecase.AcceptedEventListQuery{}, err
+		return eventing.AcceptedEventListQuery{}, err
 	}
-	return usecase.AcceptedEventListQuery{
+	return eventing.AcceptedEventListQuery{
 		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
 		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
 		From:     from,
 		To:       to,
 		Cursor:   strings.TrimSpace(r.URL.Query().Get("cursor")),
-		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
+		Order:    eventing.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
 		Limit:    limit,
 		Offset:   offset,
 	}, nil
 }
 
-func parseDeadLetterListQuery(r *http.Request) (usecase.DeadLetterListQuery, error) {
+func parseDeadLetterListQuery(r *http.Request) (eventing.DeadLetterListQuery, error) {
 	limit, offset, err := parseLimitOffset(r)
 	if err != nil {
-		return usecase.DeadLetterListQuery{}, err
+		return eventing.DeadLetterListQuery{}, err
 	}
 	from, to, err := parseTimeRange(r)
 	if err != nil {
-		return usecase.DeadLetterListQuery{}, err
+		return eventing.DeadLetterListQuery{}, err
 	}
-	return usecase.DeadLetterListQuery{
+	return eventing.DeadLetterListQuery{
 		DeviceID: domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		Kind:     domain.EventKind(strings.TrimSpace(r.URL.Query().Get("kind"))),
 		Source:   strings.TrimSpace(r.URL.Query().Get("source")),
@@ -210,7 +211,7 @@ func parseDeadLetterListQuery(r *http.Request) (usecase.DeadLetterListQuery, err
 		From:     from,
 		To:       to,
 		Cursor:   strings.TrimSpace(r.URL.Query().Get("cursor")),
-		Order:    usecase.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
+		Order:    eventing.EventListOrder(strings.TrimSpace(r.URL.Query().Get("order"))),
 		Limit:    limit,
 		Offset:   offset,
 	}, nil

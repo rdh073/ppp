@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/eventing"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
 type acceptedReplayStub struct {
@@ -46,7 +46,7 @@ func newEventPlaneHandler(t *testing.T) (http.Handler, *store.MemoryEventPlaneSt
 	events := store.NewMemoryEventPlaneStore()
 	accepted := &acceptedReplayStub{}
 	notifications := &notificationReplayStub{}
-	uc := usecase.NewEventPlaneControl(events, accepted, notifications, newLog())
+	uc := eventing.NewEventPlaneControl(events, accepted, notifications, newLog())
 	return handler.NewEventPlaneHandler(uc, newLog()), events, accepted, notifications
 }
 
@@ -91,7 +91,7 @@ func TestEventPlaneHandler_ListAccepted(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /events/accepted: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var payload usecase.AcceptedEventPage
+	var payload eventing.AcceptedEventPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEventPlaneHandler_ListAccepted_ExcludePayload(t *testing.T) {
 		t.Fatalf("GET /events/accepted includePayload=false: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var payload usecase.AcceptedEventPage
+	var payload eventing.AcceptedEventPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestEventPlaneHandler_GetAcceptedPayloadPreview(t *testing.T) {
 		t.Fatalf("GET /events/accepted/{id}/payload: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var payload usecase.AcceptedPayloadPreview
+	var payload eventing.AcceptedPayloadPreview
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestEventPlaneHandler_ListAccepted_TimeRange(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /events/accepted time range: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var payload usecase.AcceptedEventPage
+	var payload eventing.AcceptedEventPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestEventPlaneHandler_ListAccepted_CursorPagination(t *testing.T) {
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("GET /events/accepted page1: expected 200, got %d: %s", rec1.Code, rec1.Body.String())
 	}
-	var page1 usecase.AcceptedEventPage
+	var page1 eventing.AcceptedEventPage
 	if err := json.NewDecoder(rec1.Body).Decode(&page1); err != nil {
 		t.Fatalf("decode first page: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestEventPlaneHandler_ListAccepted_CursorPagination(t *testing.T) {
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("GET /events/accepted page2: expected 200, got %d: %s", rec2.Code, rec2.Body.String())
 	}
-	var page2 usecase.AcceptedEventPage
+	var page2 eventing.AcceptedEventPage
 	if err := json.NewDecoder(rec2.Body).Decode(&page2); err != nil {
 		t.Fatalf("decode second page: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestEventPlaneHandler_ListDeadLetters_FilterBySource(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /events/deadletters: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var payload usecase.DeadLetterPage
+	var payload eventing.DeadLetterPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestEventPlaneHandler_ListDeadLetters_TimeRange(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /events/deadletters time range: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var payload usecase.DeadLetterPage
+	var payload eventing.DeadLetterPage
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

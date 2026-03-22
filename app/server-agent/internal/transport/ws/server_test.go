@@ -15,15 +15,17 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/autosdk/ppp/server-agent/internal/devicectrl"
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/eventing"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	ws "github.com/autosdk/ppp/server-agent/internal/transport/ws"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 // observeTerminalEngine builds a workflow engine with a "default" workflow that:
@@ -63,9 +65,9 @@ func buildTestServer(t *testing.T) *httptest.Server {
 	disp := dispatcher.NewMemoryDispatcher(reg, nil)
 	engine := observeTerminalEngine(disp)
 	orch := orchestrator.New(taskStore, stateStore, engine, log)
-	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, nil, nil, log)
-	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
-	eventUC := usecase.NewEventIngestion(orch)
+	lifecycleUC := devicectrl.NewAgentLifecycle(reg, orch, nil, nil, log)
+	taskUC := workflowruntime.NewTaskControl(taskStore, stateStore, orch, reg, log)
+	eventUC := eventing.NewEventIngestion(orch)
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)
@@ -83,7 +85,7 @@ func buildTestServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func buildTestServerWithProcessor(t *testing.T, proc usecase.EventProcessor) *httptest.Server {
+func buildTestServerWithProcessor(t *testing.T, proc eventing.EventProcessor) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -93,9 +95,9 @@ func buildTestServerWithProcessor(t *testing.T, proc usecase.EventProcessor) *ht
 	disp := dispatcher.NewMemoryDispatcher(reg, nil)
 	engine := observeTerminalEngine(disp)
 	orch := orchestrator.New(taskStore, stateStore, engine, log)
-	lifecycleUC := usecase.NewAgentLifecycle(reg, orch, nil, nil, log)
-	taskUC := usecase.NewTaskControl(taskStore, stateStore, orch, reg, log)
-	eventUC := usecase.NewEventIngestion(proc)
+	lifecycleUC := devicectrl.NewAgentLifecycle(reg, orch, nil, nil, log)
+	taskUC := workflowruntime.NewTaskControl(taskStore, stateStore, orch, reg, log)
+	eventUC := eventing.NewEventIngestion(proc)
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	agentServer := ws.NewAgentServer(agentHandler, eventUC, reg, disp, log)

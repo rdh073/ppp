@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
+	"github.com/autosdk/ppp/server-agent/internal/devicectrl"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
 // JSON-RPC error codes used by the server.
@@ -34,11 +35,11 @@ type Conn interface {
 // AgentHandler is a thin JSON-RPC dispatcher that delegates to AgentLifecycleUseCase.
 // It owns only parameter parsing and response shaping — no business logic.
 type AgentHandler struct {
-	uc  usecase.AgentLifecycle
+	uc  appport.AgentLifecycle
 	log *slog.Logger
 }
 
-func NewAgentHandler(uc usecase.AgentLifecycle, log *slog.Logger) *AgentHandler {
+func NewAgentHandler(uc appport.AgentLifecycle, log *slog.Logger) *AgentHandler {
 	return &AgentHandler{uc: uc, log: log}
 }
 
@@ -77,7 +78,7 @@ func (h *AgentHandler) HandleHello(ctx context.Context, id string, rawParams jso
 		return
 	}
 
-	resp, err := h.uc.Hello(ctx, usecase.HelloRequest{
+	resp, err := h.uc.Hello(ctx, devicectrl.HelloRequest{
 		DeviceID:        domain.DeviceID(p.DeviceID),
 		AgentInstanceID: p.AgentInstanceID,
 		Capabilities:    p.Capabilities,
@@ -105,7 +106,7 @@ func (h *AgentHandler) HandleResume(ctx context.Context, id string, rawParams js
 		return
 	}
 
-	resp, err := h.uc.Resume(ctx, usecase.ResumeRequest{
+	resp, err := h.uc.Resume(ctx, devicectrl.ResumeRequest{
 		DeviceID:       domain.DeviceID(p.DeviceID),
 		SessionID:      domain.SessionID(p.SessionID),
 		Capabilities:   p.Capabilities,

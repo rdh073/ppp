@@ -2,23 +2,9 @@ package com.autosdk.agent.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.graphics.Bitmap
-import android.os.Build
-import android.provider.Settings
-import android.util.Base64
 import android.util.Log
-import android.view.Display
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityWindowInfo
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import com.autosdk.agent.action.ActionExecutor
-import com.autosdk.agent.agent.AccessibilityAgentAutomationDriver
-import com.autosdk.agent.agent.AgentCapabilities
 import com.autosdk.agent.agent.AgentRuntime
-import com.autosdk.agent.observation.SnapshotBuilder
 import com.autosdk.agent.state.AgentEvent
 import com.autosdk.agent.state.AgentLogger
 import com.autosdk.agent.state.AgentRuntimeHooks
@@ -27,12 +13,8 @@ import com.autosdk.agent.state.AgentStateStore
 import com.autosdk.agent.state.AgentStateCoordinator
 import com.autosdk.agent.state.AgentStatus
 import com.autosdk.agent.state.AgentTransportPhase
-import com.autosdk.agent.state.CoroutineBackoffScheduler
-import com.autosdk.agent.state.CoroutineHeartbeatScheduler
-import com.autosdk.agent.state.PendingAccessibilityDisabledEvent
 import com.autosdk.agent.state.SharedPreferencesAgentStateStore
 import com.autosdk.agent.state.toStatus
-import com.autosdk.agent.transport.createSharedClient
 import com.autosdk.agent.transport.WebSocketAgentTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,16 +24,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "AgentAccessibilitySvc"
-private const val METHOD_ANDROID_ACCESSIBILITY_DISABLED = "android.accessibility.disabled"
 
 /** Debounce window for UI settle detection. */
 private const val SETTLE_DEBOUNCE_MS = 250L
@@ -101,9 +77,18 @@ class AgentAccessibilityService : AccessibilityService() {
      */
     private val lastEventMs = AtomicLong(0L)
     private val outboundEventSeqNo = AtomicLong(0L)
-
-    /** Script-registered watchers waiting for specific accessibility events. */
-    private val eventWatchers = CopyOnWriteArrayList<EventWatcher>()
+    private val eventAwaiter = AccessibilityEventAwaiter(TAG)
+    private val snapshotProvider by lazy {
+        AccessibilitySnapshotProvider(this) { currentActivityName }
+    }
+    private val accessibilityDisabledNotifier by lazy {
+        AccessibilityDisabledNotifier(
+            logTag = TAG,
+            stateStoreProvider = { stateStore },
+            transportDriverProvider = { transport },
+            nextSeqNo = { outboundEventSeqNo.incrementAndGet() },
+        )
+    }
     @Volatile private var wasTransportConnected = false
 
     /**
@@ -167,7 +152,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 // changes even when semantic content is unchanged.
                 val seqNo = outboundEventSeqNo.incrementAndGet()
                 stateStore?.persistLastOutboundEventSeqNo(seqNo)
-                val params = buildActivityCreatedParams(
+                val params = AccessibilityEventPayloadFactory.buildActivityCreatedParams(
                     seqNo = seqNo,
                     packageName = event.packageName?.toString(),
                     className = cls,
@@ -179,35 +164,25 @@ class AgentAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
                 val seqNo = outboundEventSeqNo.incrementAndGet()
                 stateStore?.persistLastOutboundEventSeqNo(seqNo)
-                val params = buildNotificationParams(seqNo = seqNo, event = event)
+                val params = AccessibilityEventPayloadFactory.buildNotificationParams(seqNo = seqNo, event = event)
                 serviceScope.launch {
                     coordinator?.dispatch(AgentEvent.NotificationReceived(params))
                 }
             }
         }
 
-        // Notify awaitEvent() watchers registered from running scripts.
-        if (event != null && eventWatchers.isNotEmpty()) {
-            val eventPkg = event.packageName?.toString()
-            val eventText = event.text?.joinToString(" ")
-            for (w in eventWatchers) {
-                if (event.eventType !in w.eventTypes) continue
-                if (w.pkg != null && w.pkg != eventPkg) continue
-                if (w.textContains != null &&
-                    (eventText == null || !eventText.contains(w.textContains, ignoreCase = true))
-                ) continue
-                w.latch.countDown()
-            }
+        if (event != null) {
+            eventAwaiter.notify(event)
         }
 
-        if (event != null && shouldScheduleSemanticPublish(event.eventType)) {
+        if (event != null && AccessibilityEventPayloadFactory.shouldScheduleSemanticPublish(event.eventType)) {
             scheduleSemanticPublish(eventType = event.eventType)
         }
     }
 
     override fun onInterrupt() {
         Log.w(TAG, "Accessibility service interrupted")
-        serviceScope.launch { notifyAccessibilityDisabled("service_interrupted") }
+        serviceScope.launch { accessibilityDisabledNotifier.notify("service_interrupted") }
         val activeCoordinator = coordinator
         if (activeCoordinator != null) {
             serviceScope.launch { activeCoordinator.dispatch(AgentEvent.ServiceInterrupted) }
@@ -254,209 +229,29 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun setupAgentRuntime() {
-        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-        agentDeviceId = deviceId
-        val serverUrl = resolveServerUrl()
-        val capabilityProvider = { AgentCapabilities.buildCapabilityList() }
-        val deviceMetadataProvider = {
-            mapOf(
-                "manufacturer" to Build.MANUFACTURER,
-                "model" to Build.MODEL,
-                "device" to Build.DEVICE,
-                "brand" to Build.BRAND,
-                "product" to Build.PRODUCT,
-                "androidVersion" to (Build.VERSION.RELEASE ?: ""),
-                "sdkInt" to Build.VERSION.SDK_INT,
-            )
-        }
-        val localStateStore = SharedPreferencesAgentStateStore.from(applicationContext)
-        stateStore = localStateStore
-        outboundEventSeqNo.set(localStateStore.read().lastOutboundEventSeqNo)
-
-        Log.i(TAG, "Preparing agent runtime for $serverUrl device=$deviceId")
-
-        val executor = ActionExecutor(this)
-        val automationDriver = AccessibilityAgentAutomationDriver(executor)
-        val ws =
-            WebSocketAgentTransport(
-                serverUrl = serverUrl,
+        val runtimeBundle =
+            ServiceRuntimeBootstrap(
+                service = this,
                 scope = serviceScope,
-            )
-        transport = ws
-
-        lateinit var localCoordinator: AgentStateCoordinator
-        val heartbeatScheduler =
-            CoroutineHeartbeatScheduler(serviceScope) {
-                localCoordinator.dispatch(AgentEvent.HeartbeatTick)
-            }
-        val backoffScheduler =
-            CoroutineBackoffScheduler(serviceScope) {
-                localCoordinator.dispatch(AgentEvent.BackoffElapsed)
-            }
-        localCoordinator =
-            AgentStateCoordinator(
-                scope = serviceScope,
-                deviceId = deviceId,
-                store = localStateStore,
-                transportDriver = ws,
-                heartbeatScheduler = heartbeatScheduler,
-                backoffScheduler = backoffScheduler,
+                logTag = TAG,
+                snapshotProvider = snapshotProvider,
+                eventAwaiter = eventAwaiter,
+                awaitSettle = { awaitSettle() },
                 runtimeHooks = ServiceRuntimeHooks(),
                 logger = ServiceAgentLogger(),
-                capabilitiesProvider = capabilityProvider,
-                deviceMetadataProvider = deviceMetadataProvider,
-            )
-        coordinator = localCoordinator
+            ).bootstrap()
 
-        val rt =
-            AgentRuntime(
-                transport = ws,
-                snapshotBuilder = { buildSnapshot(deviceId) },
-                settle = { awaitSettle() },
-                automationDriver = automationDriver,
-                deviceId = deviceId,
-                capabilities = capabilityProvider(),
-                okHttpClient = createSharedClient(),
-                onExecutionEvent = { event -> localCoordinator.dispatch(event) },
-                screenshotCapture = { captureScreenshot() },
-                eventAwaiter = { kind, pkg, textContains, ms ->
-                    awaitAccessibilityEvent(kind, pkg, textContains, ms)
-                },
-            )
-        runtime = rt
-        rt.start()
+        agentDeviceId = runtimeBundle.deviceId
+        stateStore = runtimeBundle.stateStore
+        outboundEventSeqNo.set(runtimeBundle.lastOutboundEventSeqNo)
+        transport = runtimeBundle.transport
+        coordinator = runtimeBundle.coordinator
+        runtime = runtimeBundle.runtime
+        runtimeBundle.runtime.start()
 
         serviceScope.launch {
-            localCoordinator.dispatch(AgentEvent.ServiceConnected)
+            runtimeBundle.coordinator.dispatch(AgentEvent.ServiceConnected)
         }
-    }
-
-    /**
-     * Captures a screenshot synchronously by bridging the async
-     * [AccessibilityService.takeScreenshot] callback with a [CountDownLatch].
-     *
-     * Runs on [kotlinx.coroutines.Dispatchers.IO] (the JsRuntime thread); the
-     * callback arrives on the main executor and unblocks the IO thread via the latch.
-     *
-     * Returns a base64-encoded PNG string, or null on failure or API < 30.
-     */
-    private fun captureScreenshot(): String? {
-        if (Build.VERSION.SDK_INT < 30) return null
-        val latch = CountDownLatch(1)
-        var resultBase64: String? = null
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            mainExecutor,
-            object : AccessibilityService.TakeScreenshotCallback {
-                override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                    try {
-                        val hb = screenshot.hardwareBuffer ?: return
-                        val hw = Bitmap.wrapHardwareBuffer(hb, screenshot.colorSpace)
-                        hb.close()
-                        hw ?: return
-                        val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
-                        hw.recycle()
-                        val baos = ByteArrayOutputStream()
-                        soft.compress(Bitmap.CompressFormat.PNG, 100, baos)
-                        soft.recycle()
-                        resultBase64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                    } finally {
-                        latch.countDown()
-                    }
-                }
-                override fun onFailure(errorCode: Int) {
-                    Log.w(TAG, "captureScreenshot: takeScreenshot failed errorCode=$errorCode")
-                    latch.countDown()
-                }
-            }
-        )
-        if (!latch.await(5, TimeUnit.SECONDS)) {
-            Log.w(TAG, "captureScreenshot: callback timed out")
-        }
-        return resultBase64
-    }
-
-    /**
-     * Blocks the calling thread (Rhino/IO) until an accessibility event matching
-     * [kind] fires, or [timeoutMs] elapses.
-     *
-     * Supported kind values:
-     *   - "activity_created" / "window_state_changed" → TYPE_WINDOW_STATE_CHANGED
-     *   - "content_changed"                           → TYPE_WINDOW_CONTENT_CHANGED
-     *
-     * Returns true if the event fired within the timeout, false otherwise.
-     */
-    private fun awaitAccessibilityEvent(
-        kind: String,
-        pkg: String?,
-        textContains: String?,
-        timeoutMs: Long,
-    ): Boolean {
-        val eventTypes: Set<Int> = when (kind) {
-            "activity_created", "window_state_changed" ->
-                setOf(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
-            "content_changed" ->
-                setOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
-            else -> {
-                Log.w(TAG, "awaitAccessibilityEvent: unknown kind '$kind'")
-                return false
-            }
-        }
-        val latch = CountDownLatch(1)
-        val watcher = EventWatcher(eventTypes, pkg, textContains, latch)
-        eventWatchers.add(watcher)
-        return try {
-            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-        } finally {
-            eventWatchers.remove(watcher)
-        }
-    }
-
-    /** Registered by [awaitAccessibilityEvent]; notified from [onAccessibilityEvent]. */
-    private data class EventWatcher(
-        val eventTypes: Set<Int>,
-        val pkg: String?,
-        val textContains: String?,
-        val latch: CountDownLatch,
-    )
-
-    /**
-     * Builds a snapshot from all visible application and system windows.
-     *
-     * Including multiple windows means permission dialogs, system alerts, and
-     * bottom sheets are all visible in a single snapshot.
-     *
-     * Falls back to rootInActiveWindow when the window list is unavailable.
-     */
-    private fun buildSnapshot(deviceId: String): com.autosdk.agent.observation.UiSnapshot? {
-        val allWindows = windows
-        val filteredWindows =
-            allWindows
-                ?.filter { win ->
-                    win.type == AccessibilityWindowInfo.TYPE_APPLICATION ||
-                        win.type == AccessibilityWindowInfo.TYPE_SYSTEM
-                }
-
-        val windowRoots =
-            filteredWindows
-                ?.mapNotNull { it.root }
-                ?.takeIf { it.isNotEmpty() }
-                ?: listOfNotNull(rootInActiveWindow)
-
-        if (windowRoots.isEmpty()) {
-            return null
-        }
-
-        val foregroundPkg = windowRoots.firstOrNull()?.packageName?.toString()
-        val hasSystemWindow = filteredWindows?.any { it.type == AccessibilityWindowInfo.TYPE_SYSTEM } == true
-
-        return SnapshotBuilder.build(
-            roots = windowRoots,
-            deviceId = deviceId,
-            packageName = foregroundPkg,
-            activityName = currentActivityName,
-            hasSystemWindow = hasSystemWindow,
-        )
     }
 
     private fun scheduleSemanticPublish(eventType: Int) {
@@ -465,175 +260,17 @@ class AgentAccessibilityService : AccessibilityService() {
             serviceScope.launch {
                 awaitSettle()
                 val deviceId = agentDeviceId ?: return@launch
-                val snapshot = buildSnapshot(deviceId) ?: return@launch
+                val snapshot = snapshotProvider.build(deviceId) ?: return@launch
                 val seqNo = outboundEventSeqNo.incrementAndGet()
                 stateStore?.persistLastOutboundEventSeqNo(seqNo)
                 val params =
-                    buildScreenChangedParams(
+                    AccessibilityEventPayloadFactory.buildScreenChangedParams(
                         seqNo = seqNo,
-                        eventType = eventTypeName(eventType),
+                        eventType = AccessibilityEventPayloadFactory.eventTypeName(eventType),
                         snapshot = snapshot,
                     )
                 coordinator?.dispatch(AgentEvent.WindowStateChanged(params))
             }
-    }
-
-    private fun buildScreenChangedParams(
-        seqNo: Long,
-        eventType: String,
-        snapshot: com.autosdk.agent.observation.UiSnapshot,
-    ) = buildJsonObject {
-        put("seqNo", seqNo)
-        snapshot.packageName?.let { put("packageName", it) }
-        snapshot.activityName?.let { put("className", it) }
-        put("eventType", eventType)
-        snapshot.screenState?.let { put("screenState", it) }
-        snapshot.focusedTargetId?.let { put("focusedTargetId", it) }
-        put("text", buildJsonArray {
-            snapshot.targets.forEach { target ->
-                target.text?.takeIf { it.isNotBlank() }?.let { add(it) }
-                target.label?.takeIf { it.isNotBlank() }?.let { add(it) }
-            }
-        })
-        put(
-            "ui",
-            buildJsonObject {
-                put("activeUiKey", snapshot.semantic.activeUiKey)
-                put("baseScreenKey", snapshot.semantic.baseScreenKey)
-                snapshot.semantic.overlayKey?.let { put("overlayKey", it) }
-                put("uiReady", snapshot.semantic.uiReady)
-                put("semanticDigest", snapshot.semantic.semanticDigest)
-                snapshot.semantic.focusedTargetKey?.let { put("focusedTargetKey", it) }
-                put(
-                    "forms",
-                    buildJsonArray {
-                        snapshot.semantic.forms.forEach { form ->
-                            addJsonObject {
-                                put("formKey", form.formKey)
-                                put("fieldKeys", buildJsonArray {
-                                    form.fieldKeys.forEach { add(it) }
-                                })
-                                form.focusedFieldKey?.let { put("focusedFieldKey", it) }
-                                put("ready", form.ready)
-                            }
-                        }
-                    },
-                )
-                put(
-                    "buttons",
-                    buildJsonArray {
-                        snapshot.semantic.buttons.forEach { button ->
-                            addJsonObject {
-                                put("buttonKey", button.buttonKey)
-                                put("enabled", button.enabled)
-                                put("visible", button.visible)
-                                put("primary", button.primary)
-                            }
-                        }
-                    },
-                )
-            },
-        )
-        put("targets", buildJsonArray {
-            snapshot.targets.forEach { target ->
-                addJsonObject {
-                    put("targetId", target.targetId)
-                    put("uiRole", target.uiRole)
-                    target.label?.let { put("label", it) }
-                    target.semanticKey?.let { put("semanticKey", it) }
-                    target.formKey?.let { put("formKey", it) }
-                    target.text?.let { put("text", it) }
-                    target.resourceId?.let { put("resourceId", it) }
-                    put("enabled", target.enabled)
-                    put("actionable", target.actionable)
-                    target.checked?.let { put("checked", it) }
-                    put("focused", target.focused)
-                }
-            }
-        })
-    }
-
-    private fun buildActivityCreatedParams(
-        seqNo: Long,
-        packageName: String?,
-        className: String?,
-    ) = buildJsonObject {
-        put("seqNo", seqNo)
-        packageName?.let { put("packageName", it) }
-        className?.let { put("className", it) }
-    }
-
-    private fun buildNotificationParams(
-        seqNo: Long,
-        event: AccessibilityEvent,
-    ) = buildJsonObject {
-        put("seqNo", seqNo)
-        event.packageName?.toString()?.let { put("packageName", it) }
-        put("text", buildJsonArray {
-            event.text?.forEach { t -> t?.toString()?.takeIf { it.isNotBlank() }?.let { add(it) } }
-            event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { add(it) }
-        })
-    }
-
-    private fun shouldScheduleSemanticPublish(eventType: Int): Boolean =
-        eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
-
-    private fun eventTypeName(eventType: Int): String =
-        when (eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "TYPE_WINDOW_STATE_CHANGED"
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "TYPE_WINDOW_CONTENT_CHANGED"
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> "TYPE_WINDOWS_CHANGED"
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "TYPE_VIEW_TEXT_CHANGED"
-            AccessibilityEvent.TYPE_VIEW_SCROLLED -> "TYPE_VIEW_SCROLLED"
-            else -> "TYPE_UNKNOWN"
-        }
-
-    private fun resolveServerUrl(): String {
-        val sysProp =
-            runCatching {
-                Class.forName("android.os.SystemProperties")
-                    .getMethod("get", String::class.java, String::class.java)
-                    .invoke(null, "auto.agent.server_url", "") as String
-            }.getOrElse { "" }
-        return sysProp.takeIf { it.isNotBlank() } ?: com.autosdk.agent.BuildConfig.SERVER_URL
-    }
-
-
-    private suspend fun notifyAccessibilityDisabled(reason: String) {
-        val seqNo = outboundEventSeqNo.incrementAndGet()
-        val pendingEvent = PendingAccessibilityDisabledEvent(seqNo = seqNo, reason = reason)
-        stateStore?.persistLastOutboundEventSeqNo(seqNo)
-        stateStore?.persistPendingAccessibilityDisabledEvent(pendingEvent)
-        flushPendingAccessibilityDisabledEvent()
-    }
-
-    private suspend fun flushPendingAccessibilityDisabledEvent() {
-        val store = stateStore ?: return
-        val pendingEvent = store.read().pendingAccessibilityDisabledEvent ?: return
-        val payload =
-            buildJsonObject {
-                put("seqNo", pendingEvent.seqNo)
-                put("reason", pendingEvent.reason)
-            }
-
-        val sent =
-            runCatching {
-                transport?.sendNotification(
-                    method = METHOD_ANDROID_ACCESSIBILITY_DISABLED,
-                    params = payload,
-                ) == true
-            }.getOrElse { error ->
-                Log.w(TAG, "Failed to notify accessibility disabled: ${error.message}")
-                false
-            }
-
-        if (sent) {
-            store.clearPendingAccessibilityDisabledEvent()
-        }
     }
 
     /**
@@ -666,7 +303,7 @@ class AgentAccessibilityService : AccessibilityService() {
         override fun onStatusChanged(status: AgentStatus) {
             val isConnected = status.transport == "connected"
             if (isConnected && !wasTransportConnected) {
-                serviceScope.launch { flushPendingAccessibilityDisabledEvent() }
+                serviceScope.launch { accessibilityDisabledNotifier.flushPending() }
             }
             wasTransportConnected = isConnected
             AgentNotificationManager.update(this@AgentAccessibilityService, status)

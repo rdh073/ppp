@@ -332,7 +332,7 @@ func (c *Config) applyEnvOverrides() error {
 
 // formatSerialByDevice formats a deviceID→adbSerial map to the
 // "deviceId1=serial1,deviceId2=serial2" string expected by
-// usecase.NewAdbAccessibilityAutoEnabler. Output is sorted for determinism.
+// devicectrl.NewAdbAccessibilityAutoEnabler. Output is sorted for determinism.
 func formatSerialByDevice(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
@@ -347,7 +347,7 @@ func formatSerialByDevice(m map[string]string) string {
 
 // parseSerialByDevice parses a "deviceId1=serial1,deviceId2=serial2" string
 // into a map. Invalid entries are silently skipped, matching the behaviour
-// of usecase.parseADBSerialByDeviceMap.
+// of appport.parseADBSerialByDeviceMap.
 func parseSerialByDevice(raw string) map[string]string {
 	result := make(map[string]string)
 	for _, entry := range strings.Split(raw, ",") {

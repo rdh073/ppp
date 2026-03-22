@@ -14,19 +14,25 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/accountmanager"
+	"github.com/autosdk/ppp/server-agent/internal/appport"
+	"github.com/autosdk/ppp/server-agent/internal/campaigns"
+	"github.com/autosdk/ppp/server-agent/internal/devicectrl"
 	"github.com/autosdk/ppp/server-agent/internal/dispatcher"
+	"github.com/autosdk/ppp/server-agent/internal/eventing"
 	"github.com/autosdk/ppp/server-agent/internal/eventruntime"
 	"github.com/autosdk/ppp/server-agent/internal/handler"
 	infrallm "github.com/autosdk/ppp/server-agent/internal/infra/llm"
 	"github.com/autosdk/ppp/server-agent/internal/orchestrator"
+	"github.com/autosdk/ppp/server-agent/internal/projection"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/telemetry"
 	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
 	toolcatalog "github.com/autosdk/ppp/server-agent/internal/tools/loader"
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
-	"github.com/autosdk/ppp/server-agent/internal/usecase"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
+	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 func main() {
@@ -180,28 +186,28 @@ func wireApp(cfg *Config, stores storeBundle, log *slog.Logger) (http.Handler, c
 	llmD := wireLLM(cfg, log)
 
 	// --- use cases ---
-	assigner := usecase.NewDeviceAssigner(stores.task, stores.queue, infra.reg, infra.runtime, log)
-	autoEnabler := usecase.NewAdbAccessibilityAutoEnabler(
+	assigner := workflowruntime.NewDeviceAssigner(stores.task, stores.queue, infra.reg, infra.runtime, log)
+	autoEnabler := devicectrl.NewAdbAccessibilityAutoEnabler(
 		cfg.ADB.Host,
 		fmt.Sprintf("%d", cfg.ADB.Port),
 		cfg.ADB.AccessibilityComponent,
 		formatSerialByDevice(cfg.ADB.SerialByDevice),
 	)
-	bindingManager := usecase.NewDeviceBindingManager(stores.binding, autoEnabler, infra.metricsRegistry, log)
+	bindingManager := devicectrl.NewDeviceBindingManager(stores.binding, autoEnabler, infra.metricsRegistry, log)
 	go bindingManager.Run(serverCtx, cfg.ADB.ReconcileInterval.D())
 
-	eventUC := usecase.NewEventIngestionWithBindings(infra.runtime, bindingManager, log)
-	lifecycleUC := usecase.NewAgentLifecycle(infra.reg, infra.runtime, bindingManager, eventUC.ForgetDevice, log)
+	eventUC := eventing.NewEventIngestionWithBindings(infra.runtime, bindingManager, log)
+	lifecycleUC := devicectrl.NewAgentLifecycle(infra.reg, infra.runtime, bindingManager, eventUC.ForgetDevice, log)
 	lifecycleUC.SetAssigner(assigner) // circular dep: DeviceAssigner ↔ AgentLifecycle
 
-	taskUC := usecase.NewTaskControl(stores.task, stores.state, infra.runtime, infra.reg, log)
+	taskUC := workflowruntime.NewTaskControl(stores.task, stores.state, infra.runtime, infra.reg, log)
 	taskUC.SetAssigner(assigner)
 	taskUC.SetCommandOutbox(stores.outbox)
 
 	infra.orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
-	eventPlaneUC := usecase.NewEventPlaneControl(stores.eventPlane, infra.runtime, eventUC, log, infra.metricsRegistry)
+	eventPlaneUC := eventing.NewEventPlaneControl(stores.eventPlane, infra.runtime, eventUC, log, infra.metricsRegistry)
 
-	adbShellRunner := usecase.NewAdbShellRunner(cfg.ADB.Host, fmt.Sprintf("%d", cfg.ADB.Port), bindingManager)
+	adbShellRunner := devicectrl.NewAdbShellRunner(cfg.ADB.Host, fmt.Sprintf("%d", cfg.ADB.Port), bindingManager)
 	mux := wireMux(cfg, stores, infra, llmD, bindingManager, adbShellRunner, eventUC, lifecycleUC, taskUC, eventPlaneUC, log)
 
 	// --- periodic data pruning (prevent unbounded file-store growth) ---
@@ -288,7 +294,7 @@ func wireInfra(serverCtx context.Context, serverCancel context.CancelFunc, cfg *
 	go watchdog.Run(serverCtx)
 
 	// --- runtime recovery ---
-	recoveryUC := usecase.NewRuntimeRecovery(stores.task, stores.state, log)
+	recoveryUC := workflowruntime.NewRuntimeRecovery(stores.task, stores.state, log)
 	recoveryUC.SetQueue(stores.queue)
 	recoveryReport, err := recoveryUC.Recover(context.Background())
 	if err != nil {
@@ -420,22 +426,22 @@ func wireMux(
 	stores storeBundle,
 	infra infraDeps,
 	llmD llmDeps,
-	bindingManager *usecase.DeviceBindingManager,
-	adbShellRunner *usecase.AdbShellRunner,
-	eventUC usecase.EventIngestion,
-	lifecycleUC usecase.AgentLifecycle,
-	taskUC usecase.TaskControl,
-	eventPlaneUC usecase.EventPlaneControl,
+	bindingManager *devicectrl.DeviceBindingManager,
+	adbShellRunner *devicectrl.AdbShellRunner,
+	eventUC appport.EventIngestion,
+	lifecycleUC appport.AgentLifecycle,
+	taskUC appport.TaskControl,
+	eventPlaneUC appport.EventPlaneControl,
 	log *slog.Logger,
 ) http.Handler {
 	agentHandler := handler.NewAgentHandler(lifecycleUC, log)
-	recordingStore := handler.NewRecordingStore()
+	recordingStore := devicectrl.NewRecordingStore()
 	macroLibrary, err := store.NewFileMacroStore(cfg.Server.DataDir)
 	if err != nil {
 		log.Error("failed to open macro library", "dir", cfg.Server.DataDir, "err", err)
 		os.Exit(1)
 	}
-	deviceHandler := handler.NewDeviceHandler(infra.reg, log, bindingManager).
+	deviceHandler := devicectrl.NewDeviceHandler(infra.reg, log, bindingManager).
 		WithDispatcher(infra.disp).
 		WithRecording(recordingStore).
 		WithRecordingLibrary(macroLibrary).
@@ -454,24 +460,41 @@ func wireMux(
 		log.Error("failed to open account store", "dir", cfg.Server.DataDir, "err", err)
 		os.Exit(1)
 	}
-	personaHandler := handler.NewPersonaHandler(personaStore)
-	accountHandler := handler.NewAccountHandler(accountStore)
-	accountToolHandler := handler.NewAccountToolHandler(accountStore)
-	// Derive base URL for campaign scripts (account_service_endpoint).
-	// Scripts call back to register accounts; this must resolve to the server itself.
-	campaignBaseURL := "http://localhost" + cfg.Server.Addr
-	if !strings.HasPrefix(cfg.Server.Addr, ":") {
-		campaignBaseURL = "http://" + cfg.Server.Addr
+	projectionStore, err := store.NewFileProjectionEventStore(cfg.Server.DataDir, 0)
+	if err != nil {
+		log.Error("failed to open projection event store", "dir", cfg.Server.DataDir, "err", err)
+		os.Exit(1)
 	}
-	campaignHandler := handler.NewCampaignHandler(taskUC, personaStore, accountStore, campaignBaseURL, log)
-	loginHandler := handler.NewLoginCampaignHandler(taskUC, accountStore, adbShellRunner, log, handler.GoogleLoginConfig())
-	igLoginHandler := handler.NewLoginCampaignHandler(taskUC, accountStore, adbShellRunner, log, handler.InstagramLoginConfig())
+	projectionHub := projection.NewHub(projectionStore, log)
+	projectedPersonaStore := accountmanager.NewProjectedPersonaStore(personaStore, projectionHub)
+	projectedAccountStore := accountmanager.NewProjectedAccountStore(accountStore, projectionHub)
+	personaService := accountmanager.NewPersonaService(projectedPersonaStore)
+	accountService := accountmanager.NewAccountService(projectedAccountStore)
+	personaHandler := accountmanager.NewPersonaHandler(personaService, "/account-manager/personas")
+	accountHandler := accountmanager.NewAccountHandler(accountService, "/account-manager/accounts")
+	accountToolHandler := accountmanager.NewAccountToolHandler(accountService)
+	// Derive base URL for account-creation scripts (account_service_endpoint).
+	// Scripts call back to register accounts; this must resolve to the server itself.
+	accountCreationBaseURL := "http://localhost" + cfg.Server.Addr
+	if !strings.HasPrefix(cfg.Server.Addr, ":") {
+		accountCreationBaseURL = "http://" + cfg.Server.Addr
+	}
+	accountCreationService := accountmanager.NewAccountCreationService(taskUC, projectedPersonaStore, projectedAccountStore, projectionHub, accountCreationBaseURL, log)
+	accountCreationHandler := accountmanager.NewAccountCreationHandler(accountCreationService, "/account-manager/account-creations")
+	googleLoginCfg := accountmanager.GoogleLoginConfig()
+	loginService := accountmanager.NewLoginRunService(taskUC, projectedAccountStore, adbShellRunner, projectionHub, log, googleLoginCfg.ServiceCfg)
+	loginHandler := accountmanager.NewLoginRunHandler(loginService, googleLoginCfg.PathPrefix)
+	instagramLoginCfg := accountmanager.InstagramLoginConfig()
+	igLoginService := accountmanager.NewLoginRunService(taskUC, projectedAccountStore, adbShellRunner, projectionHub, log, instagramLoginCfg.ServiceCfg)
+	igLoginHandler := accountmanager.NewLoginRunHandler(igLoginService, instagramLoginCfg.PathPrefix)
 	captionGen := infrallm.NewLLMCaptionGenerator()
 	imgGen, imgGenErr := infrallm.NewDallE3ImageGenerator()
 	if imgGenErr != nil {
 		log.Info("DALL-E 3 image generation disabled", "reason", imgGenErr)
 	}
-	postHandler := handler.NewPostCampaignHandler(taskUC, accountStore, captionGen, imgGen, adbShellRunner, cfg.Server.DataDir, log)
+	postService := campaigns.NewPostCampaignService(taskUC, projectedAccountStore, captionGen, imgGen, adbShellRunner, projectionHub, cfg.Server.DataDir, log)
+	postHandler := campaigns.NewPostCampaignHandler(postService, "/campaigns/posts")
+	projectionStreamHandler := handler.NewProjectionStreamHandler(projectionHub)
 	taskHandler := handler.NewTaskHandler(taskUC, log)
 	workflowHandler := handler.NewWorkflowHandler(infra.defStore, log)
 	eventPlaneHandler := handler.NewEventPlaneHandler(eventPlaneUC, log)
@@ -491,21 +514,22 @@ func wireMux(
 	mux.Handle("/workflows/", workflowHandler)
 	mux.Handle("/events", eventPlaneHandler)
 	mux.Handle("/events/", eventPlaneHandler)
+	mux.Handle("/events/stream", projectionStreamHandler)
 	mux.Handle("/macros", macroLibraryHandler)
 	mux.Handle("/macros/", macroLibraryHandler)
-	mux.Handle("/personas", personaHandler)
-	mux.Handle("/personas/", personaHandler)
-	mux.Handle("/accounts", accountHandler)
-	mux.Handle("/accounts/", accountHandler)
-	mux.Handle("/campaigns", campaignHandler)
-	mux.Handle("/campaigns/", campaignHandler)
+	mux.Handle("/account-manager/personas", personaHandler)
+	mux.Handle("/account-manager/personas/", personaHandler)
+	mux.Handle("/account-manager/accounts", accountHandler)
+	mux.Handle("/account-manager/accounts/", accountHandler)
+	mux.Handle("/account-manager/account-creations", accountCreationHandler)
+	mux.Handle("/account-manager/account-creations/", accountCreationHandler)
 	mux.Handle("/v1/tools/", accountToolHandler)
-	mux.Handle("/login/google", loginHandler)
-	mux.Handle("/login/google/", loginHandler)
-	mux.Handle("/login/instagram", igLoginHandler)
-	mux.Handle("/login/instagram/", igLoginHandler)
-	mux.Handle("/posts/instagram", postHandler)
-	mux.Handle("/posts/instagram/", postHandler)
+	mux.Handle("/account-manager/logins/google", loginHandler)
+	mux.Handle("/account-manager/logins/google/", loginHandler)
+	mux.Handle("/account-manager/logins/instagram", igLoginHandler)
+	mux.Handle("/account-manager/logins/instagram/", igLoginHandler)
+	mux.Handle("/campaigns/posts", postHandler)
+	mux.Handle("/campaigns/posts/", postHandler)
 	mux.Handle("/metrics", metricsHandler)
 	mux.Handle("/openapi.json", openAPISpecHandler)
 	mux.Handle("/swagger", swaggerUIHandler)
