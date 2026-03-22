@@ -24,6 +24,8 @@ const TAB_LABELS: Record<Tab, string> = {
   tasks: 'Task Control',
   workflows: 'Workflow Catalog',
   events: 'Event Feed',
+  macros: 'Macro Library',
+  campaigns: 'Campaign Automation',
 };
 
 export function Header({ activeTab, apiUrl, metricsUrl, healthStatus, theme, onToggleTheme }: HeaderProps) {

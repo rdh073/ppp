@@ -23,6 +23,7 @@ func (successDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan
 	return ch, nil
 }
 func (successDispatcher) DeliverResponse(domain.CommandResult) {}
+func (successDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 var _ dispatcher.Dispatcher = successDispatcher{}
 
@@ -35,6 +36,7 @@ func (failDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan do
 	return ch, nil
 }
 func (failDispatcher) DeliverResponse(domain.CommandResult) {}
+func (failDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 type staticToolInvoker struct {
 	calls  int
@@ -614,6 +616,7 @@ func (r rawDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan d
 	return ch, nil
 }
 func (r rawDispatcher) DeliverResponse(domain.CommandResult) {}
+func (r rawDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 // --- new tests for Fix 1: snapshot pre-check ---
 
@@ -948,6 +951,62 @@ func TestEngine_TickEvent_WhenNotWaiting_NoAction_Ignored(t *testing.T) {
 	}
 	if result.Terminal || result.State != nil {
 		t.Error("tick must be ignored for steps with no Action")
+	}
+}
+
+// captureDispatcher records the last command kind dispatched.
+type captureDispatcher struct {
+	capturedKind domain.CommandKind
+}
+
+func (c *captureDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan domain.CommandResult, error) {
+	c.capturedKind = cmd.Kind
+	ch := make(chan domain.CommandResult, 1)
+	ch <- domain.CommandResult{CommandID: cmd.ID, Success: true}
+	close(ch)
+	return ch, nil
+}
+func (c *captureDispatcher) DeliverResponse(domain.CommandResult) {}
+func (c *captureDispatcher) CancelByDevice(domain.DeviceID, string) {}
+
+var _ dispatcher.Dispatcher = (*captureDispatcher)(nil)
+
+// TestEngine_ScriptStep_DispatchesAndTerminates verifies that a workflow step
+// with a Script def dispatches CommandKindScript and advances to terminal on success.
+func TestEngine_ScriptStep_DispatchesAndTerminates(t *testing.T) {
+	def := &domain.WorkflowDef{
+		Name:  "script-flow",
+		Entry: "run",
+		Steps: map[string]domain.StepDef{
+			"run": {
+				Trigger:   domain.EventMatch{},
+				Script:    &domain.ScriptDef{Source: "return {done: true};"},
+				OnSuccess: "terminal",
+				OnFailure: "terminal",
+			},
+		},
+	}
+	disp := &captureDispatcher{}
+	eng := buildEngine(def, disp)
+	state := freshState("t1", "dev1")
+
+	result, err := eng.Handle(context.Background(), workflow.EngineCommand{
+		State:        state,
+		WorkflowName: "script-flow",
+		Task:         task("t1"),
+		Event:        anyEvent(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Terminal {
+		t.Error("expected terminal=true after script step")
+	}
+	if !result.State.TerminalSuccess {
+		t.Error("expected TerminalSuccess=true")
+	}
+	if disp.capturedKind != domain.CommandKindScript {
+		t.Errorf("expected CommandKindScript, got %q", disp.capturedKind)
 	}
 }
 

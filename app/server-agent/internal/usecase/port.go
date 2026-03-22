@@ -41,6 +41,17 @@ type EventIngestion interface {
 	IngestNotification(ctx context.Context, deviceID domain.DeviceID, method string, rawParams json.RawMessage) error
 }
 
+// AdbPmClearer clears package data via ADB shell.
+type AdbPmClearer interface {
+	PmClear(ctx context.Context, deviceID domain.DeviceID, pkg string) error
+}
+
+// AdbFilePusher pushes files to a device and triggers the media scanner.
+type AdbFilePusher interface {
+	PushFile(ctx context.Context, deviceID domain.DeviceID, localPath, remotePath string) error
+	MediaScan(ctx context.Context, deviceID domain.DeviceID, remotePath string) error
+}
+
 // Compile-time interface satisfaction checks.
 var (
 	_ AgentLifecycle    = (*AgentLifecycleUseCase)(nil)

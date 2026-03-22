@@ -13,6 +13,7 @@ import (
 )
 
 var ErrInvalidEventListQuery = store.ErrInvalidEventListQuery
+var ErrNotFound = store.ErrNotFound
 
 const (
 	DefaultEventListLimit = store.DefaultEventListLimit

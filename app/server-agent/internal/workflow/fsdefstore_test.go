@@ -31,9 +31,9 @@ func TestFSDefStore_LoadsExampleWorkflows(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"android-settings-private-dns",
-		"captcha-solve",
-		"android-semantic-login",
+		"android-settings-private-dns-script",
+		"captcha-script",
+		"instagram-login-script",
 	} {
 		if _, ok := names[name]; !ok {
 			t.Fatalf("expected workflow %q to load, got names=%v", name, names)

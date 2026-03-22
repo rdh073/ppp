@@ -45,6 +45,7 @@ func (noopDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan do
 }
 
 func (noopDispatcher) DeliverResponse(domain.CommandResult) {}
+func (noopDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 // loopWorkflowDef matches any event but routes back to itself — state is
 // persisted with the seeded Inputs and the task stays running.
@@ -74,7 +75,7 @@ func newLog() *slog.Logger {
 func TestHello_RegistersSessionAndFiresOnlineEvent(t *testing.T) {
 	reg := registry.New()
 	proc := &recordingProcessor{}
-	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+	uc := usecase.NewAgentLifecycle(reg, proc, nil, nil, newLog())
 
 	resp, err := uc.Hello(context.Background(), usecase.HelloRequest{
 		DeviceID:        "dev-1",
@@ -111,7 +112,7 @@ func TestHello_RegistersSessionAndFiresOnlineEvent(t *testing.T) {
 func TestHello_ReplacesExistingSession(t *testing.T) {
 	reg := registry.New()
 	proc := &recordingProcessor{}
-	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+	uc := usecase.NewAgentLifecycle(reg, proc, nil, nil, newLog())
 
 	// First hello.
 	resp1, _ := uc.Hello(context.Background(), usecase.HelloRequest{DeviceID: "dev-2"}, noopSender{})
@@ -130,7 +131,7 @@ func TestHello_ReplacesExistingSession(t *testing.T) {
 
 func TestResume_UnknownSession_Error(t *testing.T) {
 	reg := registry.New()
-	uc := usecase.NewAgentLifecycle(reg, &recordingProcessor{}, newLog())
+	uc := usecase.NewAgentLifecycle(reg, &recordingProcessor{}, nil, nil, newLog())
 
 	_, err := uc.Resume(context.Background(), usecase.ResumeRequest{
 		SessionID: "sess-nonexistent",
@@ -144,7 +145,7 @@ func TestResume_UnknownSession_Error(t *testing.T) {
 func TestResume_KnownSession_Accepted(t *testing.T) {
 	reg := registry.New()
 	proc := &recordingProcessor{}
-	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+	uc := usecase.NewAgentLifecycle(reg, proc, nil, nil, newLog())
 
 	// First, register via Hello.
 	resp, _ := uc.Hello(context.Background(), usecase.HelloRequest{DeviceID: "dev-3"}, noopSender{})
@@ -169,7 +170,7 @@ func TestResume_KnownSession_Accepted(t *testing.T) {
 func TestDisconnect_RemovesSessionAndFiresOfflineEvent(t *testing.T) {
 	reg := registry.New()
 	proc := &recordingProcessor{}
-	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+	uc := usecase.NewAgentLifecycle(reg, proc, nil, nil, newLog())
 
 	resp, _ := uc.Hello(context.Background(), usecase.HelloRequest{DeviceID: "dev-4"}, noopSender{})
 	proc.events = nil
@@ -188,7 +189,7 @@ func TestDisconnect_RemovesSessionAndFiresOfflineEvent(t *testing.T) {
 func TestDisconnect_Idempotent_NoDuplicateOfflineEvent(t *testing.T) {
 	reg := registry.New()
 	proc := &recordingProcessor{}
-	uc := usecase.NewAgentLifecycle(reg, proc, newLog())
+	uc := usecase.NewAgentLifecycle(reg, proc, nil, nil, newLog())
 
 	resp, _ := uc.Hello(context.Background(), usecase.HelloRequest{DeviceID: "dev-idempotent"}, noopSender{})
 	proc.events = nil

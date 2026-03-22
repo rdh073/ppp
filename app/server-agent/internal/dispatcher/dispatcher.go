@@ -15,9 +15,11 @@ import (
 // Dispatcher sends device.* commands to connected android-agents and correlates responses.
 // Dispatch returns a channel that receives exactly one CommandResult then is closed.
 // DeliverResponse is called by the transport layer when a device.* response arrives.
+// CancelByDevice aborts all inflight commands for a device (e.g. on WebSocket disconnect).
 type Dispatcher interface {
 	Dispatch(ctx context.Context, cmd domain.Command) (<-chan domain.CommandResult, error)
 	DeliverResponse(result domain.CommandResult)
+	CancelByDevice(deviceID domain.DeviceID, reason string)
 }
 
 // MemoryDispatcher is the in-process Dispatcher implementation.

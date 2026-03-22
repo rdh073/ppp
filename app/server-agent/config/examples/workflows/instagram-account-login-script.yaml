@@ -1,0 +1,87 @@
+name: instagram-account-login-script
+version: 1
+entry: login
+
+# Logs into an existing Instagram account via the Instagram app.
+# Inputs: email (required), password (required)
+# Returns: { loggedIn: bool }
+
+steps:
+
+  login:
+    trigger: {}
+    script:
+      source: |-
+        // Open Instagram — force a clean start
+        tap({ kind: "open_intent", intentAction: "android.intent.action.MAIN", intentPackage: "com.instagram.android" });
+
+        // Wait for either the login screen or already-logged-in home feed
+        if (waitFor({ kind: "text", value: "Log in" }, 10000)) {
+          // Already on login screen
+        } else if (waitFor({ kind: "text", value: "Log in with Google" }, 5000)) {
+          // Also a login variant
+        } else if (waitFor({ kind: "text", value: "Search" }, 5000)) {
+          // Already logged in — nothing to do
+          return { loggedIn: true };
+        } else {
+          throw new Error("Instagram login screen not found");
+        }
+
+        // Tap "Log in" if we see the welcome/landing screen first
+        if (waitFor({ kind: "text", value: "Log in" }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Log in" } });
+        }
+
+        // Wait for email/phone/username field
+        if (!waitFor({ kind: "content_desc", value: "Phone number, username or email" }, 8000)) {
+          if (!waitFor({ kind: "content_desc", value: "Email address or username" }, 5000)) {
+            throw new Error("Email/username field not found");
+          }
+        }
+
+        // --- Username / Email ---
+        if (waitFor({ kind: "content_desc", value: "Phone number, username or email" }, 2000)) {
+          input({ kind: "content_desc", value: "Phone number, username or email" }, params.email);
+        } else {
+          input({ kind: "content_desc", value: "Email address or username" }, params.email);
+        }
+
+        // --- Password ---
+        if (!waitFor({ kind: "content_desc", value: "Password" }, 5000)) {
+          throw new Error("Password field not found");
+        }
+        input({ kind: "content_desc", value: "Password" }, params.password);
+
+        // Tap Log in
+        tap({ kind: "click", target: { kind: "text", value: "Log in" } });
+
+        // --- Handle post-login prompts ---
+
+        // "Save your login info?" — dismiss
+        if (waitFor({ kind: "text", value: "Save your login info?" }, 8000)) {
+          if (waitFor({ kind: "text", value: "Not now" }, 3000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Not now" } });
+          }
+        }
+
+        // "Turn on notifications?" — dismiss
+        if (waitFor({ kind: "text", value: "Turn on Notifications" }, 5000)) {
+          if (waitFor({ kind: "text", value: "Not Now" }, 3000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Not Now" } });
+          }
+        }
+
+        // Confirm we are on the home feed
+        var loggedIn = waitFor({ kind: "text", value: "Search" }, 10000) ||
+                       waitFor({ kind: "content_desc", value: "Home" }, 5000) ||
+                       waitFor({ kind: "text", value: "Reels" }, 5000);
+
+        return { loggedIn: loggedIn };
+      params:
+        email:    "{{input.email}}"
+        password: "{{input.password}}"
+      outputs:
+        loggedIn: instagram_logged_in
+      timeout: 120s
+    on_success: terminal
+    on_failure: terminal

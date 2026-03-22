@@ -37,31 +37,30 @@ type AgentLifecycleUseCase struct {
 	log               *slog.Logger
 }
 
+// NewAgentLifecycle creates an AgentLifecycleUseCase.
+// connectedNotifier and forgetDevice are optional (nil-safe).
 func NewAgentLifecycle(
 	reg registry.AgentRegistry,
 	orch EventProcessor,
+	connectedNotifier AgentConnectedNotifier,
+	forgetDevice func(domain.DeviceID),
 	log *slog.Logger,
 ) *AgentLifecycleUseCase {
-	return &AgentLifecycleUseCase{reg: reg, orchestrator: orch, log: log}
+	return &AgentLifecycleUseCase{
+		reg:               reg,
+		orchestrator:      orch,
+		connectedNotifier: connectedNotifier,
+		forgetDevice:      forgetDevice,
+		log:               log,
+	}
 }
 
 // SetAssigner wires the DeviceAssigner so that newly connected devices are
 // automatically assigned pending tasks from the queue.
+// This remains a setter because DeviceAssigner has a justified circular
+// dependency: it depends on both TaskControl and AgentLifecycle.
 func (u *AgentLifecycleUseCase) SetAssigner(a *DeviceAssigner) {
 	u.assigner = a
-}
-
-// SetForgetDevice registers a callback invoked on Disconnect to purge any
-// cached per-device state (e.g. ADB serial) from the event ingestion layer.
-func (u *AgentLifecycleUseCase) SetForgetDevice(f func(domain.DeviceID)) {
-	u.forgetDevice = f
-}
-
-// SetConnectedNotifier wires the optional notifier that records the agent's
-// inferred ADB serial (derived from the WebSocket remote address) into the
-// device binding store the first time a device connects.
-func (u *AgentLifecycleUseCase) SetConnectedNotifier(n AgentConnectedNotifier) {
-	u.connectedNotifier = n
 }
 
 // HelloRequest carries parsed parameters from an agent.hello JSON-RPC call.

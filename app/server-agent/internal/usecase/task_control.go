@@ -75,6 +75,7 @@ type TaskSummary struct {
 	RetryCount        int
 	LastCommandStatus domain.CommandOutboxStatus
 	LastCommandError  string
+	OutputArtifacts   map[string]string // populated for terminal tasks from WorkflowState.Inputs
 }
 
 func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error) {
@@ -263,6 +264,9 @@ func (u *TaskControlUseCase) enrichTaskSummaries(ctx context.Context, tasks []*d
 			if err == nil && state != nil {
 				summary.CurrentStep = state.CurrentStep
 				summary.RetryCount = state.RetryCount
+				if task.Status == domain.TaskStatusCompleted || task.Status == domain.TaskStatusFailed {
+					summary.OutputArtifacts = state.Inputs
+				}
 			}
 		}
 

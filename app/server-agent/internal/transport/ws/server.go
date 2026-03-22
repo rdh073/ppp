@@ -72,12 +72,7 @@ func (s *AgentServer) readLoop(ctx context.Context, conn *Conn) {
 				activeSession, _, stillConnected := s.reg.GetByDevice(deviceID)
 				shouldCancel := !stillConnected || activeSession.ID == sessionID
 				if shouldCancel {
-					type deviceInflightCanceler interface {
-						CancelByDevice(deviceID domain.DeviceID, reason string)
-					}
-					if canceler, ok := s.disp.(deviceInflightCanceler); ok {
-						canceler.CancelByDevice(deviceID, "websocket transport disconnected")
-					}
+					s.disp.CancelByDevice(deviceID, "websocket transport disconnected")
 				}
 			}
 			s.log.Info("session removed on disconnect", "sessionId", sessionID, "deviceId", deviceID)

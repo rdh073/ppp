@@ -149,6 +149,7 @@ func taskSummaryJSON(summary *usecase.TaskSummary) map[string]any {
 		"retryCount":        summary.RetryCount,
 		"lastCommandStatus": string(summary.LastCommandStatus),
 		"lastCommandError":  summary.LastCommandError,
+		"outputArtifacts":   summary.OutputArtifacts,
 		"createdAt":         t.CreatedAt,
 		"updatedAt":         t.UpdatedAt,
 	}

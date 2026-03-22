@@ -32,6 +32,11 @@ class JsAutomationBridge(
     private val automationDriver: AgentAutomationDriver,
     private val okHttpClient: OkHttpClient,
     val logs: MutableList<String> = mutableListOf(),
+    private val screenshotCapture: () -> String? = { null },
+    /** Blocks until an accessibility event matching [kind] fires or timeout elapses.
+     *  kind: "activity_created" | "window_state_changed" | "content_changed"
+     *  Returns true if the event was received, false on timeout. */
+    private val eventAwaiter: (kind: String, pkg: String?, textContains: String?, timeoutMs: Long) -> Boolean = { _, _, _, _ -> false },
 ) {
 
     /** Registers all bridge functions into [scope]. */
@@ -45,6 +50,8 @@ class JsAutomationBridge(
         ScriptableObject.putProperty(scope, "home", homeFn(cx, scope))
         ScriptableObject.putProperty(scope, "log", logFn(cx, scope))
         ScriptableObject.putProperty(scope, "http", httpFn(cx, scope))
+        ScriptableObject.putProperty(scope, "screenshot", screenshotFn(cx, scope))
+        ScriptableObject.putProperty(scope, "awaitEvent", awaitEventFn(cx, scope))
     }
 
     // ---- bridge functions ----
@@ -127,6 +134,22 @@ class JsAutomationBridge(
             scriptError("home: ${result.reason}")
         }
         buildResultObject(cx, scope, "ok" to true)
+    }
+
+    private fun screenshotFn(cx: Context, scope: Scriptable) = makeFn(scope, "screenshot") { _, _, _, _ ->
+        val base64 = screenshotCapture()
+            ?: scriptError("screenshot: capture not available or API < 30")
+        buildResultObject(cx, scope, "base64" to base64, "mimeType" to "image/png")
+    }
+
+    private fun awaitEventFn(cx: Context, scope: Scriptable) = makeFn(scope, "awaitEvent") { _, _, args, _ ->
+        val kind = args.getOrNull(0)?.toString()
+            ?: scriptError("awaitEvent: expected kind string")
+        val opts = args.getOrNull(1) as? NativeObject
+        val timeoutMs = (args.getOrNull(2) as? Number)?.toLong() ?: 5_000L
+        val pkg = opts?.get("package", opts)?.toString()
+        val textContains = opts?.get("textContains", opts)?.toString()
+        eventAwaiter(kind, pkg, textContains, timeoutMs)
     }
 
     private fun logFn(cx: Context, scope: Scriptable) = makeFn(scope, "log") { _, _, args, _ ->
@@ -217,6 +240,11 @@ class JsAutomationBridge(
                 val targetObj = obj.get("target", obj) as? NativeObject ?: return null
                 val pkg = targetObj.get("value", targetObj)?.toString() ?: return null
                 AutomationAction.OpenApp(pkg)
+            }
+            "open_intent" -> {
+                val intentAction = obj.get("intentAction", obj)?.toString() ?: return null
+                val pkg = obj.get("package", obj)?.toString()
+                AutomationAction.OpenIntent(intentAction, pkg)
             }
             "back" -> AutomationAction.Back
             "home" -> AutomationAction.Home

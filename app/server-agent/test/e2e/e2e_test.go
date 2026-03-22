@@ -86,7 +86,7 @@ func buildTestServer(t *testing.T, workflowDef *domain.WorkflowDef) *httptest.Se
 	assigner := usecase.NewDeviceAssigner(taskStore, taskQueue, reg, runtime, log)
 	orch.SetOnTaskTerminal(assigner.OnTaskTerminal)
 
-	lifecycleUC := usecase.NewAgentLifecycle(reg, runtime, log)
+	lifecycleUC := usecase.NewAgentLifecycle(reg, runtime, nil, nil, log)
 	lifecycleUC.SetAssigner(assigner)
 
 	taskUC := usecase.NewTaskControl(taskStore, stateStore, runtime, reg, log)

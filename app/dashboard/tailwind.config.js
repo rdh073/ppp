@@ -4,10 +4,11 @@ export default {
   theme: {
     extend: {
       boxShadow: {
-        soft: '0 16px 32px rgba(27, 77, 57, 0.14)',
+        soft: '0 16px 32px rgba(0, 0, 0, 0.4)',
       },
       fontFamily: {
-        sans: ['Sora', 'Manrope', 'Trebuchet MS', 'sans-serif'],
+        sans: ['Fira Sans', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['Fira Code', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
     },
   },

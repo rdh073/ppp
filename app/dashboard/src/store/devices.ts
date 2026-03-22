@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Device } from '../types';
+import { createLoadableActions } from './helpers';
 
 interface DeviceState {
   devices: Device[];
@@ -11,6 +12,7 @@ interface DeviceState {
 }
 
 export const useDeviceStore = create<DeviceState>((set) => ({
+  ...createLoadableActions<DeviceState>(set),
   devices: [],
   loading: false,
   error: null,
@@ -19,11 +21,5 @@ export const useDeviceStore = create<DeviceState>((set) => ({
       devices,
       loading: false,
       error: null,
-    }),
-  setLoading: (loading) => set({ loading }),
-  setError: (error) =>
-    set({
-      loading: false,
-      error,
     }),
 }));

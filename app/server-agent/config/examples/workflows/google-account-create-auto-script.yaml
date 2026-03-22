@@ -1,0 +1,239 @@
+name: google-account-create-auto-script
+version: 1
+entry: generate_persona
+
+# Fully automated Google account creation.
+# Only required inputs: phone_number, phone_otp, captcha_endpoint, account_service_endpoint, device_id.
+# Persona (name, username, gender, birth date) and password are auto-generated via tool calls.
+
+steps:
+
+  # ── Step 1: Generate realistic persona (LLM-backed) ─────────────────────────
+  generate_persona:
+    trigger: {}
+    tool_call:
+      name: identity.generate_persona
+      params:
+        gender: "{{input.gender}}"   # optional: "male" or "female"; omit for random
+    outputs:
+      firstName:   gen_first_name
+      lastName:    gen_last_name
+      username:    gen_username
+      gender:      gen_gender        # enum: male | female
+    on_success: generate_password
+    on_failure: terminal
+
+  # ── Step 2: Generate strong password (local/deterministic) ───────────────────
+  generate_password:
+    trigger: {}
+    tool_call:
+      name: credential.generate_password
+      params:
+        length: 16
+        includeSymbols: true
+    outputs:
+      password: gen_password
+    on_success: generate_birth_date
+    on_failure: terminal
+
+  # ── Step 3: Generate birth date (local/deterministic) ────────────────────────
+  generate_birth_date:
+    trigger: {}
+    tool_call:
+      name: identity.generate_birth_date
+      params:
+        minAge: 20
+        maxAge: 35
+    outputs:
+      birthDay:   gen_birth_day
+      birthMonth: gen_birth_month    # integer 1–12; script converts to month name
+      birthYear:  gen_birth_year
+    on_success: create_account
+    on_failure: terminal
+
+  # ── Step 4: Run account creation on device ───────────────────────────────────
+  create_account:
+    trigger: {}
+    script:
+      source: |
+        var MONTHS = [
+          "January","February","March","April","May","June",
+          "July","August","September","October","November","December"
+        ];
+        var birthMonth = MONTHS[parseInt(params.birthMonth, 10) - 1] || "January";
+        var gender     = params.gender === "male" ? "Male" : "Female";
+
+        // Open Add Account via intent
+        tap({ kind: "open_intent", intentAction: "android.settings.ADD_ACCOUNT_SETTINGS" });
+        if (!waitFor({ kind: "text", value: "Google" }, 6000)) {
+          throw new Error("Add account screen not found");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Google" } });
+
+        if (!waitFor({ kind: "text", value: "Create account" }, 8000)) {
+          throw new Error("Google account creation option not found");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Create account" } });
+
+        if (waitFor({ kind: "text", value: "For myself" }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: "For myself" } });
+        }
+
+        // --- Name ---
+        if (!waitFor({ kind: "text", value: "First name" }, 8000)) {
+          throw new Error("Name input not found");
+        }
+        input({ kind: "content_desc", value: "First name" }, params.firstName);
+        input({ kind: "content_desc", value: "Last name" }, params.lastName);
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Birthday & Gender ---
+        if (!waitFor({ kind: "text", value: "Birthday" }, 8000)) {
+          throw new Error("Birthday screen not found");
+        }
+        tap({ kind: "click", target: { kind: "content_desc", value: "Month" } });
+        if (waitFor({ kind: "text", value: birthMonth }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: birthMonth } });
+        }
+        input({ kind: "content_desc", value: "Day" }, params.birthDay);
+        input({ kind: "content_desc", value: "Year" }, params.birthYear);
+        tap({ kind: "click", target: { kind: "content_desc", value: "Gender" } });
+        if (waitFor({ kind: "text", value: gender }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: gender } });
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Username ---
+        if (!waitFor({ kind: "text", value: "Gmail address" }, 8000)) {
+          if (!waitFor({ kind: "text", value: "username" }, 4000)) {
+            throw new Error("Username/Gmail screen not found");
+          }
+        }
+        if (waitFor({ kind: "text", value: "Create your own" }, 2000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Create your own" } });
+        }
+        if (waitFor({ kind: "content_desc", value: "Username" }, 3000)) {
+          input({ kind: "content_desc", value: "Username" }, params.username);
+        } else {
+          input({ kind: "content_desc", value: "Gmail address" }, params.username);
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Password ---
+        if (!waitFor({ kind: "text", value: "Create a strong password" }, 8000)) {
+          if (!waitFor({ kind: "content_desc", value: "Password" }, 4000)) {
+            throw new Error("Password screen not found");
+          }
+        }
+        input({ kind: "content_desc", value: "Password" }, params.password);
+        input({ kind: "content_desc", value: "Confirm" }, params.password);
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Captcha (conditional) ---
+        if (waitFor({ kind: "text", value: "Select all" }, 3000)) {
+          log("captcha detected, solving...");
+          var shot = screenshot();
+          var cresp = http({
+            url: params.captchaEndpoint,
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageBase64: shot.base64 })
+          });
+          if (cresp.status !== 200) throw new Error("captcha solve failed: " + cresp.status);
+          var captcha = JSON.parse(cresp.body);
+          for (var i = 0; i < captcha.taps.length; i++) {
+            tap({ kind: "click", target: { kind: "coordinate", value: captcha.taps[i] } });
+          }
+          log("captcha tapped " + captcha.count + " squares");
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Phone verification ---
+        if (waitFor({ kind: "text", value: "Get a verification code" }, 5000)) {
+          input({ kind: "content_desc", value: "Phone number" }, params.phoneNumber);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+          if (!waitFor({ kind: "content_desc", value: "Enter code" }, 15000)) {
+            throw new Error("OTP input field not found");
+          }
+          input({ kind: "content_desc", value: "Enter code" }, params.phoneOtp);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        } else if (waitFor({ kind: "text", value: "Verify your phone number" }, 3000)) {
+          input({ kind: "content_desc", value: "Phone number" }, params.phoneNumber);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+          if (!waitFor({ kind: "content_desc", value: "Enter code" }, 15000)) {
+            throw new Error("OTP input field not found");
+          }
+          input({ kind: "content_desc", value: "Enter code" }, params.phoneOtp);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Recovery email (skip) ---
+        if (waitFor({ kind: "text", value: "recovery email" }, 4000)) {
+          if (waitFor({ kind: "text", value: "Skip" }, 2000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Skip" } });
+          }
+        }
+
+        // --- Review account info ---
+        if (waitFor({ kind: "text", value: "Review your account info" }, 5000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Privacy and Terms ---
+        if (!waitFor({ kind: "text", value: "Privacy and Terms" }, 8000)) {
+          throw new Error("Privacy and Terms screen not found");
+        }
+        scroll(null, "forward");
+        scroll(null, "forward");
+        tap({ kind: "click", target: { kind: "text", value: "I agree" } });
+
+        if (!waitFor({ kind: "text", value: params.username }, 10000)) {
+          log("account created but confirmation screen not detected");
+        }
+
+        var email = params.username + "@gmail.com";
+
+        // --- Register credential to account-service ---
+        var accountId = "";
+        if (params.accountServiceEndpoint) {
+          var regResp = http({
+            url: params.accountServiceEndpoint + "/v1/tools/account.register_google:invoke",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              callId: "reg-" + params.username,
+              params: { email: email, password: params.password, deviceId: params.deviceId }
+            })
+          });
+          if (regResp.status === 200) {
+            var reg = JSON.parse(regResp.body);
+            if (reg.result) accountId = reg.result.accountId;
+            log("registered account: " + accountId);
+          } else {
+            log("account registration failed: " + regResp.status + " " + regResp.body);
+          }
+        }
+
+        return { created: true, email: email, password: params.password, accountId: accountId };
+      params:
+        firstName:              "{{input.gen_first_name}}"
+        lastName:               "{{input.gen_last_name}}"
+        username:               "{{input.gen_username}}"
+        password:               "{{input.gen_password}}"
+        birthDay:               "{{input.gen_birth_day}}"
+        birthMonth:             "{{input.gen_birth_month}}"
+        birthYear:              "{{input.gen_birth_year}}"
+        gender:                 "{{input.gen_gender}}"
+        phoneNumber:            "{{input.phone_number}}"
+        phoneOtp:               "{{input.phone_otp}}"
+        captchaEndpoint:        "{{input.captcha_endpoint}}"
+        accountServiceEndpoint: "{{input.account_service_endpoint}}"
+        deviceId:               "{{input.device_id}}"
+      outputs:
+        created:   account_created
+        email:     account_email
+        password:  account_password
+        accountId: account_id
+      timeout: 180s
+    on_success: terminal
+    on_failure: terminal

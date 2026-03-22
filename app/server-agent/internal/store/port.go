@@ -53,6 +53,33 @@ type TaskQueue interface {
 	Snapshot(ctx context.Context) ([]domain.TaskID, error)
 }
 
+// AccountStore persists created platform accounts (Google, Instagram, etc.).
+type AccountStore interface {
+	Save(a domain.Account) error
+	GetByID(id string) (domain.Account, bool)
+	List(kind, deviceID string) []domain.Account
+	UpdateStatus(id string, status domain.AccountStatus) error
+	UpdateDeviceID(id, deviceID string) error
+	FindActiveByKindOnDevice(deviceID, kind string) (domain.Account, bool)
+}
+
+// PersonaStore persists personas used for account creation campaigns.
+type PersonaStore interface {
+	Save(p domain.Persona) error
+	GetByID(id string) (domain.Persona, bool)
+	List(kind, status string) []domain.Persona
+	UpdateStatus(id string, status domain.PersonaStatus) error
+	Delete(id string) (bool, error)
+}
+
+// MacroStore persists completed macro scripts (recordings).
+type MacroStore interface {
+	Save(macro SavedMacro) error
+	List() []SavedMacro
+	GetByID(id string) (SavedMacro, bool)
+	Delete(id string) (bool, error)
+}
+
 // CommandOutboxStore records outbound device commands and their delivery state.
 type CommandOutboxStore interface {
 	SaveIssued(ctx context.Context, cmd domain.Command) error

@@ -2,11 +2,18 @@ package com.autosdk.agent.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.graphics.Bitmap
 import android.os.Build
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.autosdk.agent.action.ActionExecutor
 import com.autosdk.agent.agent.AccessibilityAgentAutomationDriver
 import com.autosdk.agent.agent.AgentCapabilities
@@ -94,6 +101,9 @@ class AgentAccessibilityService : AccessibilityService() {
      */
     private val lastEventMs = AtomicLong(0L)
     private val outboundEventSeqNo = AtomicLong(0L)
+
+    /** Script-registered watchers waiting for specific accessibility events. */
+    private val eventWatchers = CopyOnWriteArrayList<EventWatcher>()
     @Volatile private var wasTransportConnected = false
 
     /**
@@ -173,6 +183,20 @@ class AgentAccessibilityService : AccessibilityService() {
                 serviceScope.launch {
                     coordinator?.dispatch(AgentEvent.NotificationReceived(params))
                 }
+            }
+        }
+
+        // Notify awaitEvent() watchers registered from running scripts.
+        if (event != null && eventWatchers.isNotEmpty()) {
+            val eventPkg = event.packageName?.toString()
+            val eventText = event.text?.joinToString(" ")
+            for (w in eventWatchers) {
+                if (event.eventType !in w.eventTypes) continue
+                if (w.pkg != null && w.pkg != eventPkg) continue
+                if (w.textContains != null &&
+                    (eventText == null || !eventText.contains(w.textContains, ignoreCase = true))
+                ) continue
+                w.latch.countDown()
             }
         }
 
@@ -294,6 +318,10 @@ class AgentAccessibilityService : AccessibilityService() {
                 capabilities = capabilityProvider(),
                 okHttpClient = createSharedClient(),
                 onExecutionEvent = { event -> localCoordinator.dispatch(event) },
+                screenshotCapture = { captureScreenshot() },
+                eventAwaiter = { kind, pkg, textContains, ms ->
+                    awaitAccessibilityEvent(kind, pkg, textContains, ms)
+                },
             )
         runtime = rt
         rt.start()
@@ -302,6 +330,95 @@ class AgentAccessibilityService : AccessibilityService() {
             localCoordinator.dispatch(AgentEvent.ServiceConnected)
         }
     }
+
+    /**
+     * Captures a screenshot synchronously by bridging the async
+     * [AccessibilityService.takeScreenshot] callback with a [CountDownLatch].
+     *
+     * Runs on [kotlinx.coroutines.Dispatchers.IO] (the JsRuntime thread); the
+     * callback arrives on the main executor and unblocks the IO thread via the latch.
+     *
+     * Returns a base64-encoded PNG string, or null on failure or API < 30.
+     */
+    private fun captureScreenshot(): String? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        val latch = CountDownLatch(1)
+        var resultBase64: String? = null
+        takeScreenshot(
+            Display.DEFAULT_DISPLAY,
+            mainExecutor,
+            object : AccessibilityService.TakeScreenshotCallback {
+                override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                    try {
+                        val hb = screenshot.hardwareBuffer ?: return
+                        val hw = Bitmap.wrapHardwareBuffer(hb, screenshot.colorSpace)
+                        hb.close()
+                        hw ?: return
+                        val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
+                        hw.recycle()
+                        val baos = ByteArrayOutputStream()
+                        soft.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                        soft.recycle()
+                        resultBase64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+                override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "captureScreenshot: takeScreenshot failed errorCode=$errorCode")
+                    latch.countDown()
+                }
+            }
+        )
+        if (!latch.await(5, TimeUnit.SECONDS)) {
+            Log.w(TAG, "captureScreenshot: callback timed out")
+        }
+        return resultBase64
+    }
+
+    /**
+     * Blocks the calling thread (Rhino/IO) until an accessibility event matching
+     * [kind] fires, or [timeoutMs] elapses.
+     *
+     * Supported kind values:
+     *   - "activity_created" / "window_state_changed" → TYPE_WINDOW_STATE_CHANGED
+     *   - "content_changed"                           → TYPE_WINDOW_CONTENT_CHANGED
+     *
+     * Returns true if the event fired within the timeout, false otherwise.
+     */
+    private fun awaitAccessibilityEvent(
+        kind: String,
+        pkg: String?,
+        textContains: String?,
+        timeoutMs: Long,
+    ): Boolean {
+        val eventTypes: Set<Int> = when (kind) {
+            "activity_created", "window_state_changed" ->
+                setOf(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+            "content_changed" ->
+                setOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+            else -> {
+                Log.w(TAG, "awaitAccessibilityEvent: unknown kind '$kind'")
+                return false
+            }
+        }
+        val latch = CountDownLatch(1)
+        val watcher = EventWatcher(eventTypes, pkg, textContains, latch)
+        eventWatchers.add(watcher)
+        return try {
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } finally {
+            eventWatchers.remove(watcher)
+        }
+    }
+
+    /** Registered by [awaitAccessibilityEvent]; notified from [onAccessibilityEvent]. */
+    private data class EventWatcher(
+        val eventTypes: Set<Int>,
+        val pkg: String?,
+        val textContains: String?,
+        val latch: CountDownLatch,
+    )
 
     /**
      * Builds a snapshot from all visible application and system windows.

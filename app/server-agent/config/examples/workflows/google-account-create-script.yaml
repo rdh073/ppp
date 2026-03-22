@@ -1,0 +1,190 @@
+name: google-account-create-script
+version: 1
+entry: open_account_creation
+steps:
+  open_account_creation:
+    trigger: {}
+    script:
+      source: |
+        // Open Add Account via intent (skips manual Settings navigation)
+        tap({ kind: "open_intent", intentAction: "android.settings.ADD_ACCOUNT_SETTINGS" });
+        if (!waitFor({ kind: "text", value: "Google" }, 6000)) {
+          throw new Error("Add account screen not found");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Google" } });
+
+        // "Create account" button (may say "Create account" or "Sign in" depending on device)
+        if (!waitFor({ kind: "text", value: "Create account" }, 8000)) {
+          throw new Error("Google account creation option not found");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Create account" } });
+
+        // Choose "For myself" if prompted
+        if (waitFor({ kind: "text", value: "For myself" }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: "For myself" } });
+        }
+
+        // --- Name ---
+        if (!waitFor({ kind: "text", value: "First name" }, 8000)) {
+          throw new Error("Name input not found");
+        }
+        input({ kind: "content_desc", value: "First name" }, params.firstName);
+        input({ kind: "content_desc", value: "Last name" }, params.lastName);
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Birthday & Gender ---
+        if (!waitFor({ kind: "text", value: "Birthday" }, 8000)) {
+          throw new Error("Birthday screen not found");
+        }
+        // Month spinner
+        tap({ kind: "click", target: { kind: "content_desc", value: "Month" } });
+        if (waitFor({ kind: "text", value: params.birthMonth }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: params.birthMonth } });
+        }
+        input({ kind: "content_desc", value: "Day" }, params.birthDay);
+        input({ kind: "content_desc", value: "Year" }, params.birthYear);
+        // Gender
+        tap({ kind: "click", target: { kind: "content_desc", value: "Gender" } });
+        if (waitFor({ kind: "text", value: params.gender }, 3000)) {
+          tap({ kind: "click", target: { kind: "text", value: params.gender } });
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Username ---
+        if (!waitFor({ kind: "text", value: "Gmail address" }, 8000)) {
+          // Some flows show "username" screen differently
+          if (!waitFor({ kind: "text", value: "username" }, 4000)) {
+            throw new Error("Username/Gmail screen not found");
+          }
+        }
+        // Choose "Create your own Gmail address" if suggestion screen appears
+        if (waitFor({ kind: "text", value: "Create your own" }, 2000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Create your own" } });
+        }
+        if (waitFor({ kind: "content_desc", value: "Username" }, 3000)) {
+          input({ kind: "content_desc", value: "Username" }, params.username);
+        } else {
+          input({ kind: "content_desc", value: "Gmail address" }, params.username);
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Password ---
+        if (!waitFor({ kind: "text", value: "Create a strong password" }, 8000)) {
+          if (!waitFor({ kind: "content_desc", value: "Password" }, 4000)) {
+            throw new Error("Password screen not found");
+          }
+        }
+        input({ kind: "content_desc", value: "Password" }, params.password);
+        input({ kind: "content_desc", value: "Confirm" }, params.password);
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Captcha (conditional) ---
+        if (waitFor({ kind: "text", value: "Select all" }, 3000)) {
+          log("captcha detected, solving...");
+          var shot = screenshot();
+          var resp = http({
+            url: params.captchaEndpoint,
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageBase64: shot.base64 })
+          });
+          if (resp.status !== 200) throw new Error("captcha solve failed: " + resp.status);
+          var captcha = JSON.parse(resp.body);
+          for (var i = 0; i < captcha.taps.length; i++) {
+            tap({ kind: "click", target: { kind: "coordinate", value: captcha.taps[i] } });
+          }
+          log("captcha tapped " + captcha.count + " squares");
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Phone verification ---
+        if (waitFor({ kind: "text", value: "Get a verification code" }, 5000)) {
+          input({ kind: "content_desc", value: "Phone number" }, params.phoneNumber);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+          // Wait for OTP input field
+          if (!waitFor({ kind: "content_desc", value: "Enter code" }, 15000)) {
+            throw new Error("OTP input field not found");
+          }
+          input({ kind: "content_desc", value: "Enter code" }, params.phoneOtp);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        } else if (waitFor({ kind: "text", value: "Verify your phone number" }, 3000)) {
+          input({ kind: "content_desc", value: "Phone number" }, params.phoneNumber);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+          if (!waitFor({ kind: "content_desc", value: "Enter code" }, 15000)) {
+            throw new Error("OTP input field not found");
+          }
+          input({ kind: "content_desc", value: "Enter code" }, params.phoneOtp);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Recovery email (skip) ---
+        if (waitFor({ kind: "text", value: "recovery email" }, 4000)) {
+          if (waitFor({ kind: "text", value: "Skip" }, 2000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Skip" } });
+          }
+        }
+
+        // --- Review account info ---
+        if (waitFor({ kind: "text", value: "Review your account info" }, 5000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Privacy and Terms ---
+        if (!waitFor({ kind: "text", value: "Privacy and Terms" }, 8000)) {
+          throw new Error("Privacy and Terms screen not found");
+        }
+        // Scroll to bottom to enable agree button
+        scroll(null, "forward");
+        scroll(null, "forward");
+        tap({ kind: "click", target: { kind: "text", value: "I agree" } });
+
+        if (!waitFor({ kind: "text", value: params.username }, 10000)) {
+          log("account created but confirmation screen not detected");
+        }
+
+        var email = params.username + "@gmail.com";
+
+        // --- Register credential to account-service ---
+        var accountId = "";
+        if (params.accountServiceEndpoint) {
+          var regResp = http({
+            url: params.accountServiceEndpoint + "/v1/tools/account.register_google:invoke",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              callId: "reg-" + params.username,
+              params: { email: email, password: params.password, deviceId: params.deviceId }
+            })
+          });
+          if (regResp.status === 200) {
+            var reg = JSON.parse(regResp.body);
+            if (reg.result) accountId = reg.result.accountId;
+            log("registered account: " + accountId);
+          } else {
+            log("account registration failed: " + regResp.status + " " + regResp.body);
+          }
+        }
+
+        return { created: true, email: email, password: params.password, accountId: accountId };
+      params:
+        firstName: "{{input.first_name}}"
+        lastName: "{{input.last_name}}"
+        birthDay: "{{input.birth_day}}"
+        birthMonth: "{{input.birth_month}}"
+        birthYear: "{{input.birth_year}}"
+        gender: "{{input.gender}}"
+        username: "{{input.username}}"
+        password: "{{input.password}}"
+        phoneNumber: "{{input.phone_number}}"
+        phoneOtp: "{{input.phone_otp}}"
+        captchaEndpoint: "{{input.captcha_endpoint}}"
+        accountServiceEndpoint: "{{input.account_service_endpoint}}"
+        deviceId: "{{input.device_id}}"
+      outputs:
+        created:   account_created
+        email:     account_email
+        password:  account_password
+        accountId: account_id
+      timeout: 180s
+    on_success: terminal
+    on_failure: terminal

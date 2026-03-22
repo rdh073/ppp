@@ -50,12 +50,15 @@ Dispatches a device action. The `action` object shape:
 | `"long_press"` | `target` (selector) | Long-press the matching element |
 | `"input_text"` | `target` (selector), `inputText` (string) | Type text into a field |
 | `"open_app"` | `target: { kind: "package_name", value: "..." }` | Launch app by package |
+| `"open_intent"` | `intentAction` (string), `package?` (string) | Launch via Android Intent |
 | `"back"`     | — | Press Back |
 | `"home"`     | — | Press Home |
 
 ```js
 tap({ kind: "click", target: { kind: "text", value: "Sign in" } });
 tap({ kind: "open_app", target: { kind: "package_name", value: "com.android.settings" } });
+tap({ kind: "open_intent", intentAction: "android.settings.PRIVATE_DNS_SETTINGS" });
+tap({ kind: "open_intent", intentAction: "android.intent.action.VIEW", package: "com.android.chrome" });
 ```
 
 Throws on action failure (element not found, not actionable, etc.).
@@ -106,6 +109,42 @@ Throws on failure.
 
 ---
 
+### `awaitEvent(kind, opts?, timeoutMs?) → boolean`
+
+Blocks until a matching Android accessibility event fires. Returns `true` if received within the
+timeout, `false` otherwise. Does **not** throw on timeout.
+
+| `kind` | Android event |
+|---|---|
+| `"activity_created"` / `"window_state_changed"` | `TYPE_WINDOW_STATE_CHANGED` — new activity or dialog |
+| `"content_changed"` | `TYPE_WINDOW_CONTENT_CHANGED` — content updated within the current window |
+
+`opts` (optional):
+- `package` — filter by app package name
+- `textContains` — filter; event must include this substring in its text payload
+
+```js
+// Tap Next, then wait for new activity before observing
+tap({ kind: "click", target: { kind: "text", value: "Next" } });
+awaitEvent("activity_created", { package: "com.google.android.gms" }, 5000);
+var snap = observe();
+
+// Wait for content change with no filter
+awaitEvent("content_changed", {}, 3000);
+```
+
+**Timing note:** the watcher is registered when `awaitEvent` is called. If the transition already
+fired before `awaitEvent` runs, the call waits for the *next* matching event and returns `false`
+after the timeout. Pair with `waitFor` for robustness:
+
+```js
+tap({ kind: "click", target: { kind: "text", value: "Next" } });
+awaitEvent("activity_created", {}, 4000);          // fast path
+waitFor({ kind: "text", value: "Birthday" }, 4000); // safety net
+```
+
+---
+
 ### `back() → { ok: true }`
 
 Presses the system Back button. Throws on failure.
@@ -138,6 +177,21 @@ log("found target:", snap.semantic.activeUiKey);
 
 ---
 
+### `screenshot() → { base64: string, mimeType: "image/png" }`
+
+Captures the current screen as a PNG, returned as base64. Requires Android API 30 (Android 11+).
+Throws if the device is below API 30 or the capture callback fails.
+
+```js
+var shot = screenshot();
+// shot.base64 — PNG encoded as base64, no newlines (Base64.NO_WRAP)
+// shot.mimeType — always "image/png"
+```
+
+Typical use: pass to a server-side vision endpoint for captcha solving or visual verification.
+
+---
+
 ### `http(opts) → { status: number, body: string }`
 
 Makes a synchronous HTTP request from the device. Useful for fetching data mid-script.
@@ -161,6 +215,96 @@ var token = JSON.parse(res.body).token;
 ```
 
 The request runs synchronously on the calling thread. Throws if the TCP connection fails.
+
+---
+
+### Captcha solving via `screenshot()` + `http()`
+
+The server exposes `POST /captcha/solve` backed by a vision LLM. Pass the screenshot base64
+and receive tap coordinates. Requires `AUTO_TOOL_ANTHROPIC_API_KEY` + `AUTO_TOOL_ANTHROPIC_MODEL`
+on the server; returns HTTP 503 when unconfigured.
+
+```js
+// 1. Detect captcha presence
+var found = waitFor({ kind: "text", value: "Select all" }, 3000);
+if (!found) return { captchaSolved: false, skipped: true };
+
+// 2. Capture screen
+var shot = screenshot();
+
+// 3. Ask server to solve
+var resp = http({
+  url: params.captchaEndpoint,   // e.g. "http://10.0.2.2:3000/captcha/solve"
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ imageBase64: shot.base64 })
+});
+if (resp.status !== 200) throw new Error("captcha solve error: " + resp.status);
+
+// 4. Tap each coordinate
+var result = JSON.parse(resp.body);  // { taps: ["x,y", ...], count: N }
+for (var i = 0; i < result.taps.length; i++) {
+  tap({ kind: "click", target: { kind: "coordinate", value: result.taps[i] } });
+}
+return { captchaSolved: true, count: result.count };
+```
+
+Request body: `{ imageBase64, gridBounds?: [l,t,r,b], cols?: N }` — `gridBounds` and `cols`
+override the LLM's auto-detected values when you already know the grid layout.
+
+---
+
+## Prototyping — direct device endpoints
+
+Two HTTP endpoints let you iterate on scripts **without writing a YAML workflow or creating a task**.
+
+### `POST /devices/{id}/observe`
+
+Returns the current UI snapshot from the device immediately.
+
+```bash
+curl -X POST http://localhost:3000/devices/emulator-5554/observe | jq .semantic.activeUiKey
+```
+
+Useful for checking what is on screen before writing a script.
+
+---
+
+### `POST /devices/{id}/script`
+
+Runs a JS snippet directly on the device and returns the output synchronously.
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `source` | string | yes | — |
+| `params` | object | no | `{}` |
+| `timeout` | number (ms) | no | `30000` |
+
+```bash
+curl -X POST http://localhost:3000/devices/emulator-5554/script \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "var s = observe(); log(s.packageName); return { pkg: s.packageName };",
+    "timeout": 10000
+  }'
+```
+
+Response:
+
+```json
+{ "output": { "pkg": "com.android.settings" }, "logs": ["com.android.settings"], "durationMs": 123 }
+```
+
+The `params` object is available inside the script as the `params` global — same as in a workflow step.
+
+```bash
+curl -X POST http://localhost:3000/devices/emulator-5554/script \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "tap({ kind: \"open_intent\", intentAction: \"android.settings.PRIVATE_DNS_SETTINGS\" }); return { ok: waitFor({ kind: \"text\", value: \"Private DNS\" }, 5000) };",
+    "timeout": 15000
+  }'
+```
 
 ---
 

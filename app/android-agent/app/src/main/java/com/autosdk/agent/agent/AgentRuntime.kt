@@ -57,6 +57,8 @@ class AgentRuntime(
     private val capabilities: List<Map<String, Any>>,
     private val okHttpClient: OkHttpClient = OkHttpClient(),
     private val onExecutionEvent: suspend (AgentEvent) -> Unit = {},
+    private val screenshotCapture: () -> String? = { null },
+    private val eventAwaiter: (kind: String, pkg: String?, textContains: String?, timeoutMs: Long) -> Boolean = { _, _, _, _ -> false },
 ) {
 
     fun start() {
@@ -253,7 +255,7 @@ class AgentRuntime(
         val timeoutMs = params["timeout"]?.jsonPrimitive?.longOrNull ?: 30_000L
 
         val logs = mutableListOf<String>()
-        val bridge = JsAutomationBridge(snapshotBuilder, automationDriver, okHttpClient, logs)
+        val bridge = JsAutomationBridge(snapshotBuilder, automationDriver, okHttpClient, logs, screenshotCapture, eventAwaiter)
         val runtime = JsRuntime(bridge)
 
         val result = withContext(Dispatchers.IO) {

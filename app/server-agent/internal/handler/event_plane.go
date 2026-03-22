@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
-	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/usecase"
 )
 
@@ -161,7 +160,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeUseCaseError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, usecase.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, usecase.ErrInvalidEventListQuery):
 		http.Error(w, err.Error(), http.StatusBadRequest)

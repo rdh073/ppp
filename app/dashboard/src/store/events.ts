@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { EventRecord, PagedEventsResponse } from '../types';
+import { createLoadableActions } from './helpers';
 
 interface EventState {
   entries: EventRecord[];
@@ -15,6 +16,7 @@ interface EventState {
 }
 
 export const useEventStore = create<EventState>((set) => ({
+  ...createLoadableActions<EventState>(set),
   entries: [],
   pagination: null,
   loading: false,
@@ -46,11 +48,5 @@ export const useEventStore = create<EventState>((set) => ({
       loading: false,
       error: null,
     })),
-  setLoading: (loading) => set({ loading }),
-  setError: (error) =>
-    set({
-      loading: false,
-      error,
-    }),
   setSelected: (selected) => set({ selected }),
 }));

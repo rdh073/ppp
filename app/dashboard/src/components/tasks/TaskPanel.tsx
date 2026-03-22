@@ -1,4 +1,5 @@
 import { FormEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTasks } from '../../hooks/useTasks';
 import { useDevices } from '../../hooks/useDevices';
 import { useWorkflows } from '../../hooks/useWorkflows';
@@ -369,6 +370,123 @@ export function TaskPanel() {
     return counts;
   }, [tasks]);
 
+  const devicePickerModal = devicePickerOpen && typeof document !== 'undefined'
+    ? createPortal(
+        <div className="task-device-modal-backdrop" role="presentation" onClick={() => setDevicePickerOpen(false)}>
+          <div
+            className="task-device-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-device-picker-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="task-device-modal-header">
+              <div>
+                <h3 id="task-device-picker-title">Select Target Devices</h3>
+                <p className="field-hint">Choose one or more devices. Same workflow and artifacts will be used for all selected devices.</p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={() => setDevicePickerOpen(false)}>Close</button>
+            </div>
+
+            <div className="task-device-modal-controls">
+              <label className="task-device-modal-search" htmlFor="task-device-search">
+                Search
+                <input
+                  id="task-device-search"
+                  value={deviceSearch}
+                  onChange={(event) => setDeviceSearch(event.target.value)}
+                  placeholder="Filter by device name or ID"
+                />
+              </label>
+              <label className="task-device-modal-status" htmlFor="task-device-status-filter">
+                Status
+                <select
+                  id="task-device-status-filter"
+                  value={deviceStatusFilterCreate}
+                  onChange={(event) => setDeviceStatusFilterCreate(event.target.value as DeviceFilterStatus)}
+                >
+                  {DEVICE_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" className="btn-secondary" onClick={selectAllFilteredDevices} disabled={filteredDevices.length === 0}>
+                Select all filtered
+              </button>
+            </div>
+
+            <div className="task-device-modal-grid">
+              <section className="task-device-modal-list" aria-label="Available devices">
+                <h4>Available ({filteredDevices.length})</h4>
+                {filteredDevices.length === 0 ? (
+                  <p className="field-hint">No devices match this filter.</p>
+                ) : (
+                  <div className="task-device-modal-list-scroll">
+                    {filteredDevices.map((device) => {
+                      const checked = selectedDeviceSet.has(device.deviceId);
+                      const status = deviceStatusById.get(device.deviceId) ?? 'offline';
+                      return (
+                        <label key={device.deviceId} className={`task-device-item ${checked ? 'task-device-item--active' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) => toggleSelectedDevice(device.deviceId, event.target.checked)}
+                          />
+                          <span className="task-device-item-meta">
+                            <span className="task-device-item-name">{getAndroidIdentity(device)}</span>
+                            <span className="task-device-item-id">{device.deviceId}</span>
+                          </span>
+                          <span className={`task-device-status task-device-status--${status}`}>{status}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <aside className="task-device-modal-selected" aria-label="Selected devices">
+                <h4>Selected ({selectedDevices.length})</h4>
+                {selectedDevices.length === 0 ? (
+                  <p className="field-hint">No selected devices. Auto-assign mode will create one task.</p>
+                ) : (
+                  <ul className="task-device-selected-list">
+                    {selectedDevices.map((device) => (
+                      <li key={device.deviceId} className="task-device-selected-item">
+                        <div>
+                          <strong>{getAndroidIdentity(device)}</strong>
+                          <span>{device.deviceId}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => toggleSelectedDevice(device.deviceId, false)}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </aside>
+            </div>
+
+            <div className="task-device-modal-footer">
+              <span className="task-device-modal-count">
+                {selectedDeviceIds.length === 0 ? 'Auto-assign mode (1 task)' : `${selectedDeviceIds.length} devices selected`}
+              </span>
+              <div className="task-device-modal-footer-actions">
+                <button type="button" className="btn-secondary" onClick={clearSelectedDevices} disabled={selectedDeviceIds.length === 0}>
+                  Clear
+                </button>
+                <button type="button" onClick={() => setDevicePickerOpen(false)}>Apply Selection</button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
   return (
     <section className="panel">
 
@@ -516,119 +634,7 @@ export function TaskPanel() {
             </div>
           </form>
 
-          {devicePickerOpen && (
-            <div className="task-device-modal-backdrop" role="presentation" onClick={() => setDevicePickerOpen(false)}>
-              <div
-                className="task-device-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="task-device-picker-title"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="task-device-modal-header">
-                  <div>
-                    <h3 id="task-device-picker-title">Select Target Devices</h3>
-                    <p className="field-hint">Choose one or more devices. Same workflow and artifacts will be used for all selected devices.</p>
-                  </div>
-                  <button type="button" className="btn-secondary" onClick={() => setDevicePickerOpen(false)}>Close</button>
-                </div>
-
-                <div className="task-device-modal-controls">
-                  <label className="task-device-modal-search" htmlFor="task-device-search">
-                    Search
-                    <input
-                      id="task-device-search"
-                      value={deviceSearch}
-                      onChange={(event) => setDeviceSearch(event.target.value)}
-                      placeholder="Filter by device name or ID"
-                    />
-                  </label>
-                  <label className="task-device-modal-status" htmlFor="task-device-status-filter">
-                    Status
-                    <select
-                      id="task-device-status-filter"
-                      value={deviceStatusFilterCreate}
-                      onChange={(event) => setDeviceStatusFilterCreate(event.target.value as DeviceFilterStatus)}
-                    >
-                      {DEVICE_FILTER_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button type="button" className="btn-secondary" onClick={selectAllFilteredDevices} disabled={filteredDevices.length === 0}>
-                    Select all filtered
-                  </button>
-                </div>
-
-                <div className="task-device-modal-grid">
-                  <section className="task-device-modal-list" aria-label="Available devices">
-                    <h4>Available ({filteredDevices.length})</h4>
-                    {filteredDevices.length === 0 ? (
-                      <p className="field-hint">No devices match this filter.</p>
-                    ) : (
-                      <div className="task-device-modal-list-scroll">
-                        {filteredDevices.map((device) => {
-                          const checked = selectedDeviceSet.has(device.deviceId);
-                          const status = deviceStatusById.get(device.deviceId) ?? 'offline';
-                          return (
-                            <label key={device.deviceId} className={`task-device-item ${checked ? 'task-device-item--active' : ''}`}>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) => toggleSelectedDevice(device.deviceId, event.target.checked)}
-                              />
-                              <span className="task-device-item-meta">
-                                <span className="task-device-item-name">{getAndroidIdentity(device)}</span>
-                                <span className="task-device-item-id">{device.deviceId}</span>
-                              </span>
-                              <span className={`task-device-status task-device-status--${status}`}>{status}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-
-                  <aside className="task-device-modal-selected" aria-label="Selected devices">
-                    <h4>Selected ({selectedDevices.length})</h4>
-                    {selectedDevices.length === 0 ? (
-                      <p className="field-hint">No selected devices. Auto-assign mode will create one task.</p>
-                    ) : (
-                      <ul className="task-device-selected-list">
-                        {selectedDevices.map((device) => (
-                          <li key={device.deviceId} className="task-device-selected-item">
-                            <div>
-                              <strong>{getAndroidIdentity(device)}</strong>
-                              <span>{device.deviceId}</span>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn-secondary"
-                              onClick={() => toggleSelectedDevice(device.deviceId, false)}
-                            >
-                              Remove
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </aside>
-                </div>
-
-                <div className="task-device-modal-footer">
-                  <span className="task-device-modal-count">
-                    {selectedDeviceIds.length === 0 ? 'Auto-assign mode (1 task)' : `${selectedDeviceIds.length} devices selected`}
-                  </span>
-                  <div className="task-device-modal-footer-actions">
-                    <button type="button" className="btn-secondary" onClick={clearSelectedDevices} disabled={selectedDeviceIds.length === 0}>
-                      Clear
-                    </button>
-                    <button type="button" onClick={() => setDevicePickerOpen(false)}>Apply Selection</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {devicePickerModal}
         </div>
       )}
 

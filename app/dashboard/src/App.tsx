@@ -5,6 +5,8 @@ import { DevicePanel } from './components/agents/DevicePanel';
 import { TaskPanel } from './components/tasks/TaskPanel';
 import { WorkflowPanel } from './components/workflows/WorkflowPanel';
 import { EventPanel } from './components/events/EventPanel';
+import { MacroLibraryPanel } from './components/macros/MacroLibraryPanel';
+import { CampaignPanel } from './components/campaign/CampaignPanel';
 import { API_URL, HEALTH_POLL_MS, METRICS_URL } from './config';
 import './index.css';
 
@@ -77,6 +79,8 @@ export function App() {
             {activeTab === 'tasks' && <TaskPanel />}
             {activeTab === 'workflows' && <WorkflowPanel />}
             {activeTab === 'events' && <EventPanel />}
+            {activeTab === 'macros' && <MacroLibraryPanel />}
+            {activeTab === 'campaigns' && <CampaignPanel />}
           </section>
         </main>
       </div>

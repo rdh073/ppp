@@ -12,6 +12,8 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
+	"github.com/autosdk/ppp/server-agent/internal/store"
+	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
 )
 
 type deviceBindingController interface {
@@ -29,14 +31,22 @@ type deviceCommandDispatcher interface {
 
 // DeviceHandler serves the connected-device API.
 //
-//	GET  /devices          — list all currently connected devices
-//	GET  /devices/{id}     — get a single device by deviceId
-//	POST /devices/{id}/execute — dispatch a device.execute command directly
+//	GET  /devices                     — list all currently connected devices
+//	GET  /devices/{id}                — get a single device by deviceId
+//	POST /devices/{id}/execute        — dispatch a device.execute command directly
+//	POST /devices/{id}/observe        — get current UI snapshot (no task required)
+//	POST /devices/{id}/script         — run a RhinoJS snippet directly (no task/workflow required)
+//	POST /devices/{id}/record/start   — begin recording execute actions
+//	POST /devices/{id}/record/stop    — stop recording and return generated JS script + workflow YAML
+//	GET  /devices/{id}/record/status  — check whether a recording is active
 type DeviceHandler struct {
-	reg      registry.AgentRegistry
-	bindings deviceBindingController
-	disp     deviceCommandDispatcher
-	log      *slog.Logger
+	reg        registry.AgentRegistry
+	bindings   deviceBindingController
+	disp       deviceCommandDispatcher
+	recordings *RecordingStore
+	library    store.MacroStore
+	agentLoop  llm.AgentLoop
+	log        *slog.Logger
 }
 
 func NewDeviceHandler(reg registry.AgentRegistry, log *slog.Logger, bindings ...deviceBindingController) *DeviceHandler {
@@ -50,6 +60,25 @@ func NewDeviceHandler(reg registry.AgentRegistry, log *slog.Logger, bindings ...
 // WithDispatcher attaches a command dispatcher so that POST /devices/{id}/execute is served.
 func (h *DeviceHandler) WithDispatcher(disp deviceCommandDispatcher) *DeviceHandler {
 	h.disp = disp
+	return h
+}
+
+// WithRecording attaches a RecordingStore so that record/* endpoints are served.
+func (h *DeviceHandler) WithRecording(store *RecordingStore) *DeviceHandler {
+	h.recordings = store
+	return h
+}
+
+// WithRecordingLibrary attaches a MacroLibrary so that completed recordings are persisted.
+func (h *DeviceHandler) WithRecordingLibrary(lib store.MacroStore) *DeviceHandler {
+	h.library = lib
+	return h
+}
+
+// WithAgentLoop attaches an LLM AgentLoop so that POST /devices/{id}/record/llm-run is served.
+// Pass nil to disable (handler returns 503).
+func (h *DeviceHandler) WithAgentLoop(loop llm.AgentLoop) *DeviceHandler {
+	h.agentLoop = loop
 	return h
 }
 
@@ -76,6 +105,18 @@ func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.adbWS(w, r, domain.DeviceID(parts[0]))
 	case len(parts) == 2 && parts[1] == "execute":
 		h.handleExecute(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "observe":
+		h.handleObserve(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "script":
+		h.handleScript(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "record/start":
+		h.handleRecordStart(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "record/stop":
+		h.handleRecordStop(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "record/status":
+		h.handleRecordStatus(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "record/llm-run":
+		h.handleLLMRun(w, r, domain.DeviceID(parts[0]))
 	default:
 		h.handleBindingActions(w, r, domain.DeviceID(parts[0]), parts[1])
 	}
@@ -269,9 +310,130 @@ func (h *DeviceHandler) handleExecute(w http.ResponseWriter, r *http.Request, id
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 			return
 		}
+		// Recording intercept: append to active session without affecting the main path.
+		if h.recordings != nil {
+			if rec, ok := h.recordings.Get(id); ok {
+				rec.Append(append(json.RawMessage(nil), body...), result.Raw)
+			}
+		}
 		_, _ = w.Write(result.Raw)
 	case <-ctx.Done():
 		http.Error(w, "command timeout", http.StatusGatewayTimeout)
+	}
+}
+
+// handleObserve dispatches a device.observe command directly to the connected agent
+// and returns the current UI snapshot. No task or workflow required.
+func (h *DeviceHandler) handleObserve(w http.ResponseWriter, r *http.Request, id domain.DeviceID) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.disp == nil {
+		http.Error(w, "observe not configured", http.StatusNotImplemented)
+		return
+	}
+	cmd := domain.Command{
+		ID:       domain.NewCommandID(),
+		Kind:     domain.CommandKindObserve,
+		DeviceID: id,
+		Params:   json.RawMessage("{}"),
+		IssuedAt: time.Now(),
+	}
+	ch, err := h.disp.Dispatch(r.Context(), cmd)
+	if err != nil {
+		http.Error(w, "dispatch: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	select {
+	case result := <-ch:
+		w.Header().Set("Content-Type", "application/json")
+		if !result.Success {
+			w.WriteHeader(http.StatusBadGateway)
+			msg := "command failed"
+			if result.Err != nil {
+				msg = result.Err.Message
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+			return
+		}
+		_, _ = w.Write(result.Raw)
+	case <-ctx.Done():
+		http.Error(w, "command timeout", http.StatusGatewayTimeout)
+	}
+}
+
+// handleScript dispatches a device.script command directly to the connected agent
+// and returns the script output, logs, and duration. No task or workflow required.
+//
+// Request body: {"source": "...", "params": {"k": "v"}, "timeout": 30000}
+// Response:     {"output": {...}, "logs": [...], "durationMs": N}
+func (h *DeviceHandler) handleScript(w http.ResponseWriter, r *http.Request, id domain.DeviceID) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.disp == nil {
+		http.Error(w, "script not configured", http.StatusNotImplemented)
+		return
+	}
+	var body struct {
+		Source  string            `json:"source"`
+		Params  map[string]string `json:"params"`
+		Timeout int64             `json:"timeout"` // ms; default 30000
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.Source == "" {
+		http.Error(w, "source is required", http.StatusBadRequest)
+		return
+	}
+	if body.Timeout <= 0 {
+		body.Timeout = 30_000
+	}
+	if body.Params == nil {
+		body.Params = map[string]string{}
+	}
+	raw, err := json.Marshal(struct {
+		Script  string            `json:"script"`
+		Params  map[string]string `json:"params"`
+		Timeout int64             `json:"timeout"`
+	}{Script: body.Source, Params: body.Params, Timeout: body.Timeout})
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	cmd := domain.Command{
+		ID:       domain.NewCommandID(),
+		Kind:     domain.CommandKindScript,
+		DeviceID: id,
+		Params:   json.RawMessage(raw),
+		IssuedAt: time.Now(),
+	}
+	ch, err := h.disp.Dispatch(r.Context(), cmd)
+	if err != nil {
+		http.Error(w, "dispatch: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	// Allow up to timeout + 5 s buffer so the agent can finish cleanly.
+	deadline := time.Duration(body.Timeout)*time.Millisecond + 5*time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), deadline)
+	defer cancel()
+	select {
+	case result := <-ch:
+		w.Header().Set("Content-Type", "application/json")
+		if !result.Success {
+			w.WriteHeader(http.StatusBadGateway)
+			msg := "script failed"
+			if result.Err != nil {
+				msg = result.Err.Message
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+			return
+		}
+		_, _ = w.Write(result.Raw)
+	case <-ctx.Done():
+		http.Error(w, "script timeout", http.StatusGatewayTimeout)
 	}
 }
 

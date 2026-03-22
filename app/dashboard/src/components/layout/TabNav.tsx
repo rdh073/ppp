@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
-import { Activity, Boxes, ListChecks, Smartphone } from 'lucide-react';
+import { Activity, Boxes, ListChecks, Smartphone, Users, Video } from 'lucide-react';
 
-export type Tab = 'devices' | 'tasks' | 'workflows' | 'events';
+export type Tab = 'devices' | 'tasks' | 'workflows' | 'events' | 'macros' | 'campaigns';
 
 interface TabNavProps {
   active: Tab;
@@ -20,6 +20,8 @@ const TABS: TabDefinition[] = [
   { key: 'tasks', label: 'Tasks', icon: ListChecks, hint: 'manual control' },
   { key: 'workflows', label: 'Workflows', icon: Boxes, hint: 'automation plans' },
   { key: 'events', label: 'Events', icon: Activity, hint: 'observability' },
+  { key: 'macros', label: 'Macros', icon: Video, hint: 'saved scripts' },
+  { key: 'campaigns', label: 'Campaigns', icon: Users, hint: 'account creation' },
 ];
 
 export function TabNav({ active, onChange }: TabNavProps) {

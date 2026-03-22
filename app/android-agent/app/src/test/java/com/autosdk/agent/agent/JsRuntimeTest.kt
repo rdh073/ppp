@@ -150,6 +150,76 @@ class JsRuntimeTest {
         assertEquals(false, result.getOrThrow().output["found"])
     }
 
+    // ---- scroll / back / home bridges ----
+
+    @Test
+    fun `scroll() dispatches Scroll action`() {
+        val (runtime, driver) = makeRuntime()
+        val result = runtime.execute(
+            "scroll(null, 'forward'); return { ok: true };",
+            emptyMap(),
+            5_000L,
+        )
+        assertTrue(result.isSuccess)
+        assertTrue(driver.lastAction is AutomationAction.Scroll)
+    }
+
+    @Test
+    fun `back() dispatches Back action`() {
+        val (runtime, driver) = makeRuntime()
+        val result = runtime.execute("back(); return { ok: true };", emptyMap(), 5_000L)
+        assertTrue(result.isSuccess)
+        assertEquals(AutomationAction.Back, driver.lastAction)
+    }
+
+    @Test
+    fun `home() dispatches Home action`() {
+        val (runtime, driver) = makeRuntime()
+        val result = runtime.execute("home(); return { ok: true };", emptyMap(), 5_000L)
+        assertTrue(result.isSuccess)
+        assertEquals(AutomationAction.Home, driver.lastAction)
+    }
+
+    // ---- awaitEvent bridge ----
+
+    @Test
+    fun `awaitEvent() returns true when eventAwaiter resolves`() {
+        val driver = JsFakeAutomationDriver()
+        val bridge = JsAutomationBridge(
+            snapshotBuilder = { null },
+            automationDriver = driver,
+            okHttpClient = okhttp3.OkHttpClient(),
+            eventAwaiter = { _, _, _, _ -> true },
+        )
+        val runtime = JsRuntime(bridge)
+        val result = runtime.execute(
+            "var ok = awaitEvent('activity_created', {}, 5000); return { ok: ok };",
+            emptyMap(),
+            10_000L,
+        )
+        assertTrue(result.isSuccess)
+        assertEquals(true, result.getOrThrow().output["ok"])
+    }
+
+    @Test
+    fun `awaitEvent() returns false when eventAwaiter times out`() {
+        val driver = JsFakeAutomationDriver()
+        val bridge = JsAutomationBridge(
+            snapshotBuilder = { null },
+            automationDriver = driver,
+            okHttpClient = okhttp3.OkHttpClient(),
+            eventAwaiter = { _, _, _, _ -> false },
+        )
+        val runtime = JsRuntime(bridge)
+        val result = runtime.execute(
+            "var ok = awaitEvent('activity_created', {}, 100); return { ok: ok };",
+            emptyMap(),
+            5_000L,
+        )
+        assertTrue(result.isSuccess)
+        assertEquals(false, result.getOrThrow().output["ok"])
+    }
+
     // ---- input bridge ----
 
     @Test

@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { createPersistOptions } from './helpers';
 
 export interface DeviceGroup {
   id: string;
@@ -13,35 +15,13 @@ interface GroupState {
   removeGroup: (id: string) => void;
 }
 
-const STORAGE_KEY = 'ppp.dashboard.deviceGroups';
-
-function loadGroups(): DeviceGroup[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as DeviceGroup[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveGroups(groups: DeviceGroup[]): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
-}
-
-export const useGroupStore = create<GroupState>((set) => ({
-  groups: loadGroups(),
-  addGroup: (group) =>
-    set((state) => {
-      const next = [...state.groups, group];
-      saveGroups(next);
-      return { groups: next };
+export const useGroupStore = create<GroupState>()(
+  persist(
+    (set) => ({
+      groups: [],
+      addGroup: (group) => set((state) => ({ groups: [...state.groups, group] })),
+      removeGroup: (id) => set((state) => ({ groups: state.groups.filter((g) => g.id !== id) })),
     }),
-  removeGroup: (id) =>
-    set((state) => {
-      const next = state.groups.filter((g) => g.id !== id);
-      saveGroups(next);
-      return { groups: next };
-    }),
-}));
+    createPersistOptions<GroupState>('ppp.dashboard.deviceGroups'),
+  ),
+);

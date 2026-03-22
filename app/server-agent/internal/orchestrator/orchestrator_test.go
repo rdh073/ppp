@@ -80,7 +80,8 @@ func (noopDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-chan do
 	return ch, nil
 }
 
-func (noopDispatcher) DeliverResponse(domain.CommandResult) {}
+func (noopDispatcher) DeliverResponse(domain.CommandResult)                {}
+func (noopDispatcher) CancelByDevice(domain.DeviceID, string)              {}
 
 // ensure compile-time satisfaction
 var _ dispatcher.Dispatcher = noopDispatcher{}
@@ -92,6 +93,7 @@ func (d errorDispatcher) Dispatch(_ context.Context, _ domain.Command) (<-chan d
 }
 
 func (d errorDispatcher) DeliverResponse(domain.CommandResult) {}
+func (d errorDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 // blockingDispatcher blocks inside Dispatch until release is closed.
 // It signals entry via entered so callers can synchronize.
@@ -113,6 +115,7 @@ func (d *blockingDispatcher) Dispatch(_ context.Context, cmd domain.Command) (<-
 }
 
 func (d *blockingDispatcher) DeliverResponse(domain.CommandResult) {}
+func (d *blockingDispatcher) CancelByDevice(domain.DeviceID, string) {}
 
 // --- helpers ---
 

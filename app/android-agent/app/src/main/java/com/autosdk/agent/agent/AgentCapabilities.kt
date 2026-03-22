@@ -34,6 +34,7 @@ internal object AgentCapabilities {
             mapOf("name" to "open_intent", "available" to true),
             mapOf("name" to "close_app", "available" to true),
             mapOf("name" to "fill_form", "available" to true),
+            mapOf("name" to "script", "available" to true),
             mapOf(
                 "name" to "screenshot",
                 "available" to (android.os.Build.VERSION.SDK_INT >= 30),

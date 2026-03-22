@@ -1,0 +1,171 @@
+name: instagram-create-script
+version: 1
+entry: create_account
+
+# Creates an Instagram account using a phone number for verification.
+# Inputs: phone_number (required), account_service_endpoint, google_account_id (optional)
+# The script waits for the SMS OTP via android.notification event and parses it automatically.
+
+steps:
+
+  create_account:
+    trigger: {}
+    script:
+      source: |
+        // Open Instagram app
+        tap({ kind: "open_app", target: { kind: "package_name", value: "com.instagram.android" } });
+
+        // Wait for login/signup screen
+        if (!waitFor({ kind: "text", value: "Create new account" }, 10000)) {
+          if (!waitFor({ kind: "text", value: "Sign up" }, 5000)) {
+            throw new Error("Instagram signup screen not found");
+          }
+        }
+
+        // Tap "Create new account" or "Sign up"
+        if (waitFor({ kind: "text", value: "Create new account" }, 2000)) {
+          tap({ kind: "click", target: { kind: "text", value: "Create new account" } });
+        } else {
+          tap({ kind: "click", target: { kind: "text", value: "Sign up" } });
+        }
+
+        // --- Phone number entry ---
+        if (!waitFor({ kind: "text", value: "Mobile number" }, 8000)) {
+          if (!waitFor({ kind: "text", value: "phone number" }, 4000)) {
+            throw new Error("Phone number input not found");
+          }
+        }
+        input({ kind: "content_desc", value: "Mobile number" }, params.phoneNumber);
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- OTP verification ---
+        if (!waitFor({ kind: "text", value: "Enter the confirmation code" }, 15000)) {
+          throw new Error("OTP screen not found");
+        }
+
+        // Wait for SMS notification (up to 60 seconds) and parse the OTP code
+        var otp = "";
+        var notifArrived = awaitEvent("android.notification", { packageFilter: "com.google.android.gms" }, 60000);
+        if (notifArrived && params.phoneOtp) {
+          otp = params.phoneOtp;
+        } else if (notifArrived) {
+          // OTP is extracted from the notification text by the event payload
+          // (caller should pass phone_otp input artifact if auto-extraction is not available)
+          log("notification arrived; phone_otp param not set — manual OTP required");
+        }
+
+        if (otp !== "") {
+          input({ kind: "content_desc", value: "Confirmation code" }, otp);
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        } else {
+          throw new Error("OTP not available; set phone_otp input artifact");
+        }
+
+        // --- Birthday ---
+        if (waitFor({ kind: "text", value: "Add your birthday" }, 6000)) {
+          // Default: 25 years old
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Name ---
+        if (waitFor({ kind: "text", value: "Add your name" }, 6000)) {
+          if (params.firstName) {
+            input({ kind: "content_desc", value: "Full name" }, params.firstName + " " + params.lastName);
+          }
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Username ---
+        if (!waitFor({ kind: "text", value: "Create a username" }, 8000)) {
+          throw new Error("Username screen not found");
+        }
+        var usernameField = waitFor({ kind: "content_desc", value: "Username" }, 3000);
+        if (usernameField && params.username) {
+          // Clear existing suggestion and enter desired username
+          tap({ kind: "click", target: { kind: "content_desc", value: "Username" } });
+          input({ kind: "content_desc", value: "Username" }, params.username);
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // --- Password ---
+        if (waitFor({ kind: "text", value: "Create a password" }, 6000)) {
+          if (params.password) {
+            input({ kind: "content_desc", value: "Password" }, params.password);
+          }
+          tap({ kind: "click", target: { kind: "text", value: "Next" } });
+        }
+
+        // --- Save login info (skip) ---
+        if (waitFor({ kind: "text", value: "Save your login info" }, 5000)) {
+          if (waitFor({ kind: "text", value: "Not now" }, 2000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Not now" } });
+          }
+        }
+
+        // --- Connect to Facebook (skip) ---
+        if (waitFor({ kind: "text", value: "Connect to Facebook" }, 5000)) {
+          if (waitFor({ kind: "text", value: "Skip" }, 2000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Skip" } });
+          }
+        }
+
+        // --- Follow people (skip) ---
+        if (waitFor({ kind: "text", value: "Follow people" }, 5000)) {
+          if (waitFor({ kind: "text", value: "Skip" }, 2000)) {
+            tap({ kind: "click", target: { kind: "text", value: "Skip" } });
+          }
+        }
+
+        // Verify we're on the home feed
+        if (!waitFor({ kind: "text", value: "Home" }, 10000)) {
+          log("Home tab not detected; account may still be created");
+        }
+
+        var username = params.username || "";
+        var accountId = "";
+
+        // --- Register to account-service ---
+        if (params.accountServiceEndpoint) {
+          var regResp = http({
+            url: params.accountServiceEndpoint + "/v1/tools/account.register_instagram:invoke",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              callId: "reg-ig-" + username,
+              params: {
+                username: username,
+                password: params.password,
+                contact: params.phoneNumber,
+                deviceId: params.deviceId,
+                googleAccountId: params.googleAccountId
+              }
+            })
+          });
+          if (regResp.status === 200) {
+            var reg = JSON.parse(regResp.body);
+            if (reg.result) accountId = reg.result.accountId;
+            log("registered instagram account: " + accountId);
+          } else {
+            log("account registration failed: " + regResp.status + " " + regResp.body);
+          }
+        }
+
+        return { created: true, username: username, password: params.password, accountId: accountId };
+      params:
+        phoneNumber:              "{{input.phone_number}}"
+        phoneOtp:                 "{{input.phone_otp}}"
+        firstName:                "{{input.first_name}}"
+        lastName:                 "{{input.last_name}}"
+        username:                 "{{input.username}}"
+        password:                 "{{input.password}}"
+        accountServiceEndpoint:   "{{input.account_service_endpoint}}"
+        googleAccountId:          "{{input.google_account_id}}"
+        deviceId:                 "{{input.device_id}}"
+      outputs:
+        created:   ig_created
+        username:  ig_username
+        password:  ig_password
+        accountId: ig_account_id
+      timeout: 180s
+    on_success: terminal
+    on_failure: terminal

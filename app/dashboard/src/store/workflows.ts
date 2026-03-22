@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { WorkflowDefinition } from '../types';
+import { createLoadableActions } from './helpers';
 
 interface WorkflowState {
   workflows: WorkflowDefinition[];
@@ -13,6 +14,7 @@ interface WorkflowState {
 }
 
 export const useWorkflowStore = create<WorkflowState>((set) => ({
+  ...createLoadableActions<WorkflowState>(set),
   workflows: [],
   selected: null,
   loading: false,
@@ -28,11 +30,5 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
       selected,
       loading: false,
       error: null,
-    }),
-  setLoading: (loading) => set({ loading }),
-  setError: (error) =>
-    set({
-      loading: false,
-      error,
     }),
 }));

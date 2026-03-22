@@ -1,0 +1,25 @@
+name: instagram-login-script
+version: 1
+entry: login
+steps:
+  login:
+    trigger: {}
+    script:
+      source: |
+        tap({ kind: "open_app", target: { kind: "package_name", value: "com.instagram.android" } });
+        if (!waitFor({ kind: "text", value: "Log in" }, 8000)) {
+          throw new Error("Instagram login screen not found");
+        }
+        input({ kind: "content_desc", value: "Phone number, username, or email" }, params.username);
+        input({ kind: "content_desc", value: "Password" }, params.password);
+        tap({ kind: "click", target: { kind: "text", value: "Log in" } });
+        var ok = waitFor({ kind: "text", value: "Home" }, 10000);
+        return { loggedIn: ok };
+      params:
+        username: "{{input.username}}"
+        password: "{{input.password}}"
+      outputs:
+        loggedIn: login_success
+      timeout: 30s
+    on_success: terminal
+    on_failure: terminal

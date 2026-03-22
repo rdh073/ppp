@@ -1,0 +1,116 @@
+name: instagram-post-script
+version: 1
+entry: open_instagram
+
+# Posts an image with a caption to Instagram.
+# Inputs:
+#   caption   (string, required) — post caption text
+#   imagePath (string, required) — absolute path to image on device (e.g. /sdcard/DCIM/ppp_posts/x.jpg)
+# Returns: { posted: bool }
+
+steps:
+
+  open_instagram:
+    trigger: {}
+    script:
+      source: |-
+        // Open Instagram home feed
+        tap({ kind: "open_intent", intentAction: "android.intent.action.MAIN", intentPackage: "com.instagram.android" });
+
+        // Wait for home feed to confirm we are logged in
+        if (!waitFor({ kind: "content_desc", value: "Home" }, 12000) &&
+            !waitFor({ kind: "text", value: "Search" }, 5000)) {
+          throw new Error("Instagram home feed not found — account may not be logged in");
+        }
+
+        // Tap the "+" new post button (center of bottom nav bar)
+        if (!waitFor({ kind: "content_desc", value: "New post" }, 5000) &&
+            !waitFor({ kind: "content_desc", value: "Create" }, 5000)) {
+          // Try tapping the center nav item by coordinate fallback
+          tap({ kind: "click", target: { kind: "content_desc", value: "New post" } });
+        } else {
+          tap({ kind: "click", target: { kind: "content_desc", value: "New post" } });
+        }
+
+        // ── Gallery picker ───────────────────────────────────────────────────
+        // Wait for the gallery grid
+        if (!waitFor({ kind: "text", value: "Recents" }, 10000) &&
+            !waitFor({ kind: "text", value: "Gallery" }, 5000)) {
+          throw new Error("Gallery picker not found");
+        }
+
+        // Tap the top-left (most-recent) image in the gallery grid
+        // Instagram gallery renders items with content_desc like "Photo taken on ..."
+        // The safest selector is tapping the first cell which has the pushed image.
+        // We give the media scanner 2 s to finish indexing before picking.
+        if (!waitFor({ kind: "content_desc", value: "Post" }, 2000)) {
+          // allow settle time
+        }
+
+        // Select most-recent item: tap first image cell in grid
+        var snap = observe();
+        var imageCells = snap.nodes.filter(function(n) {
+          return n.contentDesc && (
+            n.contentDesc.startsWith("Photo") ||
+            n.contentDesc.startsWith("Image") ||
+            n.contentDesc.indexOf("image") >= 0 ||
+            n.contentDesc.indexOf("photo") >= 0
+          );
+        });
+        if (imageCells.length === 0) {
+          throw new Error("No image cells found in gallery");
+        }
+        // Sort by position (top-left first)
+        imageCells.sort(function(a, b) {
+          var ay = a.bounds ? a.bounds.top : 0;
+          var by2 = b.bounds ? b.bounds.top : 0;
+          if (ay !== by2) return ay - by2;
+          return (a.bounds ? a.bounds.left : 0) - (b.bounds ? b.bounds.left : 0);
+        });
+        tap({ kind: "click", target: { kind: "content_desc", value: imageCells[0].contentDesc } });
+
+        // Tap "Next" to proceed to filter screen
+        if (!waitFor({ kind: "text", value: "Next" }, 8000)) {
+          throw new Error("Next button not found after image selection");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // ── Filter screen ────────────────────────────────────────────────────
+        // Skip filters — tap Next again
+        if (!waitFor({ kind: "text", value: "Next" }, 8000)) {
+          throw new Error("Next button not found on filter screen");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Next" } });
+
+        // ── Caption screen ───────────────────────────────────────────────────
+        if (!waitFor({ kind: "content_desc", value: "Write a caption..." }, 10000) &&
+            !waitFor({ kind: "text", value: "Write a caption..." }, 5000)) {
+          throw new Error("Caption field not found");
+        }
+        if (waitFor({ kind: "content_desc", value: "Write a caption..." }, 2000)) {
+          input({ kind: "content_desc", value: "Write a caption..." }, params.caption);
+        } else {
+          input({ kind: "text", value: "Write a caption..." }, params.caption);
+        }
+
+        // ── Share ────────────────────────────────────────────────────────────
+        if (!waitFor({ kind: "text", value: "Share" }, 5000)) {
+          throw new Error("Share button not found");
+        }
+        tap({ kind: "click", target: { kind: "text", value: "Share" } });
+
+        // ── Confirm posted ───────────────────────────────────────────────────
+        // After posting Instagram returns to home feed or shows a post success screen
+        var posted = waitFor({ kind: "content_desc", value: "Home" }, 15000) ||
+                     waitFor({ kind: "text", value: "Your post has been shared" }, 10000) ||
+                     waitFor({ kind: "text", value: "Search" }, 5000);
+
+        return { posted: posted };
+      params:
+        caption:   "{{input.caption}}"
+        imagePath: "{{input.imagePath}}"
+      outputs:
+        posted: instagram_posted
+      timeout: 120s
+    on_success: terminal
+    on_failure: terminal

@@ -1,0 +1,34 @@
+name: captcha-script
+version: 1
+entry: solve_captcha
+steps:
+  solve_captcha:
+    trigger: {}
+    script:
+      source: |
+        var found = waitFor({ kind: "text", value: "Select all" }, 3000);
+        if (!found) return { captchaSolved: false, skipped: true };
+
+        var shot = screenshot();
+        var resp = http({
+          url: params.captchaEndpoint,
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: shot.base64 })
+        });
+        if (resp.status !== 200) {
+          throw new Error("captcha solve failed: " + resp.status + " " + resp.body);
+        }
+        var result = JSON.parse(resp.body);
+        for (var i = 0; i < result.taps.length; i++) {
+          tap({ kind: "click", target: { kind: "coordinate", value: result.taps[i] } });
+        }
+        return { captchaSolved: true, count: result.count };
+      params:
+        captchaEndpoint: "{{input.captcha_endpoint}}"
+      outputs:
+        captchaSolved: captcha_solved
+        count: captcha_tap_count
+      timeout: 30s
+    on_success: terminal
+    on_failure: terminal
