@@ -5,6 +5,8 @@ import {
   type AccountCreation,
 } from '../api/accountCreations';
 import { listPersonas, type Persona } from '../api/personas';
+import { listDevices } from '../../device-control/api/devices';
+import type { Device } from '../../../types';
 import { PersonasPanel } from './PersonasPanel';
 import { AccountsPanel } from './AccountsPanel';
 import { LoginPanel } from './LoginPanel';
@@ -51,6 +53,7 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [personas, setPersonas] = useState<Persona[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [form, setForm] = useState({
     deviceId: '',
     personaId: '',
@@ -60,6 +63,7 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
 
   useEffect(() => {
     listPersonas({ status: 'available' }).then(setPersonas).catch(() => {});
+    listDevices().then((ds) => setDevices(ds.filter((d) => d.connected))).catch(() => {});
   }, []);
 
   function set(field: string, value: string) {
@@ -109,12 +113,23 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
           <option value="google+instagram">Google + Instagram</option>
           <option value="google">Google only</option>
         </select>
-        <input
-          placeholder="Device ID *"
+        <select
           value={form.deviceId}
           onChange={(e) => set('deviceId', e.target.value)}
           style={{ ...inputStyle, minWidth: 200 }}
-        />
+        >
+          <option value="">— select device —</option>
+          {devices.map((d) => {
+            const label = [d.deviceMetadata?.brand, d.deviceMetadata?.model].filter(Boolean).join(' ')
+              || d.adbSerial
+              || d.deviceId;
+            return (
+              <option key={d.deviceId} value={d.deviceId}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
         <select value={form.personaId} onChange={(e) => set('personaId', e.target.value)} style={inputStyle}>
           <option value="">— generate persona via AI —</option>
           {personas.map((p) => (

@@ -8,6 +8,7 @@ const AUTO_REFRESH_INTERVAL = 3_000;
 interface UseInspectorResult {
   snapshot: UiSnapshot | null;
   targets: UiTarget[];
+  deviceSize: { width: number; height: number } | null;
   loading: boolean;
   error: string;
   selectedTarget: UiTarget | null;
@@ -70,9 +71,17 @@ export function useInspector(deviceId: string | undefined, enabled: boolean): Us
     setAutoRefresh((v) => !v);
   }, []);
 
+  const deviceSize = snapshot
+    ? {
+        width: Math.max(...snapshot.targets.map((t) => t.bounds[2]), 1),
+        height: Math.max(...snapshot.targets.map((t) => t.bounds[3]), 1),
+      }
+    : null;
+
   return {
     snapshot,
     targets: snapshot?.targets ?? [],
+    deviceSize,
     loading,
     error,
     selectedTarget,

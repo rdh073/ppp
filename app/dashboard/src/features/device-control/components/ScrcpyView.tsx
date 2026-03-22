@@ -158,7 +158,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         : new BitmapVideoFrameRenderer();
 
       const canvas = renderer.canvas as HTMLCanvasElement;
-      canvas.style.cssText = 'max-width:100%;max-height:70vh;display:block;touch-action:none;';
+      canvas.style.cssText = 'max-width:100%;max-height:82vh;display:block;touch-action:none;';
       containerRef.current?.appendChild(canvas);
 
       const decoder = new WebCodecsVideoDecoder({
@@ -285,7 +285,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
           <span>{modeLabel}</span>
           {deviceName && <span className="scrcpy-session-badge">{deviceName}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           {phase === 'live' && (
             <InspectorToolbar
               active={inspectorActive}
@@ -304,7 +304,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
               }
             />
           )}
-          <button type="button" className="btn-secondary" onClick={() => void disconnect()}>
+          <button type="button" className="btn-secondary shrink-0" onClick={() => void disconnect()}>
             Disconnect
           </button>
         </div>
@@ -390,7 +390,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         {inspectorActive && inspector.snapshot && (
           <InspectorOverlay
             targets={inspector.targets}
-            videoSize={videoSizeRef.current}
+            deviceSize={inspector.deviceSize ?? { width: 1, height: 1 }}
             canvasElement={containerRef.current?.querySelector('canvas') ?? null}
             hoveredTarget={inspector.hoveredTarget}
             selectedTarget={inspector.selectedTarget}

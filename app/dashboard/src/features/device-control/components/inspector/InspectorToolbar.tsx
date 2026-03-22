@@ -109,9 +109,13 @@ export function InspectorToolbar({
                 background: 'rgba(255,255,255,0.04)',
                 border: '1px solid rgba(255,255,255,0.06)',
                 whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: 160,
               }}
+              title={snapshotInfo.packageName ?? '—'}
             >
-              {snapshotInfo.packageName ?? '—'} · {snapshotInfo.targetCount} elements
+              {(snapshotInfo.packageName?.split('.').pop() ?? '—').toUpperCase()} · {snapshotInfo.targetCount}
             </span>
           )}
         </>

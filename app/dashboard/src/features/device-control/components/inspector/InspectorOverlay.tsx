@@ -3,7 +3,7 @@ import type { UiTarget } from '../../types/inspector';
 
 interface Props {
   targets: UiTarget[];
-  videoSize: { width: number; height: number };
+  deviceSize: { width: number; height: number };
   canvasElement: HTMLCanvasElement | null;
   hoveredTarget: UiTarget | null;
   selectedTarget: UiTarget | null;
@@ -13,11 +13,11 @@ interface Props {
 
 function deviceToOverlay(
   bounds: [number, number, number, number],
-  videoSize: { width: number; height: number },
+  deviceSize: { width: number; height: number },
   canvasSize: { width: number; height: number },
 ): { left: number; top: number; width: number; height: number } {
-  const scaleX = canvasSize.width / videoSize.width;
-  const scaleY = canvasSize.height / videoSize.height;
+  const scaleX = canvasSize.width / deviceSize.width;
+  const scaleY = canvasSize.height / deviceSize.height;
   return {
     left: bounds[0] * scaleX,
     top: bounds[1] * scaleY,
@@ -39,7 +39,7 @@ function targetLabel(t: UiTarget): string {
 
 export function InspectorOverlay({
   targets,
-  videoSize,
+  deviceSize,
   canvasElement,
   hoveredTarget,
   selectedTarget,
@@ -62,7 +62,7 @@ export function InspectorOverlay({
     return () => ro.disconnect();
   }, [canvasElement]);
 
-  if (!canvasElement || !videoSize.width || !videoSize.height || !canvasSize.width) {
+  if (!canvasElement || !deviceSize.width || !deviceSize.height || !canvasSize.width) {
     return null;
   }
 
@@ -81,10 +81,11 @@ export function InspectorOverlay({
         pointerEvents: 'auto',
         cursor: 'crosshair',
         zIndex: 10,
+        overflow: 'hidden',
       }}
     >
       {targets.map((target) => {
-        const pos = deviceToOverlay(target.bounds, videoSize, canvasSize);
+        const pos = deviceToOverlay(target.bounds, deviceSize, canvasSize);
         if (pos.width < 1 || pos.height < 1) return null;
 
         const isHovered = hoveredTarget?.targetId === target.targetId;

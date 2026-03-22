@@ -19,6 +19,7 @@ export interface Device {
   };
   adbSerial?: string;
   observedAndroidId?: string;
+  connected?: boolean;
 }
 
 export interface TaskCreateRequest {

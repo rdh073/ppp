@@ -8,6 +8,8 @@ import { runStatusColor as STATUS_COLOR, inputStyle } from '../../../components/
 import { useDataList } from '../../../shared/react/useDataList';
 import { StatusRow } from '../../../components/ui/StatusRow';
 import { CollapsibleForm } from '../../../components/ui/CollapsibleForm';
+import { listDevices } from '../../device-control/api/devices';
+import type { Device } from '../../../types';
 
 function LoginRow({ run }: { run: LoginRun }) {
   return (
@@ -45,7 +47,12 @@ function StartLoginFormBody({ accountKind, accentColor, onStarted, onStart, clos
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [form, setForm] = useState({ accountId: '', email: '', password: '', deviceId: '' });
+
+  useEffect(() => {
+    listDevices().then((ds) => setDevices(ds.filter((d) => d.connected))).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (mode === 'account') {
@@ -116,12 +123,23 @@ function StartLoginFormBody({ accountKind, accentColor, onStarted, onStart, clos
       </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <input
-          placeholder="Device ID *"
+        <select
           value={form.deviceId}
           onChange={(e) => set('deviceId', e.target.value)}
           style={{ ...inputStyle, minWidth: 200 }}
-        />
+        >
+          <option value="">— select device —</option>
+          {devices.map((d) => {
+            const label = [d.deviceMetadata?.brand, d.deviceMetadata?.model].filter(Boolean).join(' ')
+              || d.adbSerial
+              || d.deviceId;
+            return (
+              <option key={d.deviceId} value={d.deviceId}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
         {mode === 'account' ? (
           <select value={form.accountId} onChange={(e) => set('accountId', e.target.value)} style={inputStyle}>
             <option value="">— select account —</option>

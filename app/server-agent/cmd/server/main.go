@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +34,8 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/transport/ws"
 	"github.com/autosdk/ppp/server-agent/internal/workflow"
 	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" database/sql driver
 )
 
 func main() {
@@ -450,15 +453,31 @@ func wireMux(
 	if infra.fsDefStore != nil {
 		macroLibraryHandler = macroLibraryHandler.WithReloader(infra.fsDefStore)
 	}
-	personaStore, err := store.NewFilePersonaStore(cfg.Server.DataDir)
-	if err != nil {
-		log.Error("failed to open persona store", "dir", cfg.Server.DataDir, "err", err)
-		os.Exit(1)
-	}
-	accountStore, err := store.NewFileAccountStore(cfg.Server.DataDir)
-	if err != nil {
-		log.Error("failed to open account store", "dir", cfg.Server.DataDir, "err", err)
-		os.Exit(1)
+	var personaStore store.PersonaStore
+	var accountStore store.AccountStore
+	if dbURL := os.Getenv("AUTO_ACCOUNT_DATABASE_URL"); dbURL != "" {
+		db, err := openAccountDB(dbURL, log)
+		if err != nil {
+			log.Error("failed to open account database", "err", err)
+			os.Exit(1)
+		}
+		accountStore = store.NewPostgresAccountStore(db)
+		personaStore = store.NewPostgresPersonaStore(db)
+		log.Info("account store: postgres")
+	} else {
+		ps, err := store.NewFilePersonaStore(cfg.Server.DataDir)
+		if err != nil {
+			log.Error("failed to open persona store", "dir", cfg.Server.DataDir, "err", err)
+			os.Exit(1)
+		}
+		as, err := store.NewFileAccountStore(cfg.Server.DataDir)
+		if err != nil {
+			log.Error("failed to open account store", "dir", cfg.Server.DataDir, "err", err)
+			os.Exit(1)
+		}
+		personaStore = ps
+		accountStore = as
+		log.Info("account store: file-backed", "dir", cfg.Server.DataDir)
 	}
 	projectionStore, err := store.NewFileProjectionEventStore(cfg.Server.DataDir, 0)
 	if err != nil {
@@ -539,6 +558,25 @@ func wireMux(
 		_, _ = w.Write([]byte("ok"))
 	})
 	return mux
+}
+
+// openAccountDB opens and migrates a PostgreSQL database for account/persona storage.
+func openAccountDB(dsn string, log *slog.Logger) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sql.Open: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping: %w", err)
+	}
+	if err := store.MigratePostgres(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return db, nil
 }
 
 // run starts the HTTP server and blocks until a shutdown signal is received.
