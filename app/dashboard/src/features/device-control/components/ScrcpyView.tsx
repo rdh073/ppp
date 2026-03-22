@@ -11,6 +11,10 @@ import {
 } from '@yume-chan/scrcpy-decoder-webcodecs';
 import { AdbDaemonWebSocketConnection } from '../../../utils/adbWebSocket';
 import { getDevice } from '../api/devices';
+import { useInspector } from '../hooks/useInspector';
+import { InspectorOverlay } from './inspector/InspectorOverlay';
+import { InspectorToolbar } from './inspector/InspectorToolbar';
+import { ElementPropertiesPanel } from './inspector/ElementPropertiesPanel';
 
 // scrcpy server v2.7 — served from /public. v3.x crashes on Waydroid (JVM abort at startup).
 const SCRCPY_SERVER_V2_7 = '/scrcpy-server-v2.7';
@@ -40,11 +44,14 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   const [mode, setMode] = useState<Mode>(deviceId ? 'network' : 'usb');
   const [adbSerialInput, setAdbSerialInput] = useState(initialAdbSerial ?? '');
   const [serialFetching, setSerialFetching] = useState(false);
+  const [inspectorActive, setInspectorActive] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<AdbScrcpyClient<AdbScrcpyOptions2_7<true>> | null>(null);
   const adbRef = useRef<Adb | null>(null);
   const videoSizeRef = useRef({ width: 0, height: 0 });
   const pointerActiveRef = useRef(false);
+
+  const inspector = useInspector(deviceId, inspectorActive && phase === 'live');
 
   useEffect(() => {
     return () => {
@@ -185,6 +192,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   }
 
   async function disconnect() {
+    setInspectorActive(false);
     await clientRef.current?.close();
     clientRef.current = null;
     await adbRef.current?.close();
@@ -205,6 +213,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (inspectorActive) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const coords = getVideoCoords(e);
     if (!coords) return;
@@ -226,6 +235,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (inspectorActive) return;
     if (!pointerActiveRef.current) return;
     const coords = getVideoCoords(e);
     if (!coords) return;
@@ -246,6 +256,7 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (inspectorActive) return;
     pointerActiveRef.current = false;
     const coords = getVideoCoords(e);
     if (!coords) return;
@@ -274,11 +285,32 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
           <span>{modeLabel}</span>
           {deviceName && <span className="scrcpy-session-badge">{deviceName}</span>}
         </div>
-        <button type="button" className="btn-secondary" onClick={() => void disconnect()}>
-          Disconnect
-        </button>
+        <div className="flex items-center gap-2">
+          {phase === 'live' && (
+            <InspectorToolbar
+              active={inspectorActive}
+              onToggle={() => setInspectorActive((v) => !v)}
+              loading={inspector.loading}
+              onRefresh={inspector.refresh}
+              autoRefresh={inspector.autoRefresh}
+              onToggleAutoRefresh={inspector.toggleAutoRefresh}
+              snapshotInfo={
+                inspector.snapshot
+                  ? {
+                      packageName: inspector.snapshot.packageName,
+                      targetCount: inspector.targets.length,
+                    }
+                  : null
+              }
+            />
+          )}
+          <button type="button" className="btn-secondary" onClick={() => void disconnect()}>
+            Disconnect
+          </button>
+        </div>
       </div>
 
+      {inspector.error && <p className="error" style={{ fontSize: '0.75rem', margin: '0.4rem 0.75rem' }}>{inspector.error}</p>}
       {statusMsg && <p className={phase === 'error' ? 'error' : 'status'}>{statusMsg}</p>}
 
       {phase === 'idle' && (
@@ -349,11 +381,31 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
 
       <div
         ref={containerRef}
+        style={{ position: 'relative' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-      />
+      >
+        {inspectorActive && inspector.snapshot && (
+          <InspectorOverlay
+            targets={inspector.targets}
+            videoSize={videoSizeRef.current}
+            canvasElement={containerRef.current?.querySelector('canvas') ?? null}
+            hoveredTarget={inspector.hoveredTarget}
+            selectedTarget={inspector.selectedTarget}
+            onHover={inspector.setHoveredTarget}
+            onSelect={inspector.setSelectedTarget}
+          />
+        )}
+      </div>
+
+      {inspectorActive && (
+        <ElementPropertiesPanel
+          target={inspector.selectedTarget}
+          onClose={() => inspector.setSelectedTarget(null)}
+        />
+      )}
     </div>
   );
 }
