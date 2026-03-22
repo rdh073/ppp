@@ -5,7 +5,7 @@ export function isAbortError(error: unknown): boolean {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   timeoutMs?: number;
   headers?: HeadersInit;

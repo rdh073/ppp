@@ -77,6 +77,7 @@ type MacroStore interface {
 	Save(macro SavedMacro) error
 	List() []SavedMacro
 	GetByID(id string) (SavedMacro, bool)
+	Update(id string, patch MacroPatch) (SavedMacro, bool, error)
 	Delete(id string) (bool, error)
 }
 

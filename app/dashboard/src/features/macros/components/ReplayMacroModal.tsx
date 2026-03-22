@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { SavedMacro } from '../api/macros';
+import { updateMacro, type SavedMacro } from '../api/macros';
 import type { Device } from '../../../types';
 import { listDevices, executeScript } from '../../device-control/api/devices';
 import { useDeviceStore } from '../../device-control/store/devices';
@@ -84,16 +84,22 @@ function DevicePickerRow({
 interface Props {
   macro: SavedMacro;
   onClose: () => void;
+  onUpdate?: (updated: SavedMacro) => void;
 }
 
-export function ReplayMacroModal({ macro, onClose }: Props) {
+export function ReplayMacroModal({ macro, onClose, onUpdate }: Props) {
   const storeDevices = useDeviceStore((s) => s.devices);
   const [localDevices, setLocalDevices] = useState<Device[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deviceSearch, setDeviceSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<DeviceFilterStatus>('all');
   const [execStates, setExecStates] = useState<Map<string, ExecState>>(new Map());
+  const [liveScript, setLiveScript] = useState(macro.script);
+  const [savedBaseline, setSavedBaseline] = useState(macro.script);
+  const [scriptSaving, setScriptSaving] = useState(false);
+  const [scriptSaved, setScriptSaved] = useState(false);
   const scrcpy = useScrcpySessions();
+  const scriptModified = liveScript !== savedBaseline;
 
   // Use store devices if available, else fetch once
   const devices = storeDevices.length > 0 ? storeDevices : localDevices;
@@ -165,7 +171,7 @@ export function ReplayMacroModal({ macro, onClose }: Props) {
     await Promise.allSettled(
       ids.map(async (deviceId) => {
         try {
-          const result = await executeScript(deviceId, macro.script);
+          const result = await executeScript(deviceId, liveScript);
           setExecStates((prev) => {
             const next = new Map(prev);
             next.set(deviceId, { status: 'success', durationMs: result.durationMs });
@@ -181,7 +187,7 @@ export function ReplayMacroModal({ macro, onClose }: Props) {
         }
       }),
     );
-  }, [selectedIds, macro.script]);
+  }, [selectedIds, liveScript]);
 
   // Sessions for selected devices only
   const selectedSessions = scrcpy.sessions.filter((s) => selectedIds.has(s.deviceId));
@@ -309,16 +315,28 @@ export function ReplayMacroModal({ macro, onClose }: Props) {
             </button>
           </div>
 
-          {/* script preview */}
+          {/* editable script */}
           <div className="relative mt-3">
-            <div className="absolute top-2 right-2 z-10">
-              <CopyButton text={macro.script} />
+            <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+              {scriptModified && (
+                <span className="text-[0.6rem] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>modified</span>
+              )}
+              {scriptSaved && !scriptModified && (
+                <span className="text-[0.6rem] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>saved</span>
+              )}
+              <CopyButton text={liveScript} />
             </div>
-            <pre
+            <textarea
+              value={liveScript}
+              onChange={(e) => { setLiveScript(e.target.value); setScriptSaved(false); }}
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
               style={{
                 margin: 0,
                 padding: '0.75rem',
                 paddingTop: '2.5rem',
+                width: '100%',
                 background: 'rgba(0,0,0,0.88)',
                 border: '1px solid var(--border)',
                 borderRadius: '0.75rem',
@@ -326,15 +344,58 @@ export function ReplayMacroModal({ macro, onClose }: Props) {
                 fontSize: '0.65rem',
                 lineHeight: 1.65,
                 color: '#4ade80',
-                maxHeight: '240px',
+                minHeight: '180px',
+                maxHeight: '320px',
                 overflow: 'auto',
                 whiteSpace: 'pre',
                 overflowWrap: 'normal',
+                resize: 'vertical',
+                outline: 'none',
+                caretColor: '#4ade80',
               }}
-            >
-              {macro.script}
-            </pre>
+            />
           </div>
+
+          {/* script edit actions */}
+          {scriptModified && (
+            <div className="flex items-center gap-2 mt-1.5">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={scriptSaving}
+                onClick={async () => {
+                  setScriptSaving(true);
+                  try {
+                    const updated = await updateMacro(macro.id, { script: liveScript });
+                    setSavedBaseline(liveScript);
+                    setScriptSaved(true);
+                    onUpdate?.(updated);
+                  } catch { /* keep editing */ }
+                  finally { setScriptSaving(false); }
+                }}
+                style={{ fontSize: '0.68rem', gap: '0.3rem', color: '#4ade80' }}
+              >
+                <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
+                </svg>
+                {scriptSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={scriptSaving}
+                onClick={() => { setLiveScript(savedBaseline); setScriptSaved(false); }}
+                style={{ fontSize: '0.68rem', gap: '0.3rem' }}
+              >
+                Reset
+              </button>
+              <span className="text-[0.62rem]" style={{ color: 'var(--muted)', opacity: 0.7 }}>
+                Unsaved edits are still used when you Run.
+              </span>
+            </div>
+          )}
 
           {/* execution results */}
           {execStates.size > 0 && (

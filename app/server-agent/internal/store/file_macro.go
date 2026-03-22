@@ -21,6 +21,12 @@ type SavedMacro struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
+// MacroPatch holds optional fields for partial macro updates.
+type MacroPatch struct {
+	Script       *string `json:"script,omitempty"`
+	WorkflowName *string `json:"workflowName,omitempty"`
+}
+
 // FileMacroStore is a file-backed MacroStore that persists to macros.json.
 type FileMacroStore struct {
 	mu      sync.Mutex
@@ -68,6 +74,26 @@ func (s *FileMacroStore) GetByID(id string) (SavedMacro, bool) {
 		}
 	}
 	return SavedMacro{}, false
+}
+
+func (s *FileMacroStore) Update(id string, patch MacroPatch) (SavedMacro, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.entries {
+		if e.ID == id {
+			if patch.Script != nil {
+				s.entries[i].Script = *patch.Script
+			}
+			if patch.WorkflowName != nil {
+				s.entries[i].WorkflowName = *patch.WorkflowName
+			}
+			if err := writeJSONFileAtomically(s.path, s.entries); err != nil {
+				return SavedMacro{}, false, err
+			}
+			return s.entries[i], true, nil
+		}
+	}
+	return SavedMacro{}, false, nil
 }
 
 func (s *FileMacroStore) Delete(id string) (bool, error) {

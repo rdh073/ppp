@@ -23,6 +23,13 @@ export function listMacros(): Promise<SavedMacro[]> {
   return requestJson('/macros');
 }
 
+export function updateMacro(
+  id: string,
+  patch: { script?: string; workflowName?: string },
+): Promise<SavedMacro> {
+  return requestJson(`/macros/${id}`, { method: 'PATCH', body: patch });
+}
+
 export function deleteMacro(id: string): Promise<void> {
   return requestJson(`/macros/${id}`, { method: 'DELETE' });
 }

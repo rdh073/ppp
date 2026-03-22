@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
-import { listMacros, deleteMacro, promoteMacro, type SavedMacro } from '../api/macros';
+import { listMacros, deleteMacro, promoteMacro, updateMacro, type SavedMacro } from '../api/macros';
 import { CopyButton } from '../../../components/ui/CopyButton';
 import { ReplayMacroModal } from './ReplayMacroModal';
 
 // ── macro detail ──────────────────────────────────────────────────────────────
 
-function MacroDetail({ macro, onDelete }: { macro: SavedMacro; onDelete: () => void }) {
+function MacroDetail({ macro, onDelete, onUpdate }: { macro: SavedMacro; onDelete: () => void; onUpdate: (updated: SavedMacro) => void }) {
   const [deleting, setDeleting] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [promoted, setPromoted] = useState<string | null>(null);
   const [promoteError, setPromoteError] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editedScript, setEditedScript] = useState(macro.script);
+  const [saving, setSaving] = useState(false);
 
   async function handleDelete() {
     setDeleting(true);
@@ -36,34 +39,114 @@ function MacroDetail({ macro, onDelete }: { macro: SavedMacro; onDelete: () => v
     }
   }
 
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const updated = await updateMacro(macro.id, { script: editedScript });
+      onUpdate(updated);
+      setEditing(false);
+    } catch {
+      /* keep editor open on failure */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCancel() {
+    setEditedScript(macro.script);
+    setEditing(false);
+  }
+
+  const codeStyle: React.CSSProperties = {
+    margin: 0,
+    padding: '0.75rem',
+    background: 'rgba(0,0,0,0.88)',
+    border: '1px solid var(--border)',
+    borderRadius: '0.75rem',
+    fontFamily: 'Fira Code, ui-monospace, monospace',
+    fontSize: '0.7rem',
+    lineHeight: 1.65,
+    color: '#4ade80',
+    maxHeight: '360px',
+    overflow: 'auto',
+    whiteSpace: 'pre',
+    overflowWrap: 'normal',
+  };
+
   return (
     <div className="grid gap-3" style={{ marginTop: '0.5rem' }}>
       {/* code block */}
       <div className="relative">
-        <div className="absolute top-2 right-2 z-10">
-          <CopyButton text={macro.script} />
-        </div>
-        <pre
-          style={{
-            margin: 0,
-            padding: '0.75rem',
-            paddingTop: '2.5rem',
-            background: 'rgba(0,0,0,0.88)',
-            border: '1px solid var(--border)',
-            borderRadius: '0.75rem',
-            fontFamily: 'Fira Code, ui-monospace, monospace',
-            fontSize: '0.7rem',
-            lineHeight: 1.65,
-            color: '#4ade80',
-            maxHeight: '280px',
-            overflow: 'auto',
-            whiteSpace: 'pre',
-            overflowWrap: 'normal',
-          }}
-        >
-          {macro.script}
-        </pre>
+        {!editing && (
+          <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => { setEditedScript(macro.script); setEditing(true); }}
+              style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem', gap: '0.25rem' }}
+              title="Edit script"
+            >
+              <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+              Edit
+            </button>
+            <CopyButton text={macro.script} />
+          </div>
+        )}
+
+        {editing ? (
+          <textarea
+            value={editedScript}
+            onChange={(e) => setEditedScript(e.target.value)}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            style={{
+              ...codeStyle,
+              width: '100%',
+              minHeight: '200px',
+              resize: 'vertical',
+              outline: 'none',
+              caretColor: '#4ade80',
+            }}
+          />
+        ) : (
+          <pre style={{ ...codeStyle, paddingTop: '2.5rem' }}>
+            {macro.script}
+          </pre>
+        )}
       </div>
+
+      {/* edit actions */}
+      {editing && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={saving || editedScript === macro.script}
+            onClick={handleSave}
+            style={{ fontSize: '0.73rem', gap: '0.35rem', color: '#4ade80' }}
+          >
+            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
+            </svg>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={saving}
+            onClick={handleCancel}
+            style={{ fontSize: '0.73rem', gap: '0.35rem' }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* promote feedback */}
       {promoted && (
@@ -76,40 +159,42 @@ function MacroDetail({ macro, onDelete }: { macro: SavedMacro; onDelete: () => v
       )}
 
       {/* actions */}
-      <div className="flex justify-between items-center gap-2">
-        <button
-          type="button"
-          className="btn-secondary"
-          disabled={promoting || promoted !== null}
-          onClick={handlePromote}
-          style={{ fontSize: '0.73rem', gap: '0.35rem' }}
-        >
-          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-          {promoting ? 'Promoting…' : promoted ? 'Promoted' : 'Promote to Workflow'}
-        </button>
+      {!editing && (
+        <div className="flex justify-between items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={promoting || promoted !== null}
+            onClick={handlePromote}
+            style={{ fontSize: '0.73rem', gap: '0.35rem' }}
+          >
+            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+            {promoting ? 'Promoting…' : promoted ? 'Promoted' : 'Promote to Workflow'}
+          </button>
 
-        <button
-          type="button"
-          className="btn-secondary"
-          disabled={deleting}
-          onClick={handleDelete}
-          style={{ fontSize: '0.73rem', gap: '0.35rem', color: 'var(--error)' }}
-        >
-          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-          </svg>
-          {deleting ? 'Deleting…' : 'Delete'}
-        </button>
-      </div>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={deleting}
+            onClick={handleDelete}
+            style={{ fontSize: '0.73rem', gap: '0.35rem', color: 'var(--error)' }}
+          >
+            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+            </svg>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── macro row ─────────────────────────────────────────────────────────────────
 
-function MacroRow({ macro, onDelete, onReplay }: { macro: SavedMacro; onDelete: () => void; onReplay: () => void }) {
+function MacroRow({ macro, onDelete, onUpdate, onReplay }: { macro: SavedMacro; onDelete: () => void; onUpdate: (updated: SavedMacro) => void; onReplay: () => void }) {
   const [expanded, setExpanded] = useState(false);
 
   const date = new Date(macro.createdAt);
@@ -198,7 +283,7 @@ function MacroRow({ macro, onDelete, onReplay }: { macro: SavedMacro; onDelete: 
               &ldquo;{macro.reason}&rdquo;
             </p>
           )}
-          <MacroDetail macro={macro} onDelete={onDelete} />
+          <MacroDetail macro={macro} onDelete={onDelete} onUpdate={onUpdate} />
         </div>
       )}
     </div>
@@ -229,6 +314,10 @@ export function MacroLibraryPanel() {
 
   function handleDelete(id: string) {
     setMacros((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  function handleUpdate(updated: SavedMacro) {
+    setMacros((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
   }
 
   return (
@@ -274,12 +363,12 @@ export function MacroLibraryPanel() {
 
       <div className="grid gap-2 mt-2">
         {macros.map((macro) => (
-          <MacroRow key={macro.id} macro={macro} onDelete={() => handleDelete(macro.id)} onReplay={() => setReplayingMacro(macro)} />
+          <MacroRow key={macro.id} macro={macro} onDelete={() => handleDelete(macro.id)} onUpdate={handleUpdate} onReplay={() => setReplayingMacro(macro)} />
         ))}
       </div>
 
       {replayingMacro && (
-        <ReplayMacroModal macro={replayingMacro} onClose={() => setReplayingMacro(null)} />
+        <ReplayMacroModal macro={replayingMacro} onClose={() => setReplayingMacro(null)} onUpdate={handleUpdate} />
       )}
     </section>
   );

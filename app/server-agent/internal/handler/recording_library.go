@@ -87,6 +87,24 @@ func (h *MacroLibraryHandler) handleOne(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(macro)
 
+	case http.MethodPatch:
+		var patch store.MacroPatch
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&patch); err != nil {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		updated, found, err := h.library.Update(id, patch)
+		if err != nil {
+			http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(updated)
+
 	case http.MethodDelete:
 		found, err := h.library.Delete(id)
 		if err != nil {
