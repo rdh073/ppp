@@ -74,7 +74,7 @@ curl -sS http://localhost:3000/workflows | jq '.[].name'
 ### 6) Panduan bikin workflow
 
 Lihat panduan lengkap authoring workflow YAML di:
-- `app/server-agent/config/examples/workflows/README.md`
+- `app/server-agent/config/workflows/README.md`
 
 ---
 

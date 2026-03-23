@@ -7,7 +7,7 @@
 addr = ":3000"
 data_dir = "./var"
 tool_dir = "./config/tools"
-workflow_dir = "./config/examples/workflows"
+workflow_dir = "./config/workflows"
 workflow_poll = "5s"
 log_level = "info"
 shutdown_timeout = "15s"

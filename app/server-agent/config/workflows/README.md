@@ -6,7 +6,7 @@ Panduan membuat workflow YAML untuk `server-agent`. **Pattern yang direkomendasi
 
 ```bash
 cd app/server-agent
-go run ./cmd/server -workflow-dir ./config/examples/workflows
+go run ./cmd/server -workflow-dir ./config/workflows
 ```
 
 Perubahan file workflow akan direload otomatis (default polling 5 detik).

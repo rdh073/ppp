@@ -12,7 +12,7 @@ import (
 func TestFSDefStore_LoadsExampleWorkflows(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	store, err := workflow.NewFSDefStore("../../config/examples/workflows", log)
+	store, err := workflow.NewFSDefStore("../../config/workflows", log)
 	if err != nil {
 		t.Fatalf("load example workflows: %v", err)
 	}

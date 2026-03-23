@@ -28,7 +28,7 @@ Two runtime layers:
 
 go run ./cmd/server                                           # default :3000
 go run ./cmd/server -config ./config/server.toml.example     # with config file
-go run ./cmd/server -workflow-dir ./config/examples/workflows # load example workflows
+go run ./cmd/server -workflow-dir ./config/workflows # load example workflows
 
 # Create a task
 curl -X POST http://localhost:3000/tasks \
@@ -432,7 +432,7 @@ Bootstrapped checkpoints carry `recovery_bootstrap=true` artifact for observabil
 
 ## Extending
 
-**New workflow:** Add YAML under `-workflow-dir`. No Go code needed. See `config/examples/workflows/` for reference.
+**New workflow:** Add YAML under `-workflow-dir`. No Go code needed. See `config/workflows/` for reference.
 
 **New tool:** Add `config/tools/manifests/<tool>.yaml` (and optional binding + prompt). Supported provider kinds: `builtin`, `http`, `openai`, `deepseek`, `anthropic`, `gemini`.
 
