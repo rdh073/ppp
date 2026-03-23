@@ -34,7 +34,6 @@ func TestLoadCatalog_DefaultConfig_ExposesExpectedToolsAndBindings(t *testing.T)
 		"identity.generate_alias_email",
 		"credential.generate_password",
 		"identity.generate_birth_date",
-		"content.generate_welcome_email",
 	} {
 		if _, ok := catalog.Registry.Manifest(toolName); !ok {
 			t.Fatalf("expected manifest for %s", toolName)
@@ -55,7 +54,6 @@ func TestLoadCatalog_DefaultConfig_ExposesExpectedToolsAndBindings(t *testing.T)
 		"local_identity.generate_persona",
 		"local_identity.generate_password",
 		"local_identity.generate_birth_date",
-		"local_identity.generate_welcome_email",
 	} {
 		if _, ok := catalog.Bindings.Binding(bindingID); !ok {
 			t.Fatalf("expected binding %s", bindingID)
@@ -92,122 +90,6 @@ func TestLoadCatalog_DefaultConfig_LocalToolInvokesFromManifest(t *testing.T) {
 	if result.Password == "" || result.Length == 0 {
 		t.Fatal("expected non-empty password from local tool")
 	}
-}
-
-func TestLoadCatalog_WelcomeEmail_RemainsVisibleWhenAllDisabled(t *testing.T) {
-	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
-	if err != nil {
-		t.Fatalf("LoadCatalog: %v", err)
-	}
-	if _, ok := catalog.Registry.Manifest("content.generate_welcome_email"); !ok {
-		t.Fatal("expected content.generate_welcome_email manifest")
-	}
-	_, err = catalog.Registry.Invoke(context.Background(), "content.generate_welcome_email", json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if !errors.Is(err, tools.ErrToolDisabled) {
-		t.Fatalf("expected ErrToolDisabled when all providers unconfigured, got %v", err)
-	}
-}
-
-func TestLoadCatalog_WelcomeEmail_InvokesViaOpenAI(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer openai-key" {
-			t.Errorf("unexpected Authorization %q", got)
-		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] != "gpt-test" {
-			t.Errorf("unexpected model %#v", body["model"])
-		}
-		if _, ok := body["response_format"]; !ok {
-			t.Error("expected response_format in request")
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"subject\":\"Selamat datang\",\"body\":\"Halo Ayu\",\"language\":\"id\",\"tone\":\"professional_warm\"}"}}]}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv("AUTO_TOOL_OPENAI_API_URL", srv.URL)
-	t.Setenv("AUTO_TOOL_OPENAI_API_KEY", "openai-key")
-	t.Setenv("AUTO_TOOL_OPENAI_MODEL", "gpt-test")
-
-	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
-	if err != nil {
-		t.Fatalf("LoadCatalog: %v", err)
-	}
-	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
-}
-
-func TestLoadCatalog_WelcomeEmail_InvokesViaDeepSeek(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer deepseek-key" {
-			t.Errorf("unexpected Authorization %q", got)
-		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] != "deepseek-chat" {
-			t.Errorf("unexpected model %#v", body["model"])
-		}
-		if body["tool_choice"] != "required" {
-			t.Errorf("unexpected tool_choice %#v", body["tool_choice"])
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"content_generate_welcome_email","arguments":"{\"subject\":\"Selamat datang\",\"body\":\"Halo Ayu\",\"language\":\"id\",\"tone\":\"professional_warm\"}"}}]}}]}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv("AUTO_TOOL_DEEPSEEK_API_URL", srv.URL)
-	t.Setenv("AUTO_TOOL_DEEPSEEK_API_KEY", "deepseek-key")
-	t.Setenv("AUTO_TOOL_DEEPSEEK_MODEL", "deepseek-chat")
-
-	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
-	if err != nil {
-		t.Fatalf("LoadCatalog: %v", err)
-	}
-	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
-}
-
-func TestLoadCatalog_WelcomeEmail_InvokesViaAnthropic(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("x-api-key"); got != "anthropic-key" {
-			t.Errorf("unexpected x-api-key %q", got)
-		}
-		if got := r.Header.Get("anthropic-version"); got != "2023-06-01" {
-			t.Errorf("unexpected anthropic-version %q", got)
-		}
-		_, _ = w.Write([]byte(`{"content":[{"type":"tool_use","name":"content_generate_welcome_email","input":{"subject":"Selamat datang","body":"Halo Ayu","language":"id","tone":"professional_warm"}}]}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv("AUTO_TOOL_ANTHROPIC_API_URL", srv.URL)
-	t.Setenv("AUTO_TOOL_ANTHROPIC_API_KEY", "anthropic-key")
-	t.Setenv("AUTO_TOOL_ANTHROPIC_MODEL", "claude-test")
-
-	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
-	if err != nil {
-		t.Fatalf("LoadCatalog: %v", err)
-	}
-	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
-}
-
-func TestLoadCatalog_WelcomeEmail_InvokesViaGemini(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models/gemini-test:generateContent" {
-			t.Errorf("unexpected path %q", r.URL.Path)
-		}
-		if got := r.Header.Get("x-goog-api-key"); got != "gemini-key" {
-			t.Errorf("unexpected x-goog-api-key %q", got)
-		}
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"subject\":\"Selamat datang\",\"body\":\"Halo Ayu\",\"language\":\"id\",\"tone\":\"professional_warm\"}"}]}}]}`))
-	}))
-	defer srv.Close()
-
-	t.Setenv("AUTO_TOOL_GEMINI_API_URL", srv.URL)
-	t.Setenv("AUTO_TOOL_GEMINI_API_KEY", "gemini-key")
-	t.Setenv("AUTO_TOOL_GEMINI_MODEL", "gemini-test")
-
-	catalog, err := loader.LoadCatalog(context.Background(), defaultToolDir(), nil, loader.ModelToolConfig{})
-	if err != nil {
-		t.Fatalf("LoadCatalog: %v", err)
-	}
-	assertWelcomeEmailInvokeTool(t, catalog, "content.generate_welcome_email")
 }
 
 func TestLoadCatalog_DefaultConfig_HTTPToolRemainsVisibleWhenProviderDisabled(t *testing.T) {
@@ -438,24 +320,3 @@ outputSchema:
 	}
 }
 
-func assertWelcomeEmailInvokeTool(t *testing.T, catalog *loader.LoadedCatalog, toolName string) {
-	t.Helper()
-
-	raw, err := catalog.Registry.Invoke(context.Background(), toolName, json.RawMessage(`{"fullName":"Ayu Lestari"}`))
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if !json.Valid(raw) {
-		t.Fatalf("expected valid JSON, got %s", raw)
-	}
-	var result struct {
-		Subject string `json:"subject"`
-		Body    string `json:"body"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.Fatalf("decode result: %v", err)
-	}
-	if result.Subject == "" || result.Body == "" {
-		t.Fatalf("unexpected welcome email result: %s", raw)
-	}
-}

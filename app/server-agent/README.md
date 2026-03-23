@@ -263,7 +263,8 @@ Optional providers are silently disabled at startup when their env vars are unse
 
 | Tool | Description |
 |------|-------------|
-| `captcha.squares_to_taps` | Converts 1-indexed grid squares → `"x,y"` tap coordinates (9 slots) |
+| `credential.generate_password` | Generates a strong random password with configurable length and symbol inclusion |
+| `identity.generate_birth_date` | Generates a random birth date within a specified age range |
 
 ---
 
@@ -412,7 +413,6 @@ Prometheus metrics at `GET /metrics`:
 | `android-settings-private-dns` | `private_dns_hostname` | Navigates Settings → Network → Private DNS → sets hostname |
 | `captcha-solve` | `screenshot_base64`, `grid_bounds`, `captcha_target`, `cols?` | LLM-based grid CAPTCHA solver with coordinate taps |
 | `local-identity-profile` | — | Generates identity (name, email, password) via tool calls |
-| `local-identity-welcome-email` | — | Generates welcome email (with LLM fallback) |
 
 Workflows are data-driven YAML — no Go code needed for new workflows.
 

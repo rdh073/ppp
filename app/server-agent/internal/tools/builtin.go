@@ -14,7 +14,6 @@ func LocalToolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
 		generatePasswordTool(),
 		generateBirthDateTool(),
-		squaresToTapsTool(),
 	}
 }
 
