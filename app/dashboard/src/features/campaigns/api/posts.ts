@@ -1,3 +1,4 @@
+import { API_URL } from '../../../config';
 import { requestJson } from '../../../shared/http/client';
 
 export type PostJobStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -61,4 +62,40 @@ export function generateImagePreview(prompt: string): Promise<{ imageBase64: str
 
 export function generateCaptionPreview(prompt: string): Promise<{ caption: string }> {
   return requestJson('/campaigns/posts/preview/caption', { method: 'POST', body: { prompt } });
+}
+
+export async function streamCaptionPreview(
+  prompt: string,
+  onChunk: (token: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(`${API_URL}/campaigns/posts/preview/caption/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+    signal,
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const tok = line.slice(6);
+        if (tok === '[DONE]') return;
+        if (tok.startsWith('[ERROR] ')) throw new Error(tok.slice(8));
+        onChunk(tok);
+      }
+    }
+  } finally {
+    reader.cancel();
+  }
 }

@@ -213,11 +213,13 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
   async function handleGenerateCaption() {
     if (!textPrompt.trim()) { setError('Enter a caption prompt first'); return; }
     setGeneratingCaption(true);
+    setGeneratedCaption('');
     setError('');
     try {
-      const { generateCaptionPreview } = await import('../api/posts');
-      const res = await generateCaptionPreview(textPrompt);
-      setGeneratedCaption(res.caption);
+      const { streamCaptionPreview } = await import('../api/posts');
+      await streamCaptionPreview(textPrompt, (token) => {
+        setGeneratedCaption(prev => prev + token);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Caption generation failed');
     } finally {

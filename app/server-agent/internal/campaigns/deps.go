@@ -12,6 +12,7 @@ type TaskControl = appport.TaskControl
 
 type CaptionGenerator interface {
 	GenerateCaption(ctx context.Context, prompt string) (string, error)
+	GenerateCaptionStream(ctx context.Context, prompt string, onChunk func(string)) error
 }
 
 type ImageGenerator interface {

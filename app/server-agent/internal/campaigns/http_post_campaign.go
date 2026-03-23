@@ -1,7 +1,9 @@
 package campaigns
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -57,6 +59,12 @@ func (h *PostCampaignHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		h.previewCaption(w, r)
+	case "preview/caption/stream":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.streamCaption(w, r)
 	default:
 		if r.Method == http.MethodGet {
 			h.get(w, r, path)
@@ -123,6 +131,37 @@ func (h *PostCampaignHandler) previewCaption(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]string{
 		"caption": caption,
 	})
+}
+
+func (h *PostCampaignHandler) streamCaption(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	err := h.service.GenerateCaptionPreviewStream(r.Context(), body.Prompt, func(token string) {
+		fmt.Fprintf(w, "data: %s\n\n", token)
+		flusher.Flush()
+	})
+	if err != nil {
+		fmt.Fprintf(w, "data: [ERROR] %s\n\n", err.Error())
+	} else {
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}
+	flusher.Flush()
 }
 
 func (h *PostCampaignHandler) create(w http.ResponseWriter, r *http.Request) {

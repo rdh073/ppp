@@ -253,6 +253,16 @@ func (s *PostCampaignService) GenerateCaptionPreview(ctx context.Context, prompt
 	return s.captions.GenerateCaption(ctx, prompt)
 }
 
+func (s *PostCampaignService) GenerateCaptionPreviewStream(ctx context.Context, prompt string, onChunk func(string)) error {
+	if prompt == "" {
+		return errors.New("prompt is required")
+	}
+	if s.captions == nil {
+		return errors.New("AI caption generation is not configured")
+	}
+	return s.captions.GenerateCaptionStream(ctx, prompt, onChunk)
+}
+
 func (s *PostCampaignService) run(ctx context.Context, campaign *domain.PostCampaign, localImagePath string) {
 	var wg sync.WaitGroup
 	for i := range campaign.Jobs {

@@ -525,13 +525,17 @@ func wireMux(
 	instagramLoginCfg := accountmanager.InstagramLoginConfig()
 	igLoginService := accountmanager.NewLoginRunService(taskUC, projectedAccountStore, adbShellRunner, projectionHub, log, instagramLoginCfg.ServiceCfg)
 	igLoginHandler := accountmanager.NewLoginRunHandler(igLoginService, instagramLoginCfg.PathPrefix)
-	captionGen, captionGenErr := wireCaptionGenerator(cfg)
-	if captionGenErr != nil {
-		log.Info("LLM caption generation disabled", "reason", captionGenErr)
+	var captionGen campaigns.CaptionGenerator
+	if c, err := wireCaptionGenerator(cfg); err != nil {
+		log.Info("LLM caption generation disabled", "reason", err)
+	} else {
+		captionGen = c
 	}
-	imgGen, imgGenErr := wireImageGenerator(cfg)
-	if imgGenErr != nil {
-		log.Info("DALL-E 3 image generation disabled", "reason", imgGenErr)
+	var imgGen campaigns.ImageGenerator
+	if i, err := wireImageGenerator(cfg); err != nil {
+		log.Info("DALL-E 3 image generation disabled", "reason", err)
+	} else {
+		imgGen = i
 	}
 	postService := campaigns.NewPostCampaignService(taskUC, projectedAccountStore, captionGen, imgGen, adbShellRunner, projectionHub, cfg.Server.DataDir, log)
 	postHandler := campaigns.NewPostCampaignHandler(postService, "/campaigns/posts")
