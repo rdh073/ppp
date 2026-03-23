@@ -19,7 +19,7 @@ export interface AccountCreation {
 }
 
 export interface StartAccountCreationRequest {
-  kind?: 'google+instagram' | 'google';
+  kind?: 'google' | 'instagram' | 'google+instagram';
   deviceId: string;
   personaId?: string;
   phoneNumber?: string;

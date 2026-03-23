@@ -83,15 +83,22 @@ function CreatePersonaFormBody({ onCreated, close }: { onCreated: () => void; cl
     kind: 'google' as 'google' | 'instagram',
     firstName: '',
     lastName: '',
-    gender: '',
+    gender: 'Rather not say',
     birthDate: '',
     email: '',
     username: '',
     password: '',
   });
 
+  function formatBirthDate(raw: string): string {
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 4) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+  }
+
   function set(field: string, value: string) {
-    setForm((f) => ({ ...f, [field]: value }));
+    setForm((f) => ({ ...f, [field]: field === 'birthDate' ? formatBirthDate(value) : value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -107,7 +114,7 @@ function CreatePersonaFormBody({ onCreated, close }: { onCreated: () => void; cl
         ...form,
         gender: form.gender || undefined,
         birthDate: form.birthDate || undefined,
-        email: form.email || undefined,
+        email: form.email ? `${form.email}@gmail.com` : undefined,
         username: form.username || undefined,
         password: form.password || undefined,
       });
@@ -129,9 +136,16 @@ function CreatePersonaFormBody({ onCreated, close }: { onCreated: () => void; cl
         </select>
         <input placeholder="First name *" value={form.firstName} onChange={(e) => set('firstName', e.target.value)} style={inputStyle} />
         <input placeholder="Last name *" value={form.lastName} onChange={(e) => set('lastName', e.target.value)} style={inputStyle} />
-        <input placeholder="Gender" value={form.gender} onChange={(e) => set('gender', e.target.value)} style={inputStyle} />
+        <select value={form.gender} onChange={(e) => set('gender', e.target.value)} style={inputStyle}>
+          <option value="Rather not say">Rather not say</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+        </select>
         <input placeholder="Birth date (YYYY-MM-DD)" value={form.birthDate} onChange={(e) => set('birthDate', e.target.value)} style={inputStyle} />
-        <input placeholder="Email" value={form.email} onChange={(e) => set('email', e.target.value)} style={inputStyle} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          <input placeholder="Email" value={form.email} onChange={(e) => set('email', e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 140, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRight: 'none' }} />
+          <span style={{ ...inputStyle, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, opacity: 0.5, userSelect: 'none' }}>@gmail.com</span>
+        </div>
         <input placeholder="Username" value={form.username} onChange={(e) => set('username', e.target.value)} style={inputStyle} />
         <input placeholder="Password" type="password" value={form.password} onChange={(e) => set('password', e.target.value)} style={inputStyle} />
       </div>

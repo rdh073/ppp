@@ -15,11 +15,27 @@ import (
 // The engine evaluates steps against incoming device events without any
 // artifact side-channel. Routing is data-driven from the def, not from
 // Go node handlers.
+// InputDef declares metadata for a single workflow input parameter.
+//
+//	Required — operator must provide a value; form blocks submit if empty.
+//	Label    — human-readable label (falls back to the map key).
+//	Hint     — placeholder / helper text shown in the form field.
+//	Default  — pre-filled value; editable by operator.
+//	Auto     — hidden from form; populated by the system or AI tool calls at runtime.
+type InputDef struct {
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
+	Label    string `yaml:"label,omitempty"    json:"label,omitempty"`
+	Hint     string `yaml:"hint,omitempty"     json:"hint,omitempty"`
+	Default  string `yaml:"default,omitempty"  json:"default,omitempty"`
+	Auto     bool   `yaml:"auto,omitempty"     json:"auto,omitempty"`
+}
+
 type WorkflowDef struct {
-	Name    string             `yaml:"name"    json:"name"`
-	Version int                `yaml:"version" json:"version"`
-	Entry   string             `yaml:"entry"   json:"entry"` // step id
-	Steps   map[string]StepDef `yaml:"steps"   json:"steps"`
+	Name    string               `yaml:"name"              json:"name"`
+	Version int                  `yaml:"version"           json:"version"`
+	Entry   string               `yaml:"entry"             json:"entry"` // step id
+	Inputs  map[string]InputDef  `yaml:"inputs,omitempty"  json:"inputs,omitempty"`
+	Steps   map[string]StepDef   `yaml:"steps"             json:"steps"`
 }
 
 // StepDef is one node in the workflow graph.

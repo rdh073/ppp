@@ -74,10 +74,19 @@ export interface WorkflowStepDef {
   max_retry?: number;
 }
 
+export interface WorkflowInputDef {
+  required?: boolean;
+  label?: string;
+  hint?: string;
+  default?: string;
+  auto?: boolean;
+}
+
 export interface WorkflowDefinition {
   name: string;
   version?: number;
   entry?: string;
+  inputs?: Record<string, WorkflowInputDef>;
   steps?: Record<string, WorkflowStepDef>;
 }
 

@@ -2,9 +2,24 @@ name: google-account-create-auto-script
 version: 1
 entry: generate_persona
 
-# Fully automated Google account creation.
-# Only required inputs: phone_number, phone_otp, captcha_endpoint, account_service_endpoint, device_id.
-# Persona (name, username, gender, birth date) and password are auto-generated via tool calls.
+inputs:
+  phone_number:
+    required: true
+    label: "Phone number"
+    hint: "With country code, e.g. +62812..."
+  captcha_endpoint:
+    default: "http://localhost:3000/captcha/solve"
+    label: "Captcha endpoint"
+  account_service_endpoint:
+    default: "http://localhost:3000"
+    label: "Account service endpoint"
+  gender:
+    label: "Gender"
+    hint: "Optional hint for persona generation"
+  device_id:
+    auto: true
+  phone_otp:
+    auto: true
 
 steps:
 

@@ -25,7 +25,8 @@ type AccountCreationRunDeps struct {
 	Accounts store.AccountStore
 }
 
-// ExecuteAccountCreationRun runs the 2-phase Google+Instagram account creation.
+// ExecuteAccountCreationRun runs account creation for the requested kind.
+// Supported kinds: "google", "instagram", "google+instagram".
 // It mutates req.Run fields (phase/task IDs/account ID) as execution progresses.
 func ExecuteAccountCreationRun(
 	ctx context.Context,
@@ -41,12 +42,80 @@ func ExecuteAccountCreationRun(
 	}
 
 	run := req.Run
-	run.Phase = domain.AccountCreationPhaseGoogle
 
 	baseURL := req.BaseURL
 	if baseURL == "" {
 		baseURL = "http://localhost:3000"
 	}
+
+	// Instagram-only: skip Google phase entirely.
+	if run.Kind == "instagram" {
+		return executeInstagramOnly(ctx, req, deps, baseURL, log)
+	}
+
+	// Google or Google+Instagram: run Google phase first.
+	return executeGoogleFlow(ctx, req, deps, baseURL, log)
+}
+
+// executeInstagramOnly runs a standalone Instagram account creation.
+func executeInstagramOnly(
+	ctx context.Context,
+	req AccountCreationRunRequest,
+	deps AccountCreationRunDeps,
+	baseURL string,
+	log *slog.Logger,
+) error {
+	run := req.Run
+	run.Phase = domain.AccountCreationPhaseInstagram
+
+	igInputs := map[string]string{
+		"account_service_endpoint": baseURL,
+	}
+	if req.PhoneNumber != "" {
+		igInputs["phone_number"] = req.PhoneNumber
+	}
+	if req.Persona != nil {
+		if req.Persona.Username != "" {
+			igInputs["username"] = req.Persona.Username
+		}
+		if req.Persona.Password != "" {
+			igInputs["password"] = req.Persona.Password
+		}
+	}
+
+	igTask, err := deps.Tasks.CreateTask(ctx, CreateTaskRequest{
+		Goal:           "Create Instagram account for account creation " + run.ID,
+		DeviceID:       domain.DeviceID(run.DeviceID),
+		WorkflowName:   "instagram-create-script",
+		InputArtifacts: igInputs,
+	})
+	if err != nil {
+		return fmt.Errorf("create instagram task: %w", err)
+	}
+	run.InstagramTaskID = string(igTask.ID)
+
+	igSummary, ok := pollTaskUntilTerminal(ctx, deps.Tasks, igTask.ID, 10*time.Minute, log)
+	if !ok || igSummary == nil || igSummary.Task.Status != domain.TaskStatusCompleted {
+		if igSummary != nil {
+			return fmt.Errorf("instagram task %s: %s", igSummary.Task.ID, igSummary.Task.Status)
+		}
+		return errors.New("instagram task failed")
+	}
+
+	return nil
+}
+
+// executeGoogleFlow runs Google account creation, optionally followed by Instagram.
+func executeGoogleFlow(
+	ctx context.Context,
+	req AccountCreationRunRequest,
+	deps AccountCreationRunDeps,
+	baseURL string,
+	log *slog.Logger,
+) error {
+	run := req.Run
+	run.Phase = domain.AccountCreationPhaseGoogle
+
 	captchaEndpoint := req.CaptchaEndpoint
 	if captchaEndpoint == "" {
 		captchaEndpoint = baseURL + "/captcha/solve"
@@ -121,7 +190,7 @@ func ExecuteAccountCreationRun(
 	googleAccountID := googleSummary.OutputArtifacts["accountId"]
 	run.GoogleAccountID = googleAccountID
 
-	// ── Phase 2: Instagram account (optional) ────────────────────────────────
+	// ── Phase 2: Instagram account (only for google+instagram) ───────────────
 	if run.Kind != "google+instagram" {
 		return nil
 	}

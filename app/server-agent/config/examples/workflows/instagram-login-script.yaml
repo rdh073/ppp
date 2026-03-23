@@ -1,6 +1,15 @@
 name: instagram-login-script
 version: 1
 entry: login
+
+inputs:
+  username:
+    required: true
+    label: "Username"
+  password:
+    required: true
+    label: "Password"
+
 steps:
   login:
     trigger: {}

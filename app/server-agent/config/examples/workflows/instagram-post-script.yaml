@@ -2,11 +2,15 @@ name: instagram-post-script
 version: 1
 entry: open_instagram
 
-# Posts an image with a caption to Instagram.
-# Inputs:
-#   caption   (string, required) — post caption text
-#   imagePath (string, required) — absolute path to image on device (e.g. /sdcard/DCIM/ppp_posts/x.jpg)
-# Returns: { posted: bool }
+inputs:
+  caption:
+    required: true
+    label: "Caption"
+    hint: "Post caption text"
+  imagePath:
+    required: true
+    label: "Image path"
+    hint: "Absolute path on device, e.g. /sdcard/DCIM/ppp_posts/x.jpg"
 
 steps:
 

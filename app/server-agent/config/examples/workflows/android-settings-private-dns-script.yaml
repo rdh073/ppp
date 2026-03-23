@@ -1,6 +1,13 @@
 name: android-settings-private-dns-script
 version: 2
 entry: configure_dns
+
+inputs:
+  private_dns_hostname:
+    required: true
+    label: "Private DNS hostname"
+    hint: "e.g. dns.quad9.net"
+
 steps:
   configure_dns:
     trigger: {}

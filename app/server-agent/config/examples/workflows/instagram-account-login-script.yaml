@@ -2,9 +2,13 @@ name: instagram-account-login-script
 version: 1
 entry: login
 
-# Logs into an existing Instagram account via the Instagram app.
-# Inputs: email (required), password (required)
-# Returns: { loggedIn: bool }
+inputs:
+  email:
+    required: true
+    label: "Email"
+  password:
+    required: true
+    label: "Password"
 
 steps:
 

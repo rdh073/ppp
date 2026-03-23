@@ -4,7 +4,7 @@ import { useTasks } from '../hooks/useTasks';
 import { useDevices } from '../../device-control/api/useDevices';
 import { useWorkflows } from '../../workflows/api/useWorkflows';
 import { getAndroidIdentity } from '../../../utils/deviceIdentity';
-import type { Task, TaskStatus } from '../../../types';
+import type { Task, TaskStatus, WorkflowInputDef } from '../../../types';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -213,6 +213,24 @@ export function TaskPanel() {
 
   const suggestedKeys = useMemo(() => extractWorkflowInputKeys(workflowName, workflows), [workflowName, workflows]);
 
+  const selectedWorkflow = useMemo(() => workflows.find((w) => w.name === workflowName), [workflowName, workflows]);
+  const inputSchema = selectedWorkflow?.inputs as Record<string, WorkflowInputDef> | undefined;
+  const hasInputSchema = inputSchema && Object.keys(inputSchema).length > 0;
+
+  // Visible fields from schema: filter out auto fields
+  const schemaVisibleKeys = useMemo(() => {
+    if (!inputSchema) return [];
+    return Object.entries(inputSchema)
+      .filter(([, def]) => !def.auto)
+      .sort(([, a], [, b]) => (a.required ? 0 : 1) - (b.required ? 0 : 1))
+      .map(([key]) => key);
+  }, [inputSchema]);
+
+  const hasAutoFields = useMemo(() => {
+    if (!inputSchema) return false;
+    return Object.values(inputSchema).some((def) => def.auto);
+  }, [inputSchema]);
+
   useEffect(() => {
     const cur = workflowName.trim(), prev = prevWfRef.current;
     if (cur === prev) return;
@@ -221,8 +239,17 @@ export function TaskPanel() {
     if (!cur) { setArtifactFields([]); return; }
     const draft = artifactDrafts[cur];
     if (draft) { setArtifactFields(draft.map((f) => ({ ...f }))); return; }
-    setArtifactFields(suggestedKeys.map((key) => ({ key, value: '' })));
-  }, [artifactDrafts, artifactFields, workflowName, suggestedKeys]);
+
+    // Schema-aware: use visible schema keys with defaults pre-filled
+    if (inputSchema && Object.keys(inputSchema).length > 0) {
+      setArtifactFields(schemaVisibleKeys.map((key) => ({
+        key,
+        value: inputSchema[key]?.default ?? '',
+      })));
+    } else {
+      setArtifactFields(suggestedKeys.map((key) => ({ key, value: '' })));
+    }
+  }, [artifactDrafts, artifactFields, workflowName, suggestedKeys, inputSchema, schemaVisibleKeys]);
 
   const artifactMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -238,6 +265,14 @@ export function TaskPanel() {
     }
     return false;
   }, [artifactFields]);
+
+  const hasMissingRequired = useMemo(() => {
+    if (!inputSchema) return false;
+    return artifactFields.some(({ key, value }) => {
+      const def = inputSchema[key];
+      return def?.required && !value.trim();
+    });
+  }, [artifactFields, inputSchema]);
 
   useEffect(() => {
     const knownDeviceIds = new Set(devices.map((device) => device.deviceId));
@@ -288,7 +323,7 @@ export function TaskPanel() {
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!goal.trim() || !workflowName.trim() || hasDupe) return;
+    if (!goal.trim() || !workflowName.trim() || hasDupe || hasMissingRequired) return;
     setCreateNotice(null);
 
     const targetDeviceIds = selectedDeviceIds.length > 0 ? selectedDeviceIds : [undefined];
@@ -595,7 +630,18 @@ export function TaskPanel() {
             <div className="task-field-wide">
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--muted)' }}>Input Artifacts</span>
-                <span className="field-hint" style={{ flex: 1 }}>Key/value pairs required by the workflow.</span>
+                {hasInputSchema ? (
+                  <span className="field-hint" style={{ flex: 1 }}>
+                    Fields marked <span style={{ color: '#f87171', fontWeight: 600 }}>*</span> are required.
+                    {hasAutoFields && (
+                      <span style={{ marginLeft: '0.5rem', fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '0.25rem', background: 'rgba(99,102,241,0.12)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.25)' }}>
+                        AI-assisted
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="field-hint" style={{ flex: 1 }}>Key/value pairs required by the workflow.</span>
+                )}
                 <button type="button" className="btn-secondary" onClick={() => setArtifactFields((f) => [...f, { key: '', value: '' }])}>
                   + Add field
                 </button>
@@ -604,30 +650,54 @@ export function TaskPanel() {
                 <p className="field-hint">No fields — select a workflow or add custom fields.</p>
               ) : (
                 <div className="artifact-list">
-                  {artifactFields.map((field, i) => (
-                    <div className="artifact-row" key={`${field.key}-${i}`}>
-                      <input
-                        value={field.key}
-                        onChange={(e) => { const n = [...artifactFields]; n[i] = { ...n[i], key: e.target.value }; setArtifactFields(n); }}
-                        placeholder="key (e.g. private_dns_hostname)"
-                      />
-                      <input
-                        value={field.value}
-                        onChange={(e) => { const n = [...artifactFields]; n[i] = { ...n[i], value: e.target.value }; setArtifactFields(n); }}
-                        placeholder="value"
-                      />
-                      <button type="button" className="btn-danger" onClick={() => setArtifactFields((f) => f.filter((_, idx) => idx !== i))}>
-                        Remove
-                      </button>
-                    </div>
-                  ))}
+                  {artifactFields.map((field, i) => {
+                    const def = inputSchema?.[field.key];
+                    const isSchemaField = hasInputSchema && def != null;
+                    const isRequired = def?.required === true;
+                    const isEmpty = isRequired && !field.value.trim();
+                    return (
+                      <div className="artifact-row" key={`${field.key}-${i}`}>
+                        {isSchemaField ? (
+                          <span style={{
+                            display: 'flex', alignItems: 'center', gap: '0.35rem',
+                            minWidth: 180, fontSize: '0.78rem', color: 'var(--text)',
+                            padding: '0.25rem 0.5rem',
+                            background: 'var(--bg, #1a1a2e)', border: '1px solid var(--border)', borderRadius: '0.25rem',
+                          }}>
+                            {isRequired && <span style={{ color: '#f87171', fontWeight: 700 }}>*</span>}
+                            <span style={{ fontWeight: 500 }}>{def?.label || field.key}</span>
+                          </span>
+                        ) : (
+                          <input
+                            value={field.key}
+                            onChange={(e) => { const n = [...artifactFields]; n[i] = { ...n[i], key: e.target.value }; setArtifactFields(n); }}
+                            placeholder="key (e.g. private_dns_hostname)"
+                          />
+                        )}
+                        <input
+                          value={field.value}
+                          onChange={(e) => { const n = [...artifactFields]; n[i] = { ...n[i], value: e.target.value }; setArtifactFields(n); }}
+                          placeholder={def?.hint || 'value'}
+                          style={isEmpty ? { borderColor: '#f87171' } : undefined}
+                        />
+                        {isSchemaField && isRequired ? (
+                          <span style={{ minWidth: 60 }} />
+                        ) : (
+                          <button type="button" className="btn-danger" onClick={() => setArtifactFields((f) => f.filter((_, idx) => idx !== i))}>
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {hasDupe && <p className="task-notice task-notice--error" style={{ marginTop: '0.5rem' }}>Duplicate artifact keys.</p>}
+              {hasMissingRequired && <p className="task-notice task-notice--error" style={{ marginTop: '0.5rem' }}>Required fields cannot be empty.</p>}
             </div>
 
             <div className="actions" style={{ gridColumn: '1 / -1' }}>
-              <button type="submit" disabled={loading || !workflowName.trim() || workflows.length === 0 || hasDupe}>
+              <button type="submit" disabled={loading || !workflowName.trim() || workflows.length === 0 || hasDupe || hasMissingRequired}>
                 {loading ? 'Creating…' : `Create ${Math.max(1, selectedDeviceIds.length)} task${Math.max(1, selectedDeviceIds.length) > 1 ? 's' : ''}`}
               </button>
               <button type="button" className="btn-secondary" onClick={() => setCreateOpen(false)}>Discard</button>

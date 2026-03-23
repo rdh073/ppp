@@ -1,6 +1,13 @@
 name: captcha-script
 version: 1
 entry: solve_captcha
+
+inputs:
+  captcha_endpoint:
+    required: true
+    label: "Captcha endpoint"
+    hint: "URL of the captcha solving service"
+
 steps:
   solve_captcha:
     trigger: {}

@@ -2,9 +2,29 @@ name: instagram-create-script
 version: 1
 entry: create_account
 
-# Creates an Instagram account using a phone number for verification.
-# Inputs: phone_number (required), account_service_endpoint, google_account_id (optional)
-# The script waits for the SMS OTP via android.notification event and parses it automatically.
+inputs:
+  phone_number:
+    required: true
+    label: "Phone number"
+    hint: "With country code, e.g. +62812..."
+  account_service_endpoint:
+    default: "http://localhost:3000"
+    label: "Account service endpoint"
+  google_account_id:
+    label: "Google account ID"
+    hint: "Link to existing Google account (optional)"
+  first_name:
+    label: "First name"
+  last_name:
+    label: "Last name"
+  username:
+    label: "Username"
+  password:
+    label: "Password"
+  device_id:
+    auto: true
+  phone_otp:
+    auto: true
 
 steps:
 

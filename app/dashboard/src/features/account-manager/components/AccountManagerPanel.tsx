@@ -57,7 +57,7 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
   const [form, setForm] = useState({
     deviceId: '',
     personaId: '',
-    kind: 'google+instagram' as 'google+instagram' | 'google',
+    kind: 'google' as 'google' | 'instagram' | 'google+instagram',
     phoneNumber: '',
   });
 
@@ -110,8 +110,9 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
     >
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         <select value={form.kind} onChange={(e) => set('kind', e.target.value)} style={inputStyle}>
+          <option value="google">Google</option>
+          <option value="instagram">Instagram</option>
           <option value="google+instagram">Google + Instagram</option>
-          <option value="google">Google only</option>
         </select>
         <select
           value={form.deviceId}

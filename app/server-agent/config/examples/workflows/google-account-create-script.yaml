@@ -1,6 +1,52 @@
 name: google-account-create-script
 version: 1
 entry: open_account_creation
+
+inputs:
+  first_name:
+    required: true
+    label: "First name"
+  last_name:
+    required: true
+    label: "Last name"
+  gender:
+    required: true
+    label: "Gender"
+    hint: "Male, Female, or Rather not say"
+  birth_day:
+    required: true
+    label: "Birth day"
+    hint: "1-31"
+  birth_month:
+    required: true
+    label: "Birth month"
+    hint: "January, February, etc."
+  birth_year:
+    required: true
+    label: "Birth year"
+    hint: "e.g. 1995"
+  username:
+    required: true
+    label: "Username"
+    hint: "Gmail username (without @gmail.com)"
+  password:
+    required: true
+    label: "Password"
+  phone_number:
+    required: true
+    label: "Phone number"
+    hint: "With country code, e.g. +62812..."
+  captcha_endpoint:
+    default: "http://localhost:3000/captcha/solve"
+    label: "Captcha endpoint"
+  account_service_endpoint:
+    default: "http://localhost:3000"
+    label: "Account service endpoint"
+  device_id:
+    auto: true
+  phone_otp:
+    auto: true
+
 steps:
   open_account_creation:
     trigger: {}

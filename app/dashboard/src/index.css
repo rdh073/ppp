@@ -504,6 +504,8 @@
     @apply rounded-2xl border p-4 shadow-soft md:p-5;
     border-color: var(--border);
     background: var(--surface);
+    min-width: 0;
+    overflow: hidden;
   }
 
   .panel-header {
@@ -1644,10 +1646,14 @@
 
   .workflow-raw {
     @apply mt-4;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .workflow-raw pre {
     @apply m-0 max-h-[340px] overflow-auto rounded-xl border p-3 text-xs leading-relaxed;
+    white-space: pre-wrap;
+    word-break: break-all;
     border-color: var(--border);
     background: rgba(0, 0, 0, 0.9);
   }
@@ -1858,6 +1864,8 @@
     @apply m-0 max-h-[360px] overflow-auto rounded-xl border p-3 text-xs leading-relaxed;
     border-color: var(--border);
     background: rgba(0, 0, 0, 0.9);
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
   :root[data-theme='light'] .workflow-grid pre {
