@@ -11,6 +11,7 @@ import (
 //
 //	POST {pathPrefix}       — start batch post campaign
 //	GET  {pathPrefix}       — list all post campaigns
+//	GET  {pathPrefix}/capabilities — get AI source availability
 //	GET  {pathPrefix}/{id}  — get post campaign + per-job status
 type PostCampaignHandler struct {
 	service    *PostCampaignService
@@ -38,6 +39,24 @@ func (h *PostCampaignHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case "capabilities", "capabilities/":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.capabilities(w, r)
+	case "preview/image":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.previewImage(w, r)
+	case "preview/caption":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.previewCaption(w, r)
 	default:
 		if r.Method == http.MethodGet {
 			h.get(w, r, path)
@@ -58,6 +77,52 @@ func (h *PostCampaignHandler) get(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	jsonOK(w, campaign)
+}
+
+func (h *PostCampaignHandler) capabilities(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, h.service.Capabilities())
+}
+
+func (h *PostCampaignHandler) previewImage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	imgBytes, err := h.service.GenerateImagePreview(r.Context(), body.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"imageBase64": base64.StdEncoding.EncodeToString(imgBytes),
+	})
+}
+
+func (h *PostCampaignHandler) previewCaption(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	caption, err := h.service.GenerateCaptionPreview(r.Context(), body.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"caption": caption,
+	})
 }
 
 func (h *PostCampaignHandler) create(w http.ResponseWriter, r *http.Request) {

@@ -15,7 +15,7 @@ inputs:
     label: "Account service endpoint"
   gender:
     label: "Gender"
-    hint: "Optional hint for persona generation"
+    hint: "Optional hint for account identity generation"
   device_id:
     auto: true
   phone_otp:
@@ -23,7 +23,7 @@ inputs:
 
 steps:
 
-  # ── Step 1: Generate realistic persona (LLM-backed) ─────────────────────────
+  # ── Step 1: Generate realistic account identity (LLM-backed) ────────────────
   generate_persona:
     trigger: {}
     tool_call:

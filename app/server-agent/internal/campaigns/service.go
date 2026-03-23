@@ -25,6 +25,16 @@ type StartPostCampaignInput struct {
 	TextPrompt  string
 }
 
+type PostCampaignAICapability struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type PostCampaignCapabilities struct {
+	ImageAI PostCampaignAICapability `json:"imageAI"`
+	TextAI  PostCampaignAICapability `json:"textAI"`
+}
+
 type PostCampaignService struct {
 	tasks    TaskControl
 	accounts store.AccountStore
@@ -84,6 +94,20 @@ func (s *PostCampaignService) Get(id string) (*domain.PostCampaign, bool) {
 	}
 	cp := clonePostCampaign(campaign)
 	return &cp, true
+}
+
+func (s *PostCampaignService) Capabilities() PostCampaignCapabilities {
+	caps := PostCampaignCapabilities{
+		ImageAI: PostCampaignAICapability{Available: s.images != nil},
+		TextAI:  PostCampaignAICapability{Available: s.captions != nil},
+	}
+	if !caps.ImageAI.Available {
+		caps.ImageAI.Reason = "AI image generation is not configured on the server."
+	}
+	if !caps.TextAI.Available {
+		caps.TextAI.Reason = "AI caption generation is not configured on the server."
+	}
+	return caps
 }
 
 func (s *PostCampaignService) Start(ctx context.Context, input StartPostCampaignInput) (*domain.PostCampaign, error) {
@@ -207,6 +231,26 @@ func (s *PostCampaignService) Start(ctx context.Context, input StartPostCampaign
 
 	cp := clonePostCampaign(campaign)
 	return &cp, nil
+}
+
+func (s *PostCampaignService) GenerateImagePreview(ctx context.Context, prompt string) ([]byte, error) {
+	if prompt == "" {
+		return nil, errors.New("prompt is required")
+	}
+	if s.images == nil {
+		return nil, errors.New("AI image generation is not configured")
+	}
+	return s.images.GenerateImage(ctx, prompt)
+}
+
+func (s *PostCampaignService) GenerateCaptionPreview(ctx context.Context, prompt string) (string, error) {
+	if prompt == "" {
+		return "", errors.New("prompt is required")
+	}
+	if s.captions == nil {
+		return "", errors.New("AI caption generation is not configured")
+	}
+	return s.captions.GenerateCaption(ctx, prompt)
 }
 
 func (s *PostCampaignService) run(ctx context.Context, campaign *domain.PostCampaign, localImagePath string) {

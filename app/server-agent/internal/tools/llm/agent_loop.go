@@ -20,6 +20,10 @@ type AgentLoopRequest struct {
 	Goal         string
 	Tools        []AgentTool
 	MaxSteps     int
+	// OnChunk is an optional callback invoked for each streamed text chunk.
+	// When non-nil the provider uses streaming mode; when nil it uses the
+	// standard blocking request (identical behaviour to the pre-streaming code).
+	OnChunk func(text string)
 }
 
 // AgentLoopResult is returned when the loop terminates.

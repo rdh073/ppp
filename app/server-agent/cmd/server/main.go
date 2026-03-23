@@ -404,7 +404,7 @@ func wireLLM(cfg *Config, log *slog.Logger) llmDeps {
 }
 
 // wireCaptionGenerator creates a caption generator wired from the LLM concern config.
-func wireCaptionGenerator(cfg *Config) *infrallm.LLMCaptionGenerator {
+func wireCaptionGenerator(cfg *Config) (*infrallm.LLMCaptionGenerator, error) {
 	toCaptionCfg := func(p LLMProviderConfig, kind string) infrallm.CaptionProviderConfig {
 		return infrallm.CaptionProviderConfig{
 			Kind:       kind,
@@ -415,13 +415,19 @@ func wireCaptionGenerator(cfg *Config) *infrallm.LLMCaptionGenerator {
 		}
 	}
 	var primary, fallback infrallm.CaptionProviderConfig
-	if p, ok := cfg.LLM.ResolveProvider(cfg.LLM.TextGeneration); ok {
+	configured := false
+	if p, ok := cfg.LLM.ResolveProvider(cfg.LLM.TextGeneration); ok && p.APIKey != "" {
 		primary = toCaptionCfg(p, cfg.LLM.TextGeneration.Provider)
+		configured = true
 	}
-	if fb, ok := cfg.LLM.ResolveFallback(cfg.LLM.TextGeneration); ok {
+	if fb, ok := cfg.LLM.ResolveFallback(cfg.LLM.TextGeneration); ok && fb.APIKey != "" {
 		fallback = toCaptionCfg(fb, cfg.LLM.TextGeneration.Fallback)
+		configured = true
 	}
-	return infrallm.NewLLMCaptionGenerator(primary, fallback)
+	if !configured {
+		return nil, fmt.Errorf("text generation: no provider configured (set [llm.providers.*] + [llm.text_generation])")
+	}
+	return infrallm.NewLLMCaptionGenerator(primary, fallback), nil
 }
 
 // wireImageGenerator creates an image generator wired from the LLM concern config.
@@ -519,7 +525,10 @@ func wireMux(
 	instagramLoginCfg := accountmanager.InstagramLoginConfig()
 	igLoginService := accountmanager.NewLoginRunService(taskUC, projectedAccountStore, adbShellRunner, projectionHub, log, instagramLoginCfg.ServiceCfg)
 	igLoginHandler := accountmanager.NewLoginRunHandler(igLoginService, instagramLoginCfg.PathPrefix)
-	captionGen := wireCaptionGenerator(cfg)
+	captionGen, captionGenErr := wireCaptionGenerator(cfg)
+	if captionGenErr != nil {
+		log.Info("LLM caption generation disabled", "reason", captionGenErr)
+	}
 	imgGen, imgGenErr := wireImageGenerator(cfg)
 	if imgGenErr != nil {
 		log.Info("DALL-E 3 image generation disabled", "reason", imgGenErr)

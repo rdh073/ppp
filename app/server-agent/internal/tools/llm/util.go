@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -62,85 +63,11 @@ func defaultSystemPrompt(value string) string {
 	return value
 }
 
-func extractChoiceContent(response openAIChatCompletionsResponse) (string, error) {
-	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
-		return "", errorf("%s", response.Error.Message)
-	}
-	if len(response.Choices) == 0 {
-		return "", errorf("no choices in llm response")
-	}
-	raw := response.Choices[0].Message.Content
-	if len(raw) == 0 {
-		return "", errorf("empty llm content")
-	}
-
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		return text, nil
-	}
-
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &parts); err == nil {
-		var b strings.Builder
-		for _, part := range parts {
-			if strings.TrimSpace(part.Text) != "" {
-				b.WriteString(part.Text)
-			}
-		}
-		if b.Len() == 0 {
-			return "", errorf("empty llm content parts")
-		}
-		return b.String(), nil
-	}
-
-	return "", errorf("unsupported llm content shape")
-}
-
-func extractAnthropicToolInput(response anthropicMessagesResponse) (json.RawMessage, error) {
-	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
-		return nil, errorf("%s", response.Error.Message)
-	}
-	for _, part := range response.Content {
-		if part.Type == "tool_use" && len(part.Input) > 0 {
-			return append(json.RawMessage(nil), part.Input...), nil
-		}
-	}
-	return nil, errorf("no tool_use content in anthropic response")
-}
-
-func extractGeminiJSON(response geminiGenerateContentResponse) (string, error) {
-	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
-		return "", errorf("%s", response.Error.Message)
-	}
-	if len(response.Candidates) == 0 {
-		return "", errorf("no candidates in gemini response")
-	}
-	for _, part := range response.Candidates[0].Content.Parts {
-		if strings.TrimSpace(part.Text) != "" {
-			return part.Text, nil
-		}
-	}
-	return "", errorf("empty gemini content")
-}
-
-func extractDeepSeekToolArguments(response deepSeekChatCompletionsResponse) (string, error) {
-	if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
-		return "", errorf("%s", response.Error.Message)
-	}
-	if len(response.Choices) == 0 {
-		return "", errorf("no choices in deepseek response")
-	}
-	for _, toolCall := range response.Choices[0].Message.ToolCalls {
-		if strings.TrimSpace(toolCall.Function.Arguments) != "" {
-			return toolCall.Function.Arguments, nil
-		}
-	}
-	return "", errorf("no tool call arguments in deepseek response")
-}
-
 func errorf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
+}
+
+// isErrAgentDone reports whether err is ErrAgentDone (avoids importing errors in every provider).
+func isErrAgentDone(err error) bool {
+	return errors.Is(err, ErrAgentDone)
 }

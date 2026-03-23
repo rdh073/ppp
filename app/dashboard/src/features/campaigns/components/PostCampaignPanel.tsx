@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listPostCampaigns, startPostCampaign, type PostCampaign, type PostJob } from '../api/posts';
+import {
+  getPostCampaignCapabilities,
+  listPostCampaigns,
+  startPostCampaign,
+  type PostCampaign,
+  type PostCampaignCapabilities,
+  type PostJob,
+} from '../api/posts';
 import { listAccounts, type Account } from '../../account-manager/api/accounts';
 import { runStatusColor as STATUS_COLOR, inputStyle } from '../../../components/ui/statusStyles';
 import { useDataList } from '../../../shared/react/useDataList';
@@ -101,6 +108,8 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
   // Accounts
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [capabilities, setCapabilities] = useState<PostCampaignCapabilities | null>(null);
+  const [capabilityError, setCapabilityError] = useState('');
 
   // Image
   const [imageSource, setImageSource] = useState<'manual' | 'ai'>('manual');
@@ -113,6 +122,12 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
   const [textSource, setTextSource] = useState<'manual' | 'ai'>('manual');
   const [textContent, setTextContent] = useState('');
   const [textPrompt, setTextPrompt] = useState('');
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [generatingCaption, setGeneratingCaption] = useState(false);
+  const [generatedCaption, setGeneratedCaption] = useState('');
+  
+  const imageAIAvailable = capabilities?.imageAI.available ?? true;
+  const textAIAvailable = capabilities?.textAI.available ?? true;
 
   // Load active Instagram accounts with a device bound
   useEffect(() => {
@@ -120,6 +135,35 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
       setAccounts(all.filter((a) => a.status === 'active' && a.deviceId));
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPostCampaignCapabilities()
+      .then((next) => {
+        if (cancelled) return;
+        setCapabilities(next);
+        setCapabilityError('');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCapabilityError('AI availability could not be loaded. AI requests may still fail on submit.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!imageAIAvailable && imageSource === 'ai') {
+      setImageSource('manual');
+    }
+  }, [imageAIAvailable, imageSource]);
+
+  useEffect(() => {
+    if (!textAIAvailable && textSource === 'ai') {
+      setTextSource('manual');
+    }
+  }, [textAIAvailable, textSource]);
 
   function toggleAccount(id: string) {
     setSelectedIds((prev) => {
@@ -137,9 +181,42 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
     setImagePreview(URL.createObjectURL(file));
   }
 
+  async function handleGenerateImagePreview() {
+    if (!imagePrompt.trim()) { setError('Enter an image prompt first'); return; }
+    setGeneratingImage(true);
+    setError('');
+    try {
+      // Import dynamically to avoid circular dependencies if any, or just use the imported function
+      const { generateImagePreview } = await import('../api/posts'); 
+      const res = await generateImagePreview(imagePrompt);
+      setImagePreview(`data:image/jpeg;base64,${res.imageBase64}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Image preview failed');
+    } finally {
+      setGeneratingImage(false);
+    }
+  }
+
+  async function handleGenerateCaptionPreview() {
+    if (!textPrompt.trim()) { setError('Enter a caption prompt first'); return; }
+    setGeneratingCaption(true);
+    setError('');
+    try {
+      const { generateCaptionPreview } = await import('../api/posts');
+      const res = await generateCaptionPreview(textPrompt);
+      setGeneratedCaption(res.caption);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Caption preview failed');
+    } finally {
+      setGeneratingCaption(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (selectedIds.size === 0) { setError('Select at least one account'); return; }
+    if (imageSource === 'ai' && !imageAIAvailable) { setError(capabilities?.imageAI.reason || 'AI image generation is unavailable'); return; }
+    if (textSource === 'ai' && !textAIAvailable) { setError(capabilities?.textAI.reason || 'AI caption generation is unavailable'); return; }
     if (imageSource === 'manual' && !imageFile) { setError('Choose an image file'); return; }
     if (imageSource === 'ai' && !imagePrompt.trim()) { setError('Enter an image prompt'); return; }
     if (textSource === 'manual' && !textContent.trim()) { setError('Enter a caption'); return; }
@@ -216,6 +293,16 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
         )}
       </div>
 
+      {capabilities && (
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--muted)' }}>
+          <span>AI image: {imageAIAvailable ? 'ready' : 'unavailable'}</span>
+          <span>AI caption: {textAIAvailable ? 'ready' : 'unavailable'}</span>
+        </div>
+      )}
+      {capabilityError && (
+        <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{capabilityError}</span>
+      )}
+
       {/* Image source */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -224,8 +311,15 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             <button
               key={m}
               type="button"
+              disabled={m === 'ai' && !imageAIAvailable}
               onClick={() => setImageSource(m)}
-              style={{ ...toggleBtn, background: imageSource === m ? '#E1306C' : 'none', color: imageSource === m ? '#fff' : 'var(--muted)' }}
+              style={{
+                ...toggleBtn,
+                cursor: m === 'ai' && !imageAIAvailable ? 'not-allowed' : 'pointer',
+                opacity: m === 'ai' && !imageAIAvailable ? 0.45 : 1,
+                background: imageSource === m ? '#E1306C' : 'none',
+                color: imageSource === m ? '#fff' : 'var(--muted)',
+              }}
             >
               {m === 'manual' ? 'Manual' : 'AI'}
             </button>
@@ -242,12 +336,33 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             )}
           </div>
         ) : (
-          <input
-            placeholder="Describe the image to generate…"
-            value={imagePrompt}
-            onChange={(e) => setImagePrompt(e.target.value)}
-            style={inputStyle}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                placeholder="Describe the image to generate…"
+                value={imagePrompt}
+                onChange={(e) => setImagePrompt(e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button
+                type="button"
+                disabled={generatingImage || !imagePrompt.trim()}
+                onClick={handleGenerateImagePreview}
+                style={{ ...outlineBtn, fontSize: '0.7rem', padding: '0 0.5rem', whiteSpace: 'nowrap' }}
+              >
+                {generatingImage ? 'Generating…' : 'Preview'}
+              </button>
+            </div>
+            {imagePreview && (
+              <div style={{ position: 'relative', width: 'fit-content' }}>
+                <img src={imagePreview} alt="preview" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: '0.25rem', border: '1px solid var(--border)' }} />
+                <div style={{ position: 'absolute', bottom: 2, right: 2, background: 'rgba(0,0,0,0.6)', color: 'white', padding: '1px 4px', borderRadius: 2, fontSize: '0.6rem' }}>Preview</div>
+              </div>
+            )}
+          </div>
+        )}
+        {!imageAIAvailable && capabilities?.imageAI.reason && (
+          <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{capabilities.imageAI.reason}</span>
         )}
       </div>
 
@@ -259,8 +374,15 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             <button
               key={m}
               type="button"
+              disabled={m === 'ai' && !textAIAvailable}
               onClick={() => setTextSource(m)}
-              style={{ ...toggleBtn, background: textSource === m ? '#E1306C' : 'none', color: textSource === m ? '#fff' : 'var(--muted)' }}
+              style={{
+                ...toggleBtn,
+                cursor: m === 'ai' && !textAIAvailable ? 'not-allowed' : 'pointer',
+                opacity: m === 'ai' && !textAIAvailable ? 0.45 : 1,
+                background: textSource === m ? '#E1306C' : 'none',
+                color: textSource === m ? '#fff' : 'var(--muted)',
+              }}
             >
               {m === 'manual' ? 'Manual' : 'AI'}
             </button>
@@ -275,12 +397,32 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             style={{ ...inputStyle, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
           />
         ) : (
-          <input
-            placeholder="Describe what the caption should say…"
-            value={textPrompt}
-            onChange={(e) => setTextPrompt(e.target.value)}
-            style={inputStyle}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                placeholder="Describe what the caption should say…"
+                value={textPrompt}
+                onChange={(e) => setTextPrompt(e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button
+                type="button"
+                disabled={generatingCaption || !textPrompt.trim()}
+                onClick={handleGenerateCaptionPreview}
+                style={{ ...outlineBtn, fontSize: '0.7rem', padding: '0 0.5rem', whiteSpace: 'nowrap' }}
+              >
+                {generatingCaption ? 'Generating…' : 'Preview'}
+              </button>
+            </div>
+            {generatedCaption && (
+              <div style={{ padding: '0.5rem', background: 'var(--bg-sub)', borderRadius: '0.25rem', border: '1px dashed var(--border)', fontSize: '0.75rem', color: 'var(--muted)' }}>
+                <strong>Preview:</strong> {generatedCaption}
+              </div>
+            )}
+          </div>
+        )}
+        {!textAIAvailable && capabilities?.textAI.reason && (
+          <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{capabilities.textAI.reason}</span>
         )}
       </div>
 

@@ -132,7 +132,7 @@ function StartAccountCreationFormBody({ onStarted, close }: { onStarted: () => v
           })}
         </select>
         <select value={form.personaId} onChange={(e) => set('personaId', e.target.value)} style={inputStyle}>
-          <option value="">— generate persona via AI —</option>
+          <option value="">— auto-generate account identity —</option>
           {personas.map((p) => (
             <option key={p.id} value={p.id}>
               {p.firstName} {p.lastName} ({p.kind})
