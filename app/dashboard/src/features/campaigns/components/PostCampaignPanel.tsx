@@ -20,12 +20,40 @@ function readFileAsBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // strip data:image/...;base64, prefix
       resolve(result.split(',')[1] ?? result);
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+// ── AI content output components ──────────────────────────────────────────────
+
+function AIBadge() {
+  return (
+    <span style={{ fontSize: '0.68rem', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" />
+      </svg>
+      AI Generated
+    </span>
+  );
+}
+
+function AIContentCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderRadius: '0.5rem',
+      padding: '0.75rem',
+      background: 'var(--bg-sub)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '0.5rem',
+    }}>
+      {children}
+    </div>
+  );
 }
 
 // ── PostJobChip ────────────────────────────────────────────────────────────────
@@ -114,22 +142,22 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
   // Image
   const [imageSource, setImageSource] = useState<'manual' | 'ai'>('manual');
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState('');
+  const [manualImagePreview, setManualImagePreview] = useState('');
   const [imagePrompt, setImagePrompt] = useState('');
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [generatedImageB64, setGeneratedImageB64] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Text
   const [textSource, setTextSource] = useState<'manual' | 'ai'>('manual');
   const [textContent, setTextContent] = useState('');
   const [textPrompt, setTextPrompt] = useState('');
-  const [generatingImage, setGeneratingImage] = useState(false);
   const [generatingCaption, setGeneratingCaption] = useState(false);
   const [generatedCaption, setGeneratedCaption] = useState('');
-  
+
   const imageAIAvailable = capabilities?.imageAI.available ?? true;
   const textAIAvailable = capabilities?.textAI.available ?? true;
 
-  // Load active Instagram accounts with a device bound
   useEffect(() => {
     listAccounts({ kind: 'instagram' }).then((all) => {
       setAccounts(all.filter((a) => a.status === 'active' && a.deviceId));
@@ -139,65 +167,50 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
   useEffect(() => {
     let cancelled = false;
     getPostCampaignCapabilities()
-      .then((next) => {
-        if (cancelled) return;
-        setCapabilities(next);
-        setCapabilityError('');
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCapabilityError('AI availability could not be loaded. AI requests may still fail on submit.');
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((next) => { if (!cancelled) { setCapabilities(next); setCapabilityError(''); } })
+      .catch(() => { if (!cancelled) setCapabilityError('AI availability could not be loaded. AI requests may still fail on submit.'); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!imageAIAvailable && imageSource === 'ai') {
-      setImageSource('manual');
-    }
+    if (!imageAIAvailable && imageSource === 'ai') setImageSource('manual');
   }, [imageAIAvailable, imageSource]);
 
   useEffect(() => {
-    if (!textAIAvailable && textSource === 'ai') {
-      setTextSource('manual');
-    }
+    if (!textAIAvailable && textSource === 'ai') setTextSource('manual');
   }, [textAIAvailable, textSource]);
 
   function toggleAccount(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+    setManualImagePreview(URL.createObjectURL(file));
   }
 
-  async function handleGenerateImagePreview() {
+  async function handleGenerateImage() {
     if (!imagePrompt.trim()) { setError('Enter an image prompt first'); return; }
     setGeneratingImage(true);
     setError('');
     try {
-      // Import dynamically to avoid circular dependencies if any, or just use the imported function
-      const { generateImagePreview } = await import('../api/posts'); 
+      const { generateImagePreview } = await import('../api/posts');
       const res = await generateImagePreview(imagePrompt);
-      setImagePreview(`data:image/jpeg;base64,${res.imageBase64}`);
+      setGeneratedImageB64(res.imageBase64);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Image preview failed');
+      setError(e instanceof Error ? e.message : 'Image generation failed');
     } finally {
       setGeneratingImage(false);
     }
   }
 
-  async function handleGenerateCaptionPreview() {
+  async function handleGenerateCaption() {
     if (!textPrompt.trim()) { setError('Enter a caption prompt first'); return; }
     setGeneratingCaption(true);
     setError('');
@@ -206,7 +219,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
       const res = await generateCaptionPreview(textPrompt);
       setGeneratedCaption(res.caption);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Caption preview failed');
+      setError(e instanceof Error ? e.message : 'Caption generation failed');
     } finally {
       setGeneratingCaption(false);
     }
@@ -228,16 +241,24 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
       let imageBase64: string | undefined;
       if (imageSource === 'manual' && imageFile) {
         imageBase64 = await readFileAsBase64(imageFile);
+      } else if (imageSource === 'ai' && generatedImageB64) {
+        // Use pre-generated image — submit as manual so server doesn't re-generate
+        imageBase64 = generatedImageB64;
       }
+
+      const effectiveImageSource = (imageSource === 'ai' && generatedImageB64) ? 'manual' : imageSource;
+      const effectiveTextSource = (textSource === 'ai' && generatedCaption) ? 'manual' : textSource;
 
       await startPostCampaign({
         accountIds: [...selectedIds],
-        imageSource,
+        imageSource: effectiveImageSource,
         imageBase64,
-        imagePrompt: imageSource === 'ai' ? imagePrompt : undefined,
-        textSource,
-        textContent: textSource === 'manual' ? textContent : undefined,
-        textPrompt: textSource === 'ai' ? textPrompt : undefined,
+        imagePrompt: effectiveImageSource === 'ai' ? imagePrompt : undefined,
+        textSource: effectiveTextSource,
+        textContent: effectiveTextSource === 'manual'
+          ? (textSource === 'ai' ? generatedCaption : textContent)
+          : undefined,
+        textPrompt: effectiveTextSource === 'ai' ? textPrompt : undefined,
       });
 
       close();
@@ -274,19 +295,10 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: 140, overflowY: 'auto' }}>
             {accounts.map((a) => (
-              <label
-                key={a.id}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(a.id)}
-                  onChange={() => toggleAccount(a.id)}
-                />
+              <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem' }}>
+                <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleAccount(a.id)} />
                 <span style={{ fontFamily: 'monospace' }}>@{a.username || a.email || a.id.slice(0, 12)}</span>
-                <span style={{ color: 'var(--muted)', fontSize: '0.68rem' }}>
-                  device: {a.deviceId?.slice(0, 10)}
-                </span>
+                <span style={{ color: 'var(--muted)', fontSize: '0.68rem' }}>device: {a.deviceId?.slice(0, 10)}</span>
               </label>
             ))}
           </div>
@@ -304,7 +316,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
       )}
 
       {/* Image source */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ color: 'var(--muted)', fontSize: '0.75rem', minWidth: 60 }}>Image:</span>
           {(['manual', 'ai'] as const).map((m) => (
@@ -312,7 +324,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
               key={m}
               type="button"
               disabled={m === 'ai' && !imageAIAvailable}
-              onClick={() => setImageSource(m)}
+              onClick={() => { setImageSource(m); setGeneratedImageB64(''); }}
               style={{
                 ...toggleBtn,
                 cursor: m === 'ai' && !imageAIAvailable ? 'not-allowed' : 'pointer',
@@ -325,14 +337,15 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             </button>
           ))}
         </div>
+
         {imageSource === 'manual' ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} style={{ display: 'none' }} />
             <button type="button" onClick={() => fileInputRef.current?.click()} style={outlineBtn}>
               {imageFile ? imageFile.name : 'Choose file…'}
             </button>
-            {imagePreview && (
-              <img src={imagePreview} alt="preview" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: '0.25rem', border: '1px solid var(--border)' }} />
+            {manualImagePreview && (
+              <img src={manualImagePreview} alt="selected image" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: '0.25rem', border: '1px solid var(--border)' }} />
             )}
           </div>
         ) : (
@@ -347,27 +360,51 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
               <button
                 type="button"
                 disabled={generatingImage || !imagePrompt.trim()}
-                onClick={handleGenerateImagePreview}
+                onClick={handleGenerateImage}
                 style={{ ...outlineBtn, fontSize: '0.7rem', padding: '0 0.5rem', whiteSpace: 'nowrap' }}
               >
-                {generatingImage ? 'Generating…' : 'Preview'}
+                {generatingImage ? 'Generating…' : generatedImageB64 ? 'Regenerate' : 'Generate Image'}
               </button>
             </div>
-            {imagePreview && (
-              <div style={{ position: 'relative', width: 'fit-content' }}>
-                <img src={imagePreview} alt="preview" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: '0.25rem', border: '1px solid var(--border)' }} />
-                <div style={{ position: 'absolute', bottom: 2, right: 2, background: 'rgba(0,0,0,0.6)', color: 'white', padding: '1px 4px', borderRadius: 2, fontSize: '0.6rem' }}>Preview</div>
-              </div>
+
+            {!generatedImageB64 && !generatingImage && (
+              <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                Generate an image to review it before posting.
+              </span>
+            )}
+
+            {generatedImageB64 && (
+              <AIContentCard>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                  <img
+                    src={`data:image/jpeg;base64,${generatedImageB64}`}
+                    alt="AI generated image"
+                    style={{ width: 240, height: 240, objectFit: 'cover', borderRadius: '0.375rem', border: '1px solid var(--border)', flexShrink: 0 }}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
+                    <AIBadge />
+                    <button
+                      type="button"
+                      disabled={generatingImage || !imagePrompt.trim()}
+                      onClick={handleGenerateImage}
+                      style={{ ...outlineBtn, fontSize: '0.68rem', padding: '0.2rem 0.5rem', width: 'fit-content' }}
+                    >
+                      {generatingImage ? 'Generating…' : 'Regenerate'}
+                    </button>
+                  </div>
+                </div>
+              </AIContentCard>
             )}
           </div>
         )}
+
         {!imageAIAvailable && capabilities?.imageAI.reason && (
           <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{capabilities.imageAI.reason}</span>
         )}
       </div>
 
       {/* Caption source */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ color: 'var(--muted)', fontSize: '0.75rem', minWidth: 60 }}>Caption:</span>
           {(['manual', 'ai'] as const).map((m) => (
@@ -375,7 +412,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
               key={m}
               type="button"
               disabled={m === 'ai' && !textAIAvailable}
-              onClick={() => setTextSource(m)}
+              onClick={() => { setTextSource(m); setGeneratedCaption(''); }}
               style={{
                 ...toggleBtn,
                 cursor: m === 'ai' && !textAIAvailable ? 'not-allowed' : 'pointer',
@@ -388,6 +425,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
             </button>
           ))}
         </div>
+
         {textSource === 'manual' ? (
           <textarea
             placeholder="Write your caption…"
@@ -408,19 +446,44 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
               <button
                 type="button"
                 disabled={generatingCaption || !textPrompt.trim()}
-                onClick={handleGenerateCaptionPreview}
+                onClick={handleGenerateCaption}
                 style={{ ...outlineBtn, fontSize: '0.7rem', padding: '0 0.5rem', whiteSpace: 'nowrap' }}
               >
-                {generatingCaption ? 'Generating…' : 'Preview'}
+                {generatingCaption ? 'Generating…' : generatedCaption ? 'Regenerate' : 'Generate Caption'}
               </button>
             </div>
+
+            {!generatedCaption && !generatingCaption && (
+              <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
+                Generate a caption to review and edit it before posting.
+              </span>
+            )}
+
             {generatedCaption && (
-              <div style={{ padding: '0.5rem', background: 'var(--bg-sub)', borderRadius: '0.25rem', border: '1px dashed var(--border)', fontSize: '0.75rem', color: 'var(--muted)' }}>
-                <strong>Preview:</strong> {generatedCaption}
-              </div>
+              <AIContentCard>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <AIBadge />
+                  <button
+                    type="button"
+                    disabled={generatingCaption || !textPrompt.trim()}
+                    onClick={handleGenerateCaption}
+                    style={{ ...outlineBtn, fontSize: '0.68rem', padding: '0.2rem 0.5rem' }}
+                  >
+                    {generatingCaption ? 'Generating…' : 'Regenerate'}
+                  </button>
+                </div>
+                <textarea
+                  value={generatedCaption}
+                  onChange={(e) => setGeneratedCaption(e.target.value)}
+                  rows={4}
+                  style={{ ...inputStyle, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                  aria-label="Generated caption — edit as needed"
+                />
+              </AIContentCard>
             )}
           </div>
         )}
+
         {!textAIAvailable && capabilities?.textAI.reason && (
           <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{capabilities.textAI.reason}</span>
         )}
@@ -436,11 +499,7 @@ function StartPostFormBody({ onStarted, close }: { onStarted: () => void; close:
         >
           {starting ? 'Starting…' : `Post to ${selectedIds.size} account${selectedIds.size !== 1 ? 's' : ''}`}
         </button>
-        <button
-          type="button"
-          onClick={close}
-          style={{ ...submitBtn, background: 'none', color: 'var(--muted)' }}
-        >
+        <button type="button" onClick={close} style={{ ...submitBtn, background: 'none', color: 'var(--muted)' }}>
           Cancel
         </button>
       </div>
@@ -491,9 +550,7 @@ export function PostCampaignPanel() {
     topics: ['campaigns.posts'],
     getKey: (campaign: PostCampaign) => campaign.id,
   }), []);
-  const { data: campaigns, loading, error, reload: load } = useDataList(listPostCampaigns, {
-    stream,
-  });
+  const { data: campaigns, loading, error, reload: load } = useDataList(listPostCampaigns, { stream });
   const [accounts, setAccounts] = useState<Account[]>([]);
 
   useEffect(() => {
