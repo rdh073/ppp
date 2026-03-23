@@ -50,6 +50,7 @@ type AgentLoop interface {
 //	kind "anthropic" (default) — Anthropic Messages API with native tool_use
 //	kind "openai"              — OpenAI chat-completions with tool_choice:"required"
 //	                             (also compatible with DeepSeek, Ollama, etc.)
+//	kind "gemini"              — Gemini generateContent with native function calling
 //
 // Returns nil if cfg.APIKey or cfg.Model are empty (caller should treat nil as disabled/503).
 // apiVersion is only used by the "anthropic" kind.
@@ -57,6 +58,8 @@ func NewAgentLoop(kind string, cfg ModelToolConfig, apiVersion string, log *slog
 	switch kind {
 	case "openai":
 		return NewOpenAICompatibleAgentLoop(cfg, log)
+	case "gemini":
+		return NewGeminiAgentLoop(cfg, log)
 	default: // "anthropic"
 		return NewAnthropicAgentLoop(cfg, apiVersion, log)
 	}

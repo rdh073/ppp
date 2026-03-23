@@ -14,6 +14,8 @@ local.properties
 # Go
 app/server-agent/bin/
 app/server-agent/var/
+app/server-agent/config/server.toml
+app/server-agent/server
 *.exe
 
 # Dashboard / Node
