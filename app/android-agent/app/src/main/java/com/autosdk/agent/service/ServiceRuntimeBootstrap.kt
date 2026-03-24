@@ -41,7 +41,7 @@ internal class ServiceRuntimeBootstrap(
 ) {
     fun bootstrap(): ServiceRuntimeBundle {
         val deviceId = Settings.Secure.getString(service.contentResolver, Settings.Secure.ANDROID_ID)
-        val serverUrl = AgentServerUrlResolver.resolve(com.autosdk.agent.BuildConfig.SERVER_URL)
+        val serverUrl = AgentServerUrlResolver.resolve(service, com.autosdk.agent.BuildConfig.SERVER_URL)
         val capabilityProvider = { AgentCapabilities.buildCapabilityList() }
         val deviceMetadataProvider = {
             mapOf(

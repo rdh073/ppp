@@ -116,6 +116,8 @@ class ActionExecutor(private val service: AccessibilityService) {
             "Drag requires GestureDescription and is not yet implemented",
         )
 
+        is AutomationAction.Swipe -> dispatchSwipe(action)
+
         is AutomationAction.Scroll -> {
             val scrollAction = if (action.direction == ScrollDirection.FORWARD)
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
@@ -361,6 +363,50 @@ class ActionExecutor(private val service: AccessibilityService) {
         }
         return if (succeeded) ActionResult.Ok
         else ActionResult.Failed("input_rejected", "Coordinate tap cancelled at $x,$y")
+    }
+
+    /**
+     * Dispatches a swipe gesture from (startX, startY) to (endX, endY) using [GestureDescription].
+     * Requires API 24+ (minSdk = 26, always satisfied).
+     */
+    private fun dispatchSwipe(action: AutomationAction.Swipe): ActionResult {
+        val path = Path().apply {
+            moveTo(action.startX.toFloat(), action.startY.toFloat())
+            lineTo(action.endX.toFloat(), action.endY.toFloat())
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, action.durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        val latch = CountDownLatch(1)
+        var succeeded = false
+        val dispatched = service.dispatchGesture(
+            gesture,
+            object : AccessibilityService.GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription) {
+                    succeeded = true
+                    latch.countDown()
+                }
+                override fun onCancelled(gestureDescription: GestureDescription) {
+                    latch.countDown()
+                }
+            },
+            null,
+        )
+        if (!dispatched) {
+            return ActionResult.Failed(
+                "input_rejected",
+                "Swipe gesture not dispatched (${action.startX},${action.startY})→(${action.endX},${action.endY})",
+            )
+        }
+        if (!latch.await(action.durationMs + 2_000L, TimeUnit.MILLISECONDS)) {
+            Log.w(TAG, "Swipe callback timed out; assuming delivered")
+            return ActionResult.Ok
+        }
+        return if (succeeded) ActionResult.Ok
+        else ActionResult.Failed(
+            "input_rejected",
+            "Swipe gesture cancelled (${action.startX},${action.startY})→(${action.endX},${action.endY})",
+        )
     }
 
     private fun global(action: Int): ActionResult {

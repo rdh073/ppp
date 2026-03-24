@@ -55,6 +55,7 @@ class JsAutomationBridge(
         ScriptableObject.putProperty(scope, "log", logFn(cx, scope))
         ScriptableObject.putProperty(scope, "http", httpFn(cx, scope))
         ScriptableObject.putProperty(scope, "screenshot", screenshotFn(cx, scope))
+        ScriptableObject.putProperty(scope, "swipe", swipeFn(cx, scope))
         ScriptableObject.putProperty(scope, "awaitEvent", awaitEventFn(cx, scope))
     }
 
@@ -120,6 +121,23 @@ class JsAutomationBridge(
         val result = automationDriver.execute(AutomationAction.Scroll(selector, dir))
         if (result is ActionResult.Failed) {
             scriptError(BridgeError.ActionFailed("scroll", result.reason))
+        }
+        buildResultObject(cx, scope, "ok" to true)
+    }
+
+    private fun swipeFn(cx: Context, scope: Scriptable) = makeFn(scope, "swipe") { _, _, args, _ ->
+        val startX = (args.getOrNull(0) as? Number)?.toInt()
+            ?: scriptError(BridgeError.InvalidArgs("swipe", "expected startX (number)"))
+        val startY = (args.getOrNull(1) as? Number)?.toInt()
+            ?: scriptError(BridgeError.InvalidArgs("swipe", "expected startY (number)"))
+        val endX = (args.getOrNull(2) as? Number)?.toInt()
+            ?: scriptError(BridgeError.InvalidArgs("swipe", "expected endX (number)"))
+        val endY = (args.getOrNull(3) as? Number)?.toInt()
+            ?: scriptError(BridgeError.InvalidArgs("swipe", "expected endY (number)"))
+        val durationMs = (args.getOrNull(4) as? Number)?.toLong() ?: 300L
+        val result = automationDriver.execute(AutomationAction.Swipe(startX, startY, endX, endY, durationMs))
+        if (result is ActionResult.Failed) {
+            scriptError(BridgeError.ActionFailed("swipe", result.reason))
         }
         buildResultObject(cx, scope, "ok" to true)
     }

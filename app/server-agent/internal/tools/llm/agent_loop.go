@@ -51,20 +51,20 @@ type AgentLoop interface {
 
 // NewAgentLoop creates an AgentLoop for the given kind.
 //
-//	kind "anthropic" (default) — Anthropic Messages API with native tool_use
-//	kind "openai"              — OpenAI chat-completions with tool_choice:"required"
-//	                             (also compatible with DeepSeek, Ollama, etc.)
-//	kind "gemini"              — Gemini generateContent with native function calling
+//	kind "anthropic" (default) — Anthropic Messages API via Ingenimax SDK
+//	kind "openai"              — OpenAI chat-completions via Ingenimax SDK
+//	                             (also compatible with DeepSeek and other OpenAI-compatible endpoints)
+//	kind "gemini"              — Gemini generateContent via Ingenimax SDK
 //
 // Returns nil if cfg.APIKey or cfg.Model are empty (caller should treat nil as disabled/503).
-// apiVersion is only used by the "anthropic" kind.
+// apiVersion is no longer used; kept for API compatibility.
 func NewAgentLoop(kind string, cfg ModelToolConfig, apiVersion string, log *slog.Logger) AgentLoop {
 	switch kind {
 	case "openai":
-		return NewOpenAICompatibleAgentLoop(cfg, log)
+		return newIngemaxOpenAILoop(cfg, log)
 	case "gemini":
-		return NewGeminiAgentLoop(cfg, log)
+		return newIngemaxGeminiLoop(cfg, log)
 	default: // "anthropic"
-		return NewAnthropicAgentLoop(cfg, apiVersion, log)
+		return newIngemaxAnthropicLoop(cfg, log)
 	}
 }

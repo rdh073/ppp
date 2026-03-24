@@ -16,6 +16,14 @@ sealed interface AutomationAction {
     data class InputText(val selector: Selector, val value: String) : AutomationAction
     data class DeleteText(val selector: Selector) : AutomationAction
     data class Drag(val selector: Selector) : AutomationAction
+    /** Swipe gesture from (startX, startY) to (endX, endY) in screen coordinates. */
+    data class Swipe(
+        val startX: Int,
+        val startY: Int,
+        val endX: Int,
+        val endY: Int,
+        val durationMs: Long = 300L,
+    ) : AutomationAction
     /** [selector] is optional; when absent the agent scrolls the foreground window. */
     data class Scroll(
         val selector: Selector?,

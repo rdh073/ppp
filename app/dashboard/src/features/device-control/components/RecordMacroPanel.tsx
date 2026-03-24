@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRecordingSession } from '../hooks/useRecordingSession';
+import type { RunState } from '../hooks/useRecordingSession';
 import { ManualMode } from './record/ManualMode';
 import { AIMode } from './record/AIMode';
 import { ResultBlock } from './record/ResultBlock';
@@ -37,11 +38,16 @@ interface RecordMacroPanelProps {
   deviceId: string;
   deviceLabel: string;
   onClose: () => void;
+  onRunStateChange?: (state: RunState) => void;
 }
 
-export function RecordMacroPanel({ deviceId, deviceLabel, onClose }: RecordMacroPanelProps) {
+export function RecordMacroPanel({ deviceId, deviceLabel, onClose, onRunStateChange }: RecordMacroPanelProps) {
   const [mode, setMode] = useState<Mode>('manual');
   const { runState, seq, output, error, startManual, stopManual, runAI, cancel, reset } = useRecordingSession(deviceId);
+
+  useEffect(() => {
+    onRunStateChange?.(runState);
+  }, [runState, onRunStateChange]);
 
   const handleModeChange = (m: Mode) => {
     if (runState === 'recording' || runState === 'running') return;

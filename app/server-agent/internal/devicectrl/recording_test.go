@@ -15,7 +15,7 @@ import (
 
 func TestActionToJS_Click(t *testing.T) {
 	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"text","value":"Sign in"}}}`)
-	got, err := actionToJS(params)
+	got, err := actionToJS(params, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestActionToJS_Click(t *testing.T) {
 
 func TestActionToJS_InputText(t *testing.T) {
 	params := json.RawMessage(`{"action":{"kind":"input_text","target":{"kind":"resource_id","value":"com.example:id/email"},"inputText":"user@example.com"}}`)
-	got, err := actionToJS(params)
+	got, err := actionToJS(params, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestActionToJS_InputText(t *testing.T) {
 
 func TestActionToJS_OpenIntent(t *testing.T) {
 	params := json.RawMessage(`{"action":{"kind":"open_intent","intentAction":"android.settings.PRIVATE_DNS_SETTINGS"}}`)
-	got, err := actionToJS(params)
+	got, err := actionToJS(params, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,12 +51,136 @@ func TestActionToJS_OpenIntent(t *testing.T) {
 
 func TestActionToJS_Back(t *testing.T) {
 	params := json.RawMessage(`{"action":{"kind":"back"}}`)
-	got, err := actionToJS(params)
+	got, err := actionToJS(params, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != "back();" {
 		t.Errorf("got %q, want back();", got)
+	}
+}
+
+// ---- coordinate enrichment tests ----
+
+func makeExecuteResult(targets []map[string]any) json.RawMessage {
+	snap := map[string]any{
+		"snapshotBefore": map[string]any{"targets": targets},
+		"snapshotAfter":  map[string]any{"targets": []any{}},
+	}
+	b, _ := json.Marshal(snap)
+	return b
+}
+
+func TestActionToJS_CoordinateTap_EnrichesSemanticKey(t *testing.T) {
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{100, 200, 300, 250}, "semanticKey": "button.sign_in", "resourceId": "com.ex:id/btn", "text": "Sign In", "actionable": true},
+	})
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"200,225"}}}`)
+	got, err := actionToJS(params, exec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "semantic_key", value: "button.sign_in" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestActionToJS_CoordinateTap_FallsBackToResourceID(t *testing.T) {
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 400, 100}, "resourceId": "com.example:id/btn_login", "actionable": true},
+	})
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"200,50"}}}`)
+	got, err := actionToJS(params, exec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "resource_id", value: "com.example:id/btn_login" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestActionToJS_CoordinateTap_FallsBackToText(t *testing.T) {
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 400, 100}, "text": "Continue", "actionable": true},
+	})
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"200,50"}}}`)
+	got, err := actionToJS(params, exec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "text", value: "Continue" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestActionToJS_CoordinateTap_OutsideBounds_KeepsCoordinate(t *testing.T) {
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 100, 100}, "semanticKey": "button.ok", "actionable": true},
+	})
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"500,500"}}}`)
+	got, err := actionToJS(params, exec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "coordinate", value: "500,500" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestActionToJS_CoordinateTap_NotActionable_KeepsCoordinate(t *testing.T) {
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 400, 400}, "semanticKey": "text.label", "actionable": false},
+	})
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"200,200"}}}`)
+	got, err := actionToJS(params, exec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "coordinate", value: "200,200" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestActionToJS_CoordinateTap_NilSnapshot_KeepsCoordinate(t *testing.T) {
+	params := json.RawMessage(`{"action":{"kind":"click","target":{"kind":"coordinate","value":"100,200"}}}`)
+	got, err := actionToJS(params, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `tap({ kind: "click", target: { kind: "coordinate", value: "100,200" } });`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestResolveCoordinateSelector_SmallestAreaWins(t *testing.T) {
+	// Large parent contains the point; small inner button also contains it.
+	// The inner (smaller area) target should win even though the parent comes first.
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 1080, 1920}, "semanticKey": "list.apps_list_view", "actionable": true},
+		{"bounds": []int{333, 207, 542, 373}, "semanticKey": "button.icon", "resourceId": "com.android.launcher3:id/icon", "actionable": true},
+	})
+	got := resolveCoordinateSelector(437, 290, exec)
+	want := `{ kind: "semantic_key", value: "button.icon" }`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveCoordinateSelector_SelectorPriority(t *testing.T) {
+	// Single target containing the point — verify semantic_key > resource_id > text priority.
+	exec := makeExecuteResult([]map[string]any{
+		{"bounds": []int{0, 0, 500, 500}, "semanticKey": "button.ok", "resourceId": "com.ex:id/btn", "text": "OK", "actionable": true},
+	})
+	got := resolveCoordinateSelector(250, 250, exec)
+	want := `{ kind: "semantic_key", value: "button.ok" }`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

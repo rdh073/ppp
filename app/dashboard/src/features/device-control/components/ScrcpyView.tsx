@@ -36,9 +36,11 @@ interface Props {
    * Only fires when video coordinates are available (after stream starts).
    */
   onTouchDevice?: (type: 'down' | 'move' | 'up', x: number, y: number) => void;
+  /** Called when the scrcpy video stream dimensions become known or change. */
+  onVideoSizeChange?: (width: number, height: number) => void;
 }
 
-export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdbSerial, deviceName, onTouchDevice }: Props) {
+export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdbSerial, deviceName, onTouchDevice, onVideoSizeChange }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [mode, setMode] = useState<Mode>(deviceId ? 'network' : 'usb');
@@ -148,9 +150,11 @@ export function ScrcpyView({ onClose, sessionId, deviceId, adbSerial: initialAdb
         width: videoStream.width || videoStream.metadata.width || 1080,
         height: videoStream.height || videoStream.metadata.height || 1920,
       };
+      onVideoSizeChange?.(videoSizeRef.current.width, videoSizeRef.current.height);
 
       videoStream.sizeChanged((size) => {
         videoSizeRef.current = size;
+        onVideoSizeChange?.(size.width, size.height);
       });
 
       const renderer = WebGLVideoFrameRenderer.isSupported

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/projection"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 )
 
@@ -113,11 +114,74 @@ func (s *RecordingStore) Stop(deviceID domain.DeviceID) (*Recording, bool) {
 
 // ---- script generator ----
 
+// recordedSnapshotTarget is a minimal view of a UiTarget from the execute result snapshot,
+// used only for coordinate enrichment during script generation.
+type recordedSnapshotTarget struct {
+	Bounds      [4]int `json:"bounds"` // [left, top, right, bottom]
+	ResourceID  string `json:"resourceId"`
+	SemanticKey string `json:"semanticKey"`
+	Text        string `json:"text"`
+	Actionable  bool   `json:"actionable"`
+}
+
+// recordedExecuteResult is a minimal parse of the {snapshotBefore, snapshotAfter} JSON
+// returned by device.execute, used only to enrich coordinate taps during script generation.
+type recordedExecuteResult struct {
+	SnapshotBefore *struct {
+		Targets []recordedSnapshotTarget `json:"targets"`
+	} `json:"snapshotBefore"`
+}
+
+// resolveCoordinateSelector finds the best actionable accessibility selector in snapshotBefore
+// whose bounds contain the point (x, y). Returns a JS object literal string, or "" if no match.
+//
+// Priority: semanticKey > resourceId > text. Falls back to "" so the caller keeps the
+// raw coordinate selector.
+func resolveCoordinateSelector(x, y int, executeRes json.RawMessage) string {
+	if len(executeRes) == 0 {
+		return ""
+	}
+	var res recordedExecuteResult
+	if err := json.Unmarshal(executeRes, &res); err != nil || res.SnapshotBefore == nil {
+		return ""
+	}
+	// Pick the smallest-area actionable target containing (x, y) — the innermost/most-specific element.
+	var best *recordedSnapshotTarget
+	bestArea := -1
+	for i := range res.SnapshotBefore.Targets {
+		t := &res.SnapshotBefore.Targets[i]
+		if !t.Actionable {
+			continue
+		}
+		// bounds: [left, top, right, bottom]
+		if x < t.Bounds[0] || x > t.Bounds[2] || y < t.Bounds[1] || y > t.Bounds[3] {
+			continue
+		}
+		area := (t.Bounds[2] - t.Bounds[0]) * (t.Bounds[3] - t.Bounds[1])
+		if best == nil || area < bestArea {
+			best = t
+			bestArea = area
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	switch {
+	case best.SemanticKey != "":
+		return fmt.Sprintf("{ kind: \"semantic_key\", value: %s }", jsStr(best.SemanticKey))
+	case best.ResourceID != "":
+		return fmt.Sprintf("{ kind: \"resource_id\", value: %s }", jsStr(best.ResourceID))
+	case best.Text != "":
+		return fmt.Sprintf("{ kind: \"text\", value: %s }", jsStr(best.Text))
+	}
+	return ""
+}
+
 // generateScript converts a sequence of recorded entries into a RhinoJS source string.
 func generateScript(entries []RecordedEntry) string {
 	var sb strings.Builder
 	for _, entry := range entries {
-		line, err := actionToJS(entry.ActionParams)
+		line, err := actionToJS(entry.ActionParams, entry.SnapshotAfter)
 		if err != nil || line == "" {
 			continue
 		}
@@ -132,7 +196,9 @@ func generateScript(entries []RecordedEntry) string {
 }
 
 // actionToJS converts one execute body to a JS statement.
-func actionToJS(params json.RawMessage) (string, error) {
+// executeResult is the full {snapshotBefore, snapshotAfter} JSON from the execute response;
+// it is used to enrich coordinate taps with accessibility selectors. Pass nil to skip enrichment.
+func actionToJS(params json.RawMessage, executeResult json.RawMessage) (string, error) {
 	var body struct {
 		Action struct {
 			Kind         string           `json:"kind"`
@@ -141,6 +207,11 @@ func actionToJS(params json.RawMessage) (string, error) {
 			IntentAction string           `json:"intentAction"`
 			Package      string           `json:"package"`
 			Direction    string           `json:"direction"`
+			StartX       int              `json:"startX"`
+			StartY       int              `json:"startY"`
+			EndX         int              `json:"endX"`
+			EndY         int              `json:"endY"`
+			DurationMs   int              `json:"durationMs"`
 		} `json:"action"`
 	}
 	if err := json.Unmarshal(params, &body); err != nil {
@@ -152,6 +223,21 @@ func actionToJS(params json.RawMessage) (string, error) {
 		target, err := selectorToJS(a.Target)
 		if err != nil {
 			return "", err
+		}
+		// Enrich coordinate taps with an accessibility selector from snapshotBefore.
+		if a.Target != nil {
+			var sel struct {
+				Kind  string `json:"kind"`
+				Value string `json:"value"`
+			}
+			if json.Unmarshal(*a.Target, &sel) == nil && sel.Kind == "coordinate" {
+				var x, y int
+				if _, scanErr := fmt.Sscanf(sel.Value, "%d,%d", &x, &y); scanErr == nil {
+					if enriched := resolveCoordinateSelector(x, y, executeResult); enriched != "" {
+						target = enriched
+					}
+				}
+			}
 		}
 		return fmt.Sprintf("tap({ kind: %s, target: %s });", jsStr(a.Kind), target), nil
 	case "input_text":
@@ -183,6 +269,12 @@ func actionToJS(params json.RawMessage) (string, error) {
 			}
 		}
 		return fmt.Sprintf("scroll(null, %s);", jsStr(dir)), nil
+	case "swipe":
+		dur := a.DurationMs
+		if dur <= 0 {
+			dur = 300
+		}
+		return fmt.Sprintf("swipe(%d, %d, %d, %d, %d);", a.StartX, a.StartY, a.EndX, a.EndY, dur), nil
 	case "back":
 		return "back();", nil
 	case "home":
@@ -292,6 +384,21 @@ func jsStr(s string) string {
 
 // ---- HTTP handler methods (attached to DeviceHandler) ----
 
+// publishRecordingEvent pushes a recording lifecycle event to the projection hub.
+// Topic: "recording.<deviceId>". No-op when h.publish is nil.
+func (h *DeviceHandler) publishRecordingEvent(deviceID domain.DeviceID, eventType string, payload any) {
+	if h.publish == nil {
+		return
+	}
+	h.publish.PublishProjection(projection.Event{
+		Topic:      "recording." + string(deviceID),
+		Type:       eventType,
+		EntityID:   string(deviceID),
+		OccurredAt: time.Now().UTC(),
+		Payload:    payload,
+	})
+}
+
 // handleRecordStart begins a new recording session for the device.
 //
 //	POST /devices/{id}/record/start
@@ -309,6 +416,10 @@ func (h *DeviceHandler) handleRecordStart(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	h.publishRecordingEvent(id, "recording.started", map[string]any{
+		"recordingId": rec.ID,
+		"startedAt":   rec.StartedAt,
+	})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"recordingId": rec.ID,
@@ -343,6 +454,11 @@ func (h *DeviceHandler) handleRecordStop(w http.ResponseWriter, r *http.Request,
 
 	entries, startedAt := rec.snapshot()
 	durationMs := time.Since(startedAt).Milliseconds()
+	h.publishRecordingEvent(id, "recording.stopped", map[string]any{
+		"recordingId": rec.ID,
+		"actionCount": len(entries),
+		"durationMs":  durationMs,
+	})
 
 	workflowName := body.WorkflowName
 	if workflowName == "" {
@@ -376,6 +492,44 @@ func (h *DeviceHandler) handleRecordStop(w http.ResponseWriter, r *http.Request,
 		"script":       script,
 		"workflowName": workflowName,
 	})
+}
+
+// handleRecordEntry manually appends a pre-built entry to the active recording.
+// Used by the dashboard when the user interacts via scrcpy (direct touch injection) so
+// the action can be recorded without re-executing it on the device.
+//
+//	POST /devices/{id}/record/entry
+//	Body: {"actionParams": {...}, "executeResult": {...}}
+func (h *DeviceHandler) handleRecordEntry(w http.ResponseWriter, r *http.Request, id domain.DeviceID) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.recordings == nil {
+		http.Error(w, "recording not configured", http.StatusNotImplemented)
+		return
+	}
+	var body struct {
+		ActionParams  json.RawMessage `json:"actionParams"`
+		ExecuteResult json.RawMessage `json:"executeResult"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || len(body.ActionParams) == 0 {
+		http.Error(w, "invalid body: actionParams required", http.StatusBadRequest)
+		return
+	}
+	rec, ok := h.recordings.Get(id)
+	if !ok {
+		http.Error(w, "no active recording for device", http.StatusNotFound)
+		return
+	}
+	rec.Append(body.ActionParams, body.ExecuteResult)
+	entries, _ := rec.snapshot()
+	h.publishRecordingEvent(id, "recording.entry", map[string]any{
+		"recordingId": rec.ID,
+		"actionCount": len(entries),
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"actionCount": len(entries)})
 }
 
 // handleRecordStatus returns the current recording status for a device.

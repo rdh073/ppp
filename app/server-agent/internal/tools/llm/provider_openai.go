@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -42,15 +41,6 @@ func (p *openAIProvider) headers() map[string]string {
 }
 
 // ---- constructor functions (keep same signatures as old files) ----
-
-// NewOpenAICompatibleAgentLoop returns an AgentLoop backed by the OpenAI chat-completions API.
-// Returns nil if APIKey or Model are empty (handler returns 503).
-func NewOpenAICompatibleAgentLoop(cfg ModelToolConfig, log *slog.Logger) AgentLoop {
-	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
-		return nil
-	}
-	return newOpenAIProvider(cfg, 60*time.Second, log)
-}
 
 // NewOpenAICompatibleJSONClient targets a chat-completions style endpoint used
 // by OpenAI-compatible providers. No external SDK is required.
@@ -107,54 +97,6 @@ type openAIChatCompletionsResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// agent loop wire types
-
-type openAIAgentMsg struct {
-	Role       string           `json:"role"`
-	Content    *string          `json:"content"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-}
-
-type openAIToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"` // "function"
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"` // JSON string
-	} `json:"function"`
-}
-
-type openAIAgentTool struct {
-	Type     string `json:"type"` // "function"
-	Function struct {
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		Parameters  any    `json:"parameters"`
-	} `json:"function"`
-}
-
-type openAIAgentReqBody struct {
-	Model       string           `json:"model"`
-	Messages    []openAIAgentMsg `json:"messages"`
-	Tools       []openAIAgentTool `json:"tools"`
-	ToolChoice  string            `json:"tool_choice"` // "required"
-	MaxTokens   int               `json:"max_tokens"`
-	Temperature float64           `json:"temperature"`
-	Stream      bool              `json:"stream,omitempty"`
-}
-
-type openAIAgentRespBody struct {
-	Choices []struct {
-		Message      openAIAgentMsg `json:"message"`
-		FinishReason string         `json:"finish_reason"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error,omitempty"`
-}
-
 // DeepSeek tool-call wire types (used by deepSeekJSONClient)
 
 type deepSeekTool struct {
@@ -193,199 +135,6 @@ type deepSeekChatCompletionsResponse struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
-}
-
-// ---- AgentLoop implementation ----
-
-func (p *openAIProvider) Run(ctx context.Context, req AgentLoopRequest, exec ToolExecutor) (AgentLoopResult, error) {
-	// Convert AgentTool → openAIAgentTool.
-	tools := make([]openAIAgentTool, len(req.Tools))
-	for i, t := range req.Tools {
-		var schema any
-		if len(t.InputSchema) > 0 {
-			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-				schema = map[string]any{"type": "object", "properties": map[string]any{}}
-			}
-		} else {
-			schema = map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-		tools[i].Type = "function"
-		tools[i].Function.Name = t.Name
-		tools[i].Function.Description = t.Description
-		tools[i].Function.Parameters = schema
-	}
-
-	// Build initial messages: system prompt + user goal.
-	messages := []openAIAgentMsg{}
-	if req.SystemPrompt != "" {
-		sp := req.SystemPrompt
-		messages = append(messages, openAIAgentMsg{Role: "system", Content: &sp})
-	}
-	goal := req.Goal
-	messages = append(messages, openAIAgentMsg{Role: "user", Content: &goal})
-
-	for step := 1; step <= req.MaxSteps; step++ {
-		body := openAIAgentReqBody{
-			Model:       p.model,
-			Messages:    messages,
-			Tools:       tools,
-			ToolChoice:  "required", // force a tool call every turn
-			MaxTokens:   2048,
-			Temperature: 0.0,
-		}
-
-		var tc *openAIToolCall
-		var err error
-
-		if req.OnChunk != nil {
-			tc, err = p.runStreaming(ctx, body, req.OnChunk)
-		} else {
-			tc, err = p.runBlocking(ctx, body)
-		}
-		if err != nil {
-			return AgentLoopResult{Steps: step - 1}, err
-		}
-
-		// If no tool calls, the model is done.
-		if tc == nil {
-			break
-		}
-
-		tuInput := json.RawMessage(tc.Function.Arguments)
-
-		if p.log != nil {
-			p.log.Debug("agent loop step", "step", step, "tool", tc.Function.Name)
-		}
-
-		// Append the assistant message (with tool_calls) to history.
-		empty := ""
-		messages = append(messages, openAIAgentMsg{
-			Role:      "assistant",
-			Content:   &empty,
-			ToolCalls: []openAIToolCall{*tc},
-		})
-
-		toolResult, execErr := exec(ctx, tc.Function.Name, tuInput)
-		if errors.Is(execErr, ErrAgentDone) {
-			var doneInput struct {
-				Reason string `json:"reason"`
-			}
-			_ = json.Unmarshal(tuInput, &doneInput)
-			return AgentLoopResult{Done: true, Reason: doneInput.Reason, Steps: step}, nil
-		}
-
-		// Build the tool result message.
-		var resultContent string
-		switch {
-		case execErr != nil:
-			resultContent = "error: " + execErr.Error()
-		case toolResult != nil:
-			resultContent = string(toolResult)
-		default:
-			resultContent = "ok"
-		}
-		messages = append(messages, openAIAgentMsg{
-			Role:       "tool",
-			Content:    &resultContent,
-			ToolCallID: tc.ID,
-		})
-	}
-
-	return AgentLoopResult{Done: false, Steps: req.MaxSteps}, nil
-}
-
-// runBlocking performs a non-streaming OpenAI request and returns the first tool call.
-func (p *openAIProvider) runBlocking(ctx context.Context, body openAIAgentReqBody) (*openAIToolCall, error) {
-	raw, err := p.http.PostJSON(ctx, p.apiURL, p.headers(), body)
-	if err != nil {
-		return nil, err
-	}
-	var resp openAIAgentRespBody
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode agent response: %w", err)
-	}
-	if resp.Error != nil {
-		return nil, fmt.Errorf("openai agent: %s", resp.Error.Message)
-	}
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("openai agent: no choices in response")
-	}
-	choice := resp.Choices[0]
-	if len(choice.Message.ToolCalls) == 0 {
-		return nil, nil
-	}
-	tc := choice.Message.ToolCalls[0]
-	return &tc, nil
-}
-
-// runStreaming performs a streaming OpenAI request, calls onChunk for text deltas,
-// and returns the first tool call assembled from streaming chunks.
-//
-// SSE chunk shape (abbreviated):
-//
-//	{"choices":[{"delta":{"content":"hello"},"index":0}]}
-//	{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"...","type":"function","function":{"name":"tap","arguments":""}}]},"index":0}]}
-//	{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"key\":"}}]},"index":0}]}
-func (p *openAIProvider) runStreaming(ctx context.Context, body openAIAgentReqBody, onChunk func(string)) (*openAIToolCall, error) {
-	body.Stream = true
-
-	var tcID, tcName string
-	var tcArgsBuf strings.Builder
-
-	streamErr := p.http.StreamSSE(ctx, p.apiURL, p.headers(), body, func(data []byte) error {
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content   *string `json:"content"`
-					ToolCalls []struct {
-						Index    int    `json:"index"`
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal(data, &chunk); err != nil {
-			return nil
-		}
-		if len(chunk.Choices) == 0 {
-			return nil
-		}
-		delta := chunk.Choices[0].Delta
-		if delta.Content != nil && onChunk != nil && *delta.Content != "" {
-			onChunk(*delta.Content)
-		}
-		for _, tc := range delta.ToolCalls {
-			if tc.ID != "" {
-				tcID = tc.ID
-			}
-			if tc.Function.Name != "" {
-				tcName = tc.Function.Name
-			}
-			if tc.Function.Arguments != "" {
-				tcArgsBuf.WriteString(tc.Function.Arguments)
-			}
-		}
-		return nil
-	})
-
-	if streamErr != nil {
-		return nil, streamErr
-	}
-	if tcName == "" {
-		return nil, nil
-	}
-	tc := &openAIToolCall{
-		ID:   tcID,
-		Type: "function",
-	}
-	tc.Function.Name = tcName
-	tc.Function.Arguments = tcArgsBuf.String()
-	return tc, nil
 }
 
 // ---- JSONModelClient implementation (OpenAI structured output) ----

@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -11,7 +10,7 @@ import (
 	"time"
 )
 
-// geminiProvider implements AgentLoop and JSONModelClient using the Gemini
+// geminiProvider implements JSONModelClient using the Gemini
 // generateContent API.
 type geminiProvider struct {
 	apiURL string
@@ -50,24 +49,7 @@ func (p *geminiProvider) generateContentEndpoint() string {
 	return base + "/models/" + url.PathEscape(p.model) + ":generateContent"
 }
 
-func (p *geminiProvider) streamGenerateContentEndpoint() string {
-	base := strings.TrimRight(p.apiURL, "/")
-	if strings.Contains(base, ":streamGenerateContent") {
-		return base
-	}
-	return base + "/models/" + url.PathEscape(p.model) + ":streamGenerateContent"
-}
-
 // ---- constructor functions (keep same signatures as old files) ----
-
-// NewGeminiAgentLoop returns an AgentLoop backed by the Gemini generateContent API.
-// Returns nil if APIKey or Model are empty (handler returns 503).
-func NewGeminiAgentLoop(cfg ModelToolConfig, log *slog.Logger) AgentLoop {
-	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
-		return nil
-	}
-	return newGeminiProvider(cfg, 60*time.Second, log)
-}
 
 // NewGeminiGenerateContentJSONClient returns a JSONModelClient backed by the
 // Gemini generateContent API with JSON response schema enforcement.
@@ -76,68 +58,6 @@ func NewGeminiGenerateContentJSONClient(cfg ModelToolConfig, log *slog.Logger) J
 		return nil
 	}
 	return newGeminiProvider(cfg, 15*time.Second, log)
-}
-
-// ---- wire types (agent loop) ----
-
-type geminiAgentContent struct {
-	Role  string            `json:"role"`
-	Parts []geminiAgentPart `json:"parts"`
-}
-
-type geminiAgentPart struct {
-	Text             string                  `json:"text,omitempty"`
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-}
-
-type geminiFunctionCall struct {
-	Name string         `json:"name"`
-	Args map[string]any `json:"args"`
-}
-
-type geminiFunctionResponse struct {
-	Name     string         `json:"name"`
-	Response map[string]any `json:"response"`
-}
-
-type geminiFunctionDecl struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
-
-type geminiAgentToolDef struct {
-	FunctionDeclarations []geminiFunctionDecl `json:"functionDeclarations"`
-}
-
-type geminiAgentToolConfig struct {
-	FunctionCallingConfig struct {
-		Mode string `json:"mode"`
-	} `json:"functionCallingConfig"`
-}
-
-type geminiAgentGenCfg struct {
-	Temperature     float64 `json:"temperature"`
-	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
-}
-
-type geminiAgentReqBody struct {
-	SystemInstruction *geminiAgentContent    `json:"systemInstruction,omitempty"`
-	Contents          []geminiAgentContent   `json:"contents"`
-	Tools             []geminiAgentToolDef   `json:"tools"`
-	ToolConfig        *geminiAgentToolConfig `json:"toolConfig,omitempty"`
-	GenerationConfig  *geminiAgentGenCfg     `json:"generationConfig,omitempty"`
-}
-
-type geminiAgentRespBody struct {
-	Candidates []struct {
-		Content geminiAgentContent `json:"content"`
-	} `json:"candidates"`
-	Error *struct {
-		Message string `json:"message"`
-		Status  string `json:"status"`
-	} `json:"error,omitempty"`
 }
 
 // wire types (JSON client)
@@ -174,169 +94,6 @@ type geminiGenerateContentResponse struct {
 		Message string `json:"message"`
 		Status  string `json:"status"`
 	} `json:"error,omitempty"`
-}
-
-// ---- AgentLoop implementation ----
-
-func (p *geminiProvider) Run(ctx context.Context, req AgentLoopRequest, exec ToolExecutor) (AgentLoopResult, error) {
-	// Convert AgentTool → geminiFunctionDecl.
-	decls := make([]geminiFunctionDecl, len(req.Tools))
-	for i, t := range req.Tools {
-		var schema any
-		if len(t.InputSchema) > 0 {
-			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-				schema = map[string]any{"type": "object", "properties": map[string]any{}}
-			}
-		} else {
-			schema = map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-		decls[i] = geminiFunctionDecl{Name: t.Name, Description: t.Description, Parameters: schema}
-	}
-
-	toolConfig := &geminiAgentToolConfig{}
-	toolConfig.FunctionCallingConfig.Mode = "ANY" // force a function call every turn
-
-	// Build initial user message with goal text.
-	contents := []geminiAgentContent{
-		{Role: "user", Parts: []geminiAgentPart{{Text: req.Goal}}},
-	}
-
-	// System instruction (optional).
-	var sysInstruction *geminiAgentContent
-	if req.SystemPrompt != "" {
-		sysInstruction = &geminiAgentContent{
-			Parts: []geminiAgentPart{{Text: req.SystemPrompt}},
-		}
-	}
-
-	for step := 1; step <= req.MaxSteps; step++ {
-		body := geminiAgentReqBody{
-			SystemInstruction: sysInstruction,
-			Contents:          contents,
-			Tools:             []geminiAgentToolDef{{FunctionDeclarations: decls}},
-			ToolConfig:        toolConfig,
-			GenerationConfig:  &geminiAgentGenCfg{Temperature: 0.0},
-		}
-
-		var fc *geminiFunctionCall
-		var err error
-
-		if req.OnChunk != nil {
-			fc, err = p.runStreaming(ctx, body, req.OnChunk)
-		} else {
-			fc, err = p.runBlocking(ctx, body)
-		}
-		if err != nil {
-			return AgentLoopResult{Steps: step - 1}, err
-		}
-
-		if fc == nil {
-			// No function call — model declined to call a tool.
-			break
-		}
-
-		// Append model response to history (reconstructed from the function call).
-		contents = append(contents, geminiAgentContent{
-			Role: "model",
-			Parts: []geminiAgentPart{
-				{FunctionCall: fc},
-			},
-		})
-
-		if p.log != nil {
-			p.log.Debug("agent loop step", "step", step, "tool", fc.Name)
-		}
-
-		// Marshal the function call args to json.RawMessage for the executor.
-		argsJSON, _ := json.Marshal(fc.Args)
-
-		// Execute the tool via the caller-supplied executor.
-		toolResult, execErr := exec(ctx, fc.Name, argsJSON)
-		if errors.Is(execErr, ErrAgentDone) {
-			var doneInput struct {
-				Reason string `json:"reason"`
-			}
-			_ = json.Unmarshal(argsJSON, &doneInput)
-			return AgentLoopResult{Done: true, Reason: doneInput.Reason, Steps: step}, nil
-		}
-
-		// Build the functionResponse user turn.
-		var responseMap map[string]any
-		switch {
-		case execErr != nil:
-			responseMap = map[string]any{"error": execErr.Error()}
-		case toolResult != nil:
-			if jsonErr := json.Unmarshal(toolResult, &responseMap); jsonErr != nil {
-				responseMap = map[string]any{"result": string(toolResult)}
-			}
-		default:
-			responseMap = map[string]any{"result": "ok"}
-		}
-
-		contents = append(contents, geminiAgentContent{
-			Role: "user",
-			Parts: []geminiAgentPart{
-				{FunctionResponse: &geminiFunctionResponse{Name: fc.Name, Response: responseMap}},
-			},
-		})
-	}
-
-	return AgentLoopResult{Done: false, Steps: req.MaxSteps}, nil
-}
-
-// runBlocking performs a non-streaming Gemini request and returns the first functionCall.
-func (p *geminiProvider) runBlocking(ctx context.Context, body geminiAgentReqBody) (*geminiFunctionCall, error) {
-	raw, err := p.http.PostJSON(ctx, p.generateContentEndpoint(), p.headers(), body)
-	if err != nil {
-		return nil, err
-	}
-	var resp geminiAgentRespBody
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode agent response: %w", err)
-	}
-	if resp.Error != nil {
-		return nil, fmt.Errorf("gemini agent: %s", resp.Error.Message)
-	}
-	if len(resp.Candidates) == 0 {
-		return nil, nil
-	}
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if part.FunctionCall != nil {
-			return part.FunctionCall, nil
-		}
-	}
-	return nil, nil
-}
-
-// runStreaming performs a streaming Gemini request.
-// Gemini SSE sends full GenerateContentResponse objects per chunk (not deltas),
-// so we parse each chunk as a complete response and extract functionCall or text.
-func (p *geminiProvider) runStreaming(ctx context.Context, body geminiAgentReqBody, onChunk func(string)) (*geminiFunctionCall, error) {
-	var fc *geminiFunctionCall
-
-	streamErr := p.http.StreamSSE(ctx, p.streamGenerateContentEndpoint(), p.headers(), body, func(data []byte) error {
-		var chunk geminiAgentRespBody
-		if err := json.Unmarshal(data, &chunk); err != nil {
-			return nil
-		}
-		if len(chunk.Candidates) == 0 {
-			return nil
-		}
-		for _, part := range chunk.Candidates[0].Content.Parts {
-			if part.FunctionCall != nil && fc == nil {
-				fc = part.FunctionCall
-			}
-			if onChunk != nil && strings.TrimSpace(part.Text) != "" {
-				onChunk(part.Text)
-			}
-		}
-		return nil
-	})
-
-	if streamErr != nil {
-		return nil, streamErr
-	}
-	return fc, nil
 }
 
 // ---- JSONModelClient implementation ----

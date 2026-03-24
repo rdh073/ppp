@@ -95,6 +95,14 @@ internal object JsBridgeHelpers {
                 val pkg = obj.get("package", obj)?.toString()
                 AutomationAction.OpenIntent(intentAction, pkg)
             }
+            "swipe" -> {
+                val startX = (obj.get("startX", obj) as? Number)?.toInt() ?: return null
+                val startY = (obj.get("startY", obj) as? Number)?.toInt() ?: return null
+                val endX = (obj.get("endX", obj) as? Number)?.toInt() ?: return null
+                val endY = (obj.get("endY", obj) as? Number)?.toInt() ?: return null
+                val durationMs = (obj.get("durationMs", obj) as? Number)?.toLong() ?: 300L
+                AutomationAction.Swipe(startX, startY, endX, endY, durationMs)
+            }
             "back" -> AutomationAction.Back
             "home" -> AutomationAction.Home
             else -> null

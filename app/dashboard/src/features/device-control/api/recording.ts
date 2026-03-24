@@ -3,7 +3,7 @@ import { requestJson } from '../../../shared/http/client';
 export interface RecordStatus {
   active: boolean;
   deviceId: string;
-  seq: number;
+  actionCount: number;
 }
 
 export interface RecordResult {
@@ -41,6 +41,19 @@ export function recordStop(deviceId: string, workflowName?: string): Promise<Rec
 export function recordStatus(deviceId: string): Promise<RecordStatus> {
   return requestJson(`/devices/${encodeURIComponent(deviceId)}/record/status`);
 }
+
+export function recordEntry(
+  deviceId: string,
+  entry: { actionParams: Record<string, unknown>; executeResult: Record<string, unknown> },
+): Promise<void> {
+  return requestJson(`/devices/${encodeURIComponent(deviceId)}/record/entry`, {
+    method: 'POST',
+    body: entry,
+    timeoutMs: 5_000,
+  });
+}
+
+export const recordingTopic = (deviceId: string) => `recording.${deviceId}`;
 
 export function llmRun(
   deviceId: string,

@@ -67,30 +67,28 @@ func (s *FSDefStore) ReloadNow(ctx context.Context) error {
 	return s.reload(ctx)
 }
 
-// reload reads all .yaml/.yml files in s.dir and updates the backing DefStore.
-// Deleted files (names no longer on disk) are removed from the store.
+// reload reads all .yaml/.yml files in s.dir (recursively, including subdirectories)
+// and updates the backing DefStore. Deleted files are removed from the store.
 //
 // Retention policy: if a file fails to load (read, parse, or validate error) and
 // a previous valid version exists for that file, the old version is kept in the
 // store and the file's name is added to seen so the deletion sweep leaves it intact.
 func (s *FSDefStore) reload(ctx context.Context) error {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return err
-	}
-
 	seen := make(map[string]struct{})
 
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	err := filepath.WalkDir(s.dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			s.log.Warn("fsdefstore: walk error", "path", path, "err", walkErr)
+			return nil // continue walking
 		}
-		ext := filepath.Ext(e.Name())
+		if d.IsDir() {
+			return nil // descend into subdirectories
+		}
+		ext := filepath.Ext(d.Name())
 		if ext != ".yaml" && ext != ".yml" {
-			continue
+			return nil
 		}
 
-		path := filepath.Join(s.dir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
 			s.log.Warn("fsdefstore: read file error", "file", path, "err", err)
@@ -98,7 +96,7 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 				s.log.Warn("fsdefstore: retaining previous version", "file", path, "name", prevName)
 				seen[prevName] = struct{}{}
 			}
-			continue
+			return nil
 		}
 
 		var def domain.WorkflowDef
@@ -108,12 +106,12 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 				s.log.Warn("fsdefstore: retaining previous version", "file", path, "name", prevName)
 				seen[prevName] = struct{}{}
 			}
-			continue
+			return nil
 		}
 
 		if def.Name == "" {
 			s.log.Warn("fsdefstore: def missing name field, skipping", "file", path)
-			continue
+			return nil
 		}
 
 		if err := Validate(&def); err != nil {
@@ -122,7 +120,7 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 			if prevName, ok := s.fileToDefName[path]; ok {
 				seen[prevName] = struct{}{}
 			}
-			continue
+			return nil
 		}
 
 		s.fileToDefName[path] = def.Name
@@ -130,6 +128,10 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 		if err := s.mem.Put(ctx, def.Name, &def); err != nil {
 			s.log.Warn("fsdefstore: store put error", "name", def.Name, "err", err)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// Remove entries that no longer exist on disk.

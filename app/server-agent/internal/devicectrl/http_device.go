@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
+	"github.com/autosdk/ppp/server-agent/internal/projection"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
 	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
@@ -46,6 +47,7 @@ type DeviceHandler struct {
 	recordings *RecordingStore
 	library    store.MacroStore
 	agentLoop  llm.AgentLoop
+	publish    projection.Publisher
 	log        *slog.Logger
 }
 
@@ -72,6 +74,14 @@ func (h *DeviceHandler) WithRecording(store *RecordingStore) *DeviceHandler {
 // WithRecordingLibrary attaches a MacroLibrary so that completed recordings are persisted.
 func (h *DeviceHandler) WithRecordingLibrary(lib store.MacroStore) *DeviceHandler {
 	h.library = lib
+	return h
+}
+
+// WithProjectionHub attaches a projection.Publisher so that recording lifecycle events
+// are pushed to connected SSE clients on topic "recording.<deviceId>".
+// Pass nil to disable (recording still works, but no push events are emitted).
+func (h *DeviceHandler) WithProjectionHub(pub projection.Publisher) *DeviceHandler {
+	h.publish = pub
 	return h
 }
 
@@ -115,6 +125,8 @@ func (h *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleRecordStop(w, r, domain.DeviceID(parts[0]))
 	case len(parts) == 2 && parts[1] == "record/status":
 		h.handleRecordStatus(w, r, domain.DeviceID(parts[0]))
+	case len(parts) == 2 && parts[1] == "record/entry":
+		h.handleRecordEntry(w, r, domain.DeviceID(parts[0]))
 	case len(parts) == 2 && parts[1] == "record/llm-run":
 		h.handleLLMRun(w, r, domain.DeviceID(parts[0]))
 	default:

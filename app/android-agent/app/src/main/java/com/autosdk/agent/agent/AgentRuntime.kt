@@ -509,6 +509,13 @@ internal object AgentProtocolDeserializer {
                 val packageName = obj["package"]?.jsonPrimitive?.contentOrNull
                 AutomationAction.OpenIntent(intentAction, packageName)
             }
+            "swipe" -> AutomationAction.Swipe(
+                startX = obj["startX"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null,
+                startY = obj["startY"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null,
+                endX = obj["endX"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null,
+                endY = obj["endY"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null,
+                durationMs = obj["durationMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: 300L,
+            )
             "close_app" -> AutomationAction.CloseApp
             "screenshot" -> AutomationAction.Screenshot
             "fill_form" -> {

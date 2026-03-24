@@ -1,7 +1,7 @@
-import { useCallback, useRef, useState } from 'react';
-import { recordStart, recordStop, recordStatus, llmRun } from '../api/recording';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { recordStart, recordStop, llmRun, recordingTopic } from '../api/recording';
 import type { RecordResult, LLMRunResult } from '../api/recording';
-import { usePolling } from '../../../shared/react/usePolling';
+import { openEventStream } from '../../../shared/http/client';
 
 export type RunState = 'idle' | 'recording' | 'running' | 'done' | 'error';
 
@@ -34,18 +34,21 @@ export function useRecordingSession(deviceId: string): RecordingSession {
   const [error, setError] = useState('');
   const cancelledRef = useRef(false);
 
-  // Poll recording status while in manual recording mode
-  const pollFetcher = useCallback(async () => {
-    try {
-      const s = await recordStatus(deviceId);
-      setSeq(s.seq);
-      if (!s.active) setRunState('idle');
-    } catch {
-      // ignore transient poll errors
-    }
-  }, [deviceId]);
-
-  usePolling(pollFetcher, 2000, { enabled: runState === 'recording', immediate: false });
+  // Subscribe to recording push events while in manual recording mode
+  useEffect(() => {
+    if (runState !== 'recording' || !deviceId) return;
+    const source = openEventStream<{ recordingId: string; actionCount?: number; durationMs?: number }>(
+      [recordingTopic(deviceId)],
+      (event) => {
+        if (event.type === 'recording.entry' && event.payload.actionCount !== undefined) {
+          setSeq(event.payload.actionCount);
+        } else if (event.type === 'recording.stopped') {
+          setRunState('idle');
+        }
+      },
+    );
+    return () => source.close();
+  }, [deviceId, runState]);
 
   const startManual = useCallback(async (workflowName?: string) => {
     setRunState('recording');

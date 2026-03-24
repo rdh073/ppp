@@ -504,6 +504,7 @@ func wireMux(
 		os.Exit(1)
 	}
 	projectionHub := projection.NewHub(projectionStore, log)
+	deviceHandler.WithProjectionHub(projectionHub)
 	projectedPersonaStore := accountmanager.NewProjectedPersonaStore(personaStore, projectionHub)
 	projectedAccountStore := accountmanager.NewProjectedAccountStore(accountStore, projectionHub)
 	personaService := accountmanager.NewPersonaService(projectedPersonaStore)
