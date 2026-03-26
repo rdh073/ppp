@@ -12,7 +12,6 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
 )
 
 // ---- system prompt ----
@@ -39,7 +38,7 @@ Call done when the goal is achieved or clearly impossible.`
 
 // ---- tool schemas ----
 
-var deviceAgentTools = []llm.AgentTool{
+var deviceAgentTools = []RecordingAgentTool{
 	{
 		Name:        "observe",
 		Description: "Get the current screen state (package, activity, visible elements). Call this before deciding what to tap.",
@@ -366,14 +365,14 @@ func (h *DeviceHandler) handleLLMRun(w http.ResponseWriter, r *http.Request, id 
 			return execAndRecord(ctx, actionParams)
 
 		case "done":
-			return nil, llm.ErrAgentDone
+			return nil, ErrAgentDone
 
 		default:
 			return json.RawMessage(`"unknown tool"`), nil
 		}
 	}
 
-	result, err := h.agentLoop.Run(ctx, llm.AgentLoopRequest{
+	result, err := h.agentLoop.Run(ctx, RecordingAgentRequest{
 		SystemPrompt: agentSystemPrompt,
 		Goal:         body.Goal,
 		Tools:        deviceAgentTools,

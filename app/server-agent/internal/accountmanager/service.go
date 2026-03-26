@@ -81,7 +81,7 @@ func (s *AccountCreationService) Start(ctx context.Context, input StartAccountCr
 	}
 	kind := input.Kind
 	if kind == "" {
-		kind = "google"
+		kind = "google+instagram"
 	}
 
 	now := time.Now()

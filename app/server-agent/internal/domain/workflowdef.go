@@ -1,11 +1,6 @@
 package domain
 
-import (
-	"encoding/json"
-	"fmt"
-
-	"gopkg.in/yaml.v3"
-)
+import ()
 
 // WorkflowDef is a YAML-serialisable step graph.
 // Each step declares: what event activates it (Trigger), what typed command
@@ -103,35 +98,6 @@ type ScriptDef struct {
 //	    required: [id]
 type StringOrJSONMap map[string]string
 
-// UnmarshalYAML implements yaml.Unmarshaler for yaml.v3.
-func (m *StringOrJSONMap) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind != yaml.MappingNode {
-		return fmt.Errorf("params must be a YAML mapping, got kind %d", value.Kind)
-	}
-	result := make(StringOrJSONMap, len(value.Content)/2)
-	for i := 0; i+1 < len(value.Content); i += 2 {
-		var key string
-		if err := value.Content[i].Decode(&key); err != nil {
-			return fmt.Errorf("decode params key: %w", err)
-		}
-		val := value.Content[i+1]
-		if val.Kind == yaml.ScalarNode {
-			result[key] = val.Value
-		} else {
-			var v any
-			if err := val.Decode(&v); err != nil {
-				return fmt.Errorf("decode params.%s: %w", key, err)
-			}
-			b, err := json.Marshal(v)
-			if err != nil {
-				return fmt.Errorf("encode params.%s: %w", key, err)
-			}
-			result[key] = string(b)
-		}
-	}
-	*m = result
-	return nil
-}
 
 type ToolCallDef struct {
 	ToolName string          `yaml:"tool_name"          json:"tool_name"`

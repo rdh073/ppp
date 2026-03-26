@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,6 +37,14 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" database/sql driver
+)
+
+// Compile-time interface satisfaction checks (moved from appport to composition root).
+var (
+	_ appport.AgentLifecycle    = (*devicectrl.AgentLifecycleUseCase)(nil)
+	_ appport.TaskControl       = (*workflowruntime.TaskControlUseCase)(nil)
+	_ appport.EventPlaneControl = (*eventing.EventPlaneControlUseCase)(nil)
+	_ appport.EventIngestion    = (*eventing.EventIngestionUseCase)(nil)
 )
 
 func main() {
@@ -467,7 +476,7 @@ func wireMux(
 		WithDispatcher(infra.disp).
 		WithRecording(recordingStore).
 		WithRecordingLibrary(macroLibrary).
-		WithAgentLoop(llmD.agentLoop)
+		WithAgentLoop(&agentLoopBridge{loop: llmD.agentLoop})
 	macroLibraryHandler := handler.NewMacroLibraryHandler(macroLibrary, cfg.Server.WorkflowDir)
 	if infra.fsDefStore != nil {
 		macroLibraryHandler = macroLibraryHandler.WithReloader(infra.fsDefStore)
@@ -634,6 +643,38 @@ func run(h http.Handler, cancel context.CancelFunc, cfg *Config, log *slog.Logge
 		os.Exit(1)
 	}
 	log.Info("server-agent stopped")
+}
+
+// agentLoopBridge adapts llm.AgentLoop to devicectrl.RecordingAgentLoop.
+// Lives at the composition root so that devicectrl has no dependency on tools/llm.
+type agentLoopBridge struct{ loop llm.AgentLoop }
+
+func (b *agentLoopBridge) Run(
+	ctx context.Context,
+	req devicectrl.RecordingAgentRequest,
+	exec devicectrl.ToolExecutor,
+) (devicectrl.RecordingAgentResult, error) {
+	llmTools := make([]llm.AgentTool, len(req.Tools))
+	for i, t := range req.Tools {
+		llmTools[i] = llm.AgentTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+	}
+	result, err := b.loop.Run(ctx, llm.AgentLoopRequest{
+		SystemPrompt: req.SystemPrompt,
+		Goal:         req.Goal,
+		Tools:        llmTools,
+		MaxSteps:     req.MaxSteps,
+		OnChunk:      req.OnChunk,
+	}, func(ctx context.Context, name string, input json.RawMessage) (json.RawMessage, error) {
+		out, err := exec(ctx, name, input)
+		if errors.Is(err, devicectrl.ErrAgentDone) {
+			return nil, llm.ErrAgentDone
+		}
+		return out, err
+	})
+	if err != nil {
+		return devicectrl.RecordingAgentResult{}, err
+	}
+	return devicectrl.RecordingAgentResult{Done: result.Done, Reason: result.Reason, Steps: result.Steps}, nil
 }
 
 func withCORS(next http.Handler) http.Handler {

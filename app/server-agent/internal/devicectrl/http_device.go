@@ -14,7 +14,6 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/projection"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/tools/llm"
 )
 
 type deviceBindingController interface {
@@ -46,7 +45,7 @@ type DeviceHandler struct {
 	disp       deviceCommandDispatcher
 	recordings *RecordingStore
 	library    store.MacroStore
-	agentLoop  llm.AgentLoop
+	agentLoop  RecordingAgentLoop
 	publish    projection.Publisher
 	log        *slog.Logger
 }
@@ -85,9 +84,9 @@ func (h *DeviceHandler) WithProjectionHub(pub projection.Publisher) *DeviceHandl
 	return h
 }
 
-// WithAgentLoop attaches an LLM AgentLoop so that POST /devices/{id}/record/llm-run is served.
+// WithAgentLoop attaches a RecordingAgentLoop so that POST /devices/{id}/record/llm-run is served.
 // Pass nil to disable (handler returns 503).
-func (h *DeviceHandler) WithAgentLoop(loop llm.AgentLoop) *DeviceHandler {
+func (h *DeviceHandler) WithAgentLoop(loop RecordingAgentLoop) *DeviceHandler {
 	h.agentLoop = loop
 	return h
 }

@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 )
 
@@ -99,8 +97,8 @@ func (s *FSDefStore) reload(ctx context.Context) error {
 			return nil
 		}
 
-		var def domain.WorkflowDef
-		if err := yaml.Unmarshal(data, &def); err != nil {
+		def, err := unmarshalWorkflowDef(data)
+		if err != nil {
 			s.log.Warn("fsdefstore: yaml parse error", "file", path, "err", err)
 			if prevName, ok := s.fileToDefName[path]; ok {
 				s.log.Warn("fsdefstore: retaining previous version", "file", path, "name", prevName)

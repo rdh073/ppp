@@ -12,16 +12,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/store"
-	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 func TestPostCampaignService_Start_ManualCampaignPublishesAndRunsJob(t *testing.T) {
 	origPoll := pollTaskUntilTerminal
 	t.Cleanup(func() { pollTaskUntilTerminal = origPoll })
-	pollTaskUntilTerminal = func(_ context.Context, _ workflowruntime.TaskSummaryReader, taskID domain.TaskID, _ time.Duration, _ *slog.Logger) (*workflowruntime.TaskSummary, bool) {
-		return &workflowruntime.TaskSummary{
+	pollTaskUntilTerminal = func(_ context.Context, _ appport.TaskSummaryGetter, taskID domain.TaskID, _ time.Duration, _ *slog.Logger) (*appport.TaskSummary, bool) {
+		return &appport.TaskSummary{
 			Task: &domain.Task{
 				ID:     taskID,
 				Status: domain.TaskStatusCompleted,
@@ -118,7 +118,7 @@ func (f *fakeTaskControl) CreateTask(_ context.Context, req CreateTaskRequest) (
 	}, nil
 }
 
-func (f *fakeTaskControl) ListTasks(context.Context, workflowruntime.ListTaskQuery) ([]workflowruntime.TaskSummary, error) {
+func (f *fakeTaskControl) ListTasks(context.Context, appport.ListTaskQuery) ([]appport.TaskSummary, error) {
 	return nil, nil
 }
 
@@ -126,7 +126,7 @@ func (f *fakeTaskControl) GetTask(context.Context, domain.TaskID) (*domain.Task,
 	return nil, nil
 }
 
-func (f *fakeTaskControl) GetTaskSummary(context.Context, domain.TaskID) (*workflowruntime.TaskSummary, error) {
+func (f *fakeTaskControl) GetTaskSummary(context.Context, domain.TaskID) (*appport.TaskSummary, error) {
 	return nil, nil
 }
 

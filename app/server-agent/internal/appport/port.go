@@ -8,7 +8,6 @@ import (
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/eventing"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
-	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 // AgentLifecycle is the primary port for the JSON-RPC agent connection handler.
@@ -21,10 +20,10 @@ type AgentLifecycle interface {
 
 // TaskControl is the primary port for the HTTP task handler.
 type TaskControl interface {
-	CreateTask(ctx context.Context, req workflowruntime.CreateTaskRequest) (*domain.Task, error)
-	ListTasks(ctx context.Context, query workflowruntime.ListTaskQuery) ([]workflowruntime.TaskSummary, error)
+	CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error)
+	ListTasks(ctx context.Context, query ListTaskQuery) ([]TaskSummary, error)
 	GetTask(ctx context.Context, taskID domain.TaskID) (*domain.Task, error)
-	GetTaskSummary(ctx context.Context, taskID domain.TaskID) (*workflowruntime.TaskSummary, error)
+	GetTaskSummary(ctx context.Context, taskID domain.TaskID) (*TaskSummary, error)
 	CancelTask(ctx context.Context, taskID domain.TaskID) error
 }
 
@@ -54,11 +53,3 @@ type AdbFilePusher interface {
 	PushFile(ctx context.Context, deviceID domain.DeviceID, localPath, remotePath string) error
 	MediaScan(ctx context.Context, deviceID domain.DeviceID, remotePath string) error
 }
-
-// Compile-time interface satisfaction checks.
-var (
-	_ AgentLifecycle    = (*devicectrl.AgentLifecycleUseCase)(nil)
-	_ TaskControl       = (*workflowruntime.TaskControlUseCase)(nil)
-	_ EventPlaneControl = (*eventing.EventPlaneControlUseCase)(nil)
-	_ EventIngestion    = (*eventing.EventIngestionUseCase)(nil)
-)

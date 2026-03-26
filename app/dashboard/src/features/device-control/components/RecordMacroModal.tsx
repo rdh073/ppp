@@ -5,7 +5,7 @@ import { ScrcpyView } from './ScrcpyView';
 import { RecordMacroPanel } from './RecordMacroPanel';
 import { recordEntry } from '../api/recording';
 import { observeDevice } from '../api/inspect';
-import type { UiSnapshot } from '../types/inspector';
+import type { UiSnapshot, UiTarget } from '../types/inspector';
 import type { Device } from '../../../types';
 import type { ScrcpySession, ScrcpySessionsHook } from '../hooks/useScrcpySessions';
 import type { RunState } from '../hooks/useRecordingSession';

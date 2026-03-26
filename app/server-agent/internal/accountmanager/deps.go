@@ -3,7 +3,6 @@ package accountmanager
 import (
 	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/projection"
-	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 type TaskControl = appport.TaskControl
@@ -14,6 +13,6 @@ type ProjectionPublisher = projection.Publisher
 
 type ProjectionEvent = projection.Event
 
-type CreateTaskRequest = workflowruntime.CreateTaskRequest
+type CreateTaskRequest = appport.CreateTaskRequest
 
-var pollTaskUntilTerminal = workflowruntime.PollTaskUntilTerminal
+var pollTaskUntilTerminal = appport.PollTaskUntilTerminal

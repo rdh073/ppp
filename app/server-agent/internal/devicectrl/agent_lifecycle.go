@@ -150,6 +150,7 @@ type ResumeRequest struct {
 	RemoteAddr     string // network address of the WebSocket connection (host:port)
 }
 
+// ResumeResponse is returned to the transport layer to send back to the agent.
 type ResumeResponse struct {
 	SessionID domain.SessionID
 }

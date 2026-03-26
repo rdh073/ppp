@@ -9,7 +9,6 @@ import (
 
 	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
-	"github.com/autosdk/ppp/server-agent/internal/workflowruntime"
 )
 
 // TaskHandler exposes task lifecycle over HTTP REST.
@@ -65,7 +64,7 @@ func (h *TaskHandler) list(w http.ResponseWriter, r *http.Request) {
 		offset = parsed
 	}
 
-	items, err := h.uc.ListTasks(r.Context(), workflowruntime.ListTaskQuery{
+	items, err := h.uc.ListTasks(r.Context(), appport.ListTaskQuery{
 		Status:       domain.TaskStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
 		DeviceID:     domain.DeviceID(strings.TrimSpace(r.URL.Query().Get("deviceId"))),
 		WorkflowName: strings.TrimSpace(r.URL.Query().Get("workflowName")),
@@ -98,7 +97,7 @@ func (h *TaskHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.uc.CreateTask(r.Context(), workflowruntime.CreateTaskRequest{
+	task, err := h.uc.CreateTask(r.Context(), appport.CreateTaskRequest{
 		Goal:           body.Goal,
 		DeviceID:       domain.DeviceID(body.DeviceID),
 		WorkflowName:   body.WorkflowName,
@@ -134,10 +133,10 @@ func (h *TaskHandler) cancel(w http.ResponseWriter, r *http.Request, id domain.T
 }
 
 func taskJSON(t *domain.Task) map[string]any {
-	return taskSummaryJSON(&workflowruntime.TaskSummary{Task: t})
+	return taskSummaryJSON(&appport.TaskSummary{Task: t})
 }
 
-func taskSummaryJSON(summary *workflowruntime.TaskSummary) map[string]any {
+func taskSummaryJSON(summary *appport.TaskSummary) map[string]any {
 	t := summary.Task
 	return map[string]any{
 		"id":                string(t.ID),

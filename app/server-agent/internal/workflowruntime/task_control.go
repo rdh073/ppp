@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/autosdk/ppp/server-agent/internal/appport"
 	"github.com/autosdk/ppp/server-agent/internal/domain"
 	"github.com/autosdk/ppp/server-agent/internal/registry"
 	"github.com/autosdk/ppp/server-agent/internal/store"
@@ -51,32 +52,15 @@ func (u *TaskControlUseCase) SetCommandOutbox(outbox store.CommandOutboxStore) {
 	u.outbox = outbox
 }
 
-// CreateTaskRequest specifies the task to create and which device to assign.
-// DeviceID is optional; if empty the task is created pending assignment.
-// WorkflowName is optional; if empty the server default workflow is used.
-type CreateTaskRequest struct {
-	Goal           string
-	DeviceID       domain.DeviceID   // optional
-	WorkflowName   string            // optional
-	InputArtifacts map[string]string // optional
-}
+// CreateTaskRequest is an alias for appport.CreateTaskRequest.
+// Defined here for backward compatibility with callers in this package.
+type CreateTaskRequest = appport.CreateTaskRequest
 
-type ListTaskQuery struct {
-	Status       domain.TaskStatus // optional exact match
-	DeviceID     domain.DeviceID   // optional exact match
-	WorkflowName string            // optional exact match
-	Limit        int               // optional; default 100, max 500
-	Offset       int               // optional; default 0
-}
+// ListTaskQuery is an alias for appport.ListTaskQuery.
+type ListTaskQuery = appport.ListTaskQuery
 
-type TaskSummary struct {
-	Task              *domain.Task
-	CurrentStep       string
-	RetryCount        int
-	LastCommandStatus domain.CommandOutboxStatus
-	LastCommandError  string
-	OutputArtifacts   map[string]string // populated for terminal tasks from WorkflowState.Inputs
-}
+// TaskSummary is an alias for appport.TaskSummary.
+type TaskSummary = appport.TaskSummary
 
 func (u *TaskControlUseCase) CreateTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, error) {
 	if req.Goal == "" {
